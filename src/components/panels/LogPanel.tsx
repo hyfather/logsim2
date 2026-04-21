@@ -1,5 +1,5 @@
 'use client'
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { useSimulationStore } from '@/store/useSimulationStore'
 import { useScenarioStore } from '@/store/useScenarioStore'
 import { matchesChannel } from '@/engine/channels/ChannelMatcher'
@@ -31,6 +31,15 @@ const LEVEL_BG: Record<LogLevel, string> = {
 
 const ALL_LEVELS: LogLevel[] = ['DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL']
 const CUSTOM_CHANNEL_VALUE = '__custom__'
+const MAX_RENDERED_LOGS = 500
+
+function channelPresetValue(channel: string): string {
+  return `${channel},${channel}.**`
+}
+
+function isPresetChannelValue(value: string, channels: string[]): boolean {
+  return value === '*' || channels.some(channel => channelPresetValue(channel) === value)
+}
 
 function highlightKeyword(text: string, keyword: string): React.ReactNode {
   if (!keyword) return text
@@ -38,7 +47,7 @@ function highlightKeyword(text: string, keyword: string): React.ReactNode {
   const regex = new RegExp(`(${safeKeyword})`, 'gi')
   const parts = text.split(regex)
   return parts.map((part, i) =>
-    regex.test(part)
+    i % 2 === 1
       ? <mark key={i} className="bg-yellow-200 text-yellow-900">{part}</mark>
       : part
   )
@@ -109,9 +118,7 @@ function LogRow({
 }
 
 export function LogPanel({
-  panelMode,
   onCollapse,
-  onSetWidth,
 }: {
   panelMode: PanelMode
   onCollapse: () => void
@@ -122,9 +129,10 @@ export function LogPanel({
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [channelInput, setChannelInput] = useState(filter.channelGlob)
   const [channelPreset, setChannelPreset] = useState<string>(filter.channelGlob)
-  const [newLogsBelow, setNewLogsBelow] = useState(0)
+  const [renderWindowEnd, setRenderWindowEnd] = useState(MAX_RENDERED_LOGS)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const prevBufferLength = useRef(0)
+  const deferredKeyword = useDeferredValue(filter.keyword)
+  const previousFilterKey = useRef('')
 
   const channels = useMemo(() =>
     [...new Set(nodes.map(n => n.data.channel).filter(Boolean))].sort(),
@@ -133,42 +141,60 @@ export function LogPanel({
 
   useEffect(() => {
     setChannelInput(filter.channelGlob)
-    setChannelPreset(channels.includes(filter.channelGlob) || filter.channelGlob === '*' ? filter.channelGlob : CUSTOM_CHANNEL_VALUE)
+    setChannelPreset(isPresetChannelValue(filter.channelGlob, channels) ? filter.channelGlob : CUSTOM_CHANNEL_VALUE)
   }, [channels, filter.channelGlob])
 
   const filteredLogs = useMemo(() => {
+    const normalizedKeyword = deferredKeyword.trim().toLowerCase()
+
     return logBuffer.filter(entry => {
       if (!matchesChannel(entry.channel, filter.channelGlob)) return false
       if (!filter.levels.includes(entry.level)) return false
-      if (filter.keyword && !entry.raw.toLowerCase().includes(filter.keyword.toLowerCase())) return false
+      if (normalizedKeyword && !entry.raw.toLowerCase().includes(normalizedKeyword)) return false
       return true
     })
-  }, [logBuffer, filter])
+  }, [deferredKeyword, filter.channelGlob, filter.levels, logBuffer])
+
+  const activeFilterKey = `${filter.channelGlob}__${filter.levels.join(',')}__${deferredKeyword.trim().toLowerCase()}`
 
   useEffect(() => {
-    const newCount = filteredLogs.length - prevBufferLength.current
-    if (newCount > 0) {
-      if (autoScroll && scrollRef.current) {
-        scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-        setNewLogsBelow(0)
-      } else {
-        setNewLogsBelow(prev => prev + newCount)
-      }
+    if (previousFilterKey.current !== activeFilterKey) {
+      previousFilterKey.current = activeFilterKey
+      setRenderWindowEnd(filteredLogs.length)
+      return
     }
-    prevBufferLength.current = filteredLogs.length
-  }, [filteredLogs.length, autoScroll])
+
+    if (autoScroll) {
+      setRenderWindowEnd(filteredLogs.length)
+      return
+    }
+
+    setRenderWindowEnd(prev => Math.min(prev, filteredLogs.length))
+  }, [activeFilterKey, autoScroll, filteredLogs.length])
+
+  useEffect(() => {
+    setExpandedId(current => current && filteredLogs.some(entry => entry.id === current) ? current : null)
+  }, [filteredLogs])
+
+  const visibleStart = Math.max(0, renderWindowEnd - MAX_RENDERED_LOGS)
+  const visibleLogs = useMemo(
+    () => filteredLogs.slice(visibleStart, renderWindowEnd),
+    [filteredLogs, renderWindowEnd, visibleStart]
+  )
+  const hiddenAboveCount = visibleStart
+  const hiddenBelowCount = Math.max(0, filteredLogs.length - renderWindowEnd)
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current
     if (!el) return
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30
     if (atBottom && !autoScroll) {
+      setRenderWindowEnd(filteredLogs.length)
       setAutoScroll(true)
-      setNewLogsBelow(0)
     } else if (!atBottom && autoScroll) {
       setAutoScroll(false)
     }
-  }, [autoScroll, setAutoScroll])
+  }, [autoScroll, filteredLogs.length, setAutoScroll])
 
   const applyChannel = useCallback((value: string) => {
     setChannelInput(value)
@@ -186,10 +212,21 @@ export function LogPanel({
   }, [filter.levels, setFilter])
 
   const handleScrollToBottom = useCallback(() => {
+    setRenderWindowEnd(filteredLogs.length)
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     setAutoScroll(true)
-    setNewLogsBelow(0)
+  }, [filteredLogs.length, setAutoScroll])
+
+  const handleShowOlder = useCallback(() => {
+    setAutoScroll(false)
+    setRenderWindowEnd(prev => Math.max(MAX_RENDERED_LOGS, prev - MAX_RENDERED_LOGS))
+    if (scrollRef.current) scrollRef.current.scrollTop = 0
   }, [setAutoScroll])
+
+  const handleShowNewer = useCallback(() => {
+    setRenderWindowEnd(prev => Math.min(filteredLogs.length, prev + MAX_RENDERED_LOGS))
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+  }, [filteredLogs.length])
 
   const handleDownloadVisibleText = useCallback(() => {
     downloadTextFile('visible-logs.log', filteredLogs.map(entry => entry.raw).join('\n'), 'text/plain')
@@ -229,7 +266,7 @@ export function LogPanel({
               <SelectContent>
                 <SelectItem value="*" className="text-xs">All sources</SelectItem>
                 {channels.map(channel => (
-                  <SelectItem key={channel} value={channel} className="text-xs">
+                  <SelectItem key={channel} value={channelPresetValue(channel)} className="text-xs">
                     {channel}
                   </SelectItem>
                 ))}
@@ -301,6 +338,25 @@ export function LogPanel({
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-x-hidden overflow-y-auto" onScroll={handleScroll}>
+        {(hiddenAboveCount > 0 || hiddenBelowCount > 0) && (
+          <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-gray-200 bg-white/95 px-3 py-2 backdrop-blur">
+            <span className="text-[10px] text-gray-500">
+              Showing {visibleLogs.length} of {filteredLogs.length} matching logs
+            </span>
+            <div className="flex items-center gap-1">
+              {hiddenAboveCount > 0 && (
+                <Button variant="outline" size="sm" className="h-6 px-2 text-[10px]" onClick={handleShowOlder}>
+                  Older
+                </Button>
+              )}
+              {hiddenBelowCount > 0 && (
+                <Button variant="outline" size="sm" className="h-6 px-2 text-[10px]" onClick={handleShowNewer}>
+                  Newer
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
         {filteredLogs.length === 0 ? (
           <div className="flex h-full items-center justify-center px-6 text-center text-xs text-gray-400">
             {logBuffer.length === 0
@@ -308,7 +364,7 @@ export function LogPanel({
               : 'No logs match the current filters.'}
           </div>
         ) : (
-          filteredLogs.map(entry => (
+          visibleLogs.map(entry => (
             <LogRow
               key={entry.id}
               entry={entry}
@@ -320,10 +376,10 @@ export function LogPanel({
         )}
       </div>
 
-      {newLogsBelow > 0 && (
+      {hiddenBelowCount > 0 && (
         <div className="absolute bottom-4 right-4">
           <Button size="sm" className="h-7 bg-blue-600 text-xs hover:bg-blue-700" onClick={handleScrollToBottom}>
-            {newLogsBelow} new logs
+            Show latest ({hiddenBelowCount})
           </Button>
         </div>
       )}
