@@ -1,7 +1,6 @@
 'use client'
 import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { useSimulationStore } from '@/store/useSimulationStore'
-import { useScenarioStore } from '@/store/useScenarioStore'
 import { useDestinationsStore } from '@/store/useDestinationsStore'
 import { forwardToHec } from '@/lib/criblForwarder'
 import type { CriblHecDestination, DestinationConfig } from '@/types/destinations'
@@ -68,9 +67,8 @@ function extractStatusClass(raw: string): string | null {
   return `${Math.floor(code / 100)}xx`
 }
 
-function channelMatchesSource(channel: string, source: string): boolean {
-  return channel === source || channel.startsWith(source + '.') || channel.endsWith('.' + source) || channel.includes('.' + source + '.')
-}
+const COLLAPSED_ROW_HEIGHT = 44
+const EXPANDED_ROW_HEIGHT = 168
 
 function highlightKeyword(text: string, keyword: string): React.ReactNode {
   if (!keyword) return text
@@ -106,7 +104,7 @@ const LogRow = React.memo(function LogRow({ entry, keyword, expanded, onToggle }
   return (
     <div
       className={cn(
-        'cursor-pointer border-l-2 border-transparent px-2.5 py-1.5 hover:bg-gray-50',
+        'h-full cursor-pointer overflow-hidden border-l-2 border-transparent px-2.5 py-1.5 hover:bg-gray-50',
         LEVEL_BG[entry.level],
         expanded && 'border-blue-400 bg-blue-50',
       )}
@@ -157,7 +155,6 @@ export function LogPanel({ onCollapse }: LogPanelProps) {
   const setAutoScroll = useSimulationStore(s => s.setAutoScroll)
   const setAccumulateMode = useSimulationStore(s => s.setAccumulateMode)
   const clearLogs = useSimulationStore(s => s.clearLogs)
-  const nodes = useScenarioStore(s => s.nodes)
   const destinations = useDestinationsStore(s => s.destinations)
   const setDestStatus = useDestinationsStore(s => s.setStatus)
   const recordSent = useDestinationsStore(s => s.recordSent)
@@ -175,11 +172,14 @@ export function LogPanel({ onCollapse }: LogPanelProps) {
     return () => clearTimeout(t)
   }, [forwardToast])
 
-  // Available sources (from scenario nodes)
-  const sourceOptions = useMemo(() => {
-    const names = [...new Set(nodes.map(n => n.data.channel).filter(Boolean))].sort()
-    return names
-  }, [nodes])
+  // All source channels present in the current buffer (pre-filter).
+  // Derived from real logs so this works in any mode, whether or not the
+  // scenario has nodes wired up.
+  const allSources = useMemo(() => {
+    const set = new Set<string>()
+    for (let i = 0; i < logBuffer.length; i++) set.add(logBuffer[i].channel)
+    return Array.from(set).sort()
+  }, [logBuffer])
 
   // --- Single-pass filtering + facet counting ---
   type FacetCounts = {
@@ -206,13 +206,7 @@ export function LogPanel({ onCollapse }: LogPanelProps) {
       const entry = logBuffer[i]
 
       // Non-level filters first, so per-level facet counts reflect remaining dimensions.
-      if (sourceSet) {
-        let matched = false
-        for (const s of sourceSet) {
-          if (channelMatchesSource(entry.channel, s)) { matched = true; break }
-        }
-        if (!matched) continue
-      }
+      if (sourceSet && !sourceSet.has(entry.channel)) continue
       if (normalizedKeyword && !entry.raw.toLowerCase().includes(normalizedKeyword)) continue
       if (timeRange) {
         const t = Date.parse(entry.ts)
@@ -226,10 +220,8 @@ export function LogPanel({ onCollapse }: LogPanelProps) {
 
       out.push(entry)
 
-      // Source facet: count leaf segment of channel.
-      const segs = entry.channel.split('.')
-      const leaf = segs[segs.length - 1]
-      facets.source[leaf] = (facets.source[leaf] ?? 0) + 1
+      // Source facet: keyed by full channel (matches what the filter uses).
+      facets.source[entry.channel] = (facets.source[entry.channel] ?? 0) + 1
 
       const method = extractMethod(entry.raw)
       if (method) facets.method[method] = (facets.method[method] ?? 0) + 1
@@ -240,47 +232,6 @@ export function LogPanel({ onCollapse }: LogPanelProps) {
 
     return { filteredLogs: out, facets }
   }, [logBuffer, filter.sources, filter.levels, filter.timeRange, deferredKeyword])
-
-  // Keep expanded row valid
-  useEffect(() => {
-    if (expandedId && !filteredLogs.some(e => e.id === expandedId)) setExpandedId(null)
-  }, [filteredLogs, expandedId])
-
-  // --- Virtualizer ---
-  const rowVirtualizer = useVirtualizer({
-    count: filteredLogs.length,
-    getScrollElement: () => scrollParentRef.current,
-    estimateSize: (index) => (filteredLogs[index]?.id === expandedId ? 110 : 42),
-    overscan: 20,
-    getItemKey: (index) => filteredLogs[index]?.id ?? index,
-  })
-
-  // Re-measure when expanded row changes
-  useEffect(() => {
-    rowVirtualizer.measure()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expandedId])
-
-  // Auto-scroll on new logs when in Live mode
-  useEffect(() => {
-    if (!autoScroll) return
-    if (filteredLogs.length === 0) return
-    rowVirtualizer.scrollToIndex(filteredLogs.length - 1, { align: 'end', behavior: 'auto' })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredLogs.length, autoScroll])
-
-  const handleScroll = useCallback(() => {
-    const el = scrollParentRef.current
-    if (!el) return
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30
-    if (atBottom && !autoScroll) setAutoScroll(true)
-    else if (!atBottom && autoScroll) setAutoScroll(false)
-  }, [autoScroll, setAutoScroll])
-
-  // --- Filter setters ---
-  const setSources = useCallback((next: string[]) => setFilter({ sources: next }), [setFilter])
-  const setLevels = useCallback((next: string[]) => setFilter({ levels: next as LogLevel[] }), [setFilter])
-  const setTimeRange = useCallback((r: [number, number] | null) => setFilter({ timeRange: r }), [setFilter])
 
   // --- Method / status-class derived filters ---
   // Stored in component state (not persisted) since they're view-level facets.
@@ -303,13 +254,56 @@ export function LogPanel({ onCollapse }: LogPanelProps) {
     })
   }, [filteredLogs, methodFilter, statusClassFilter])
 
-  // Re-wire virtualizer to displayedLogs count
-  const virtualizerCount = displayedLogs.length
+  // Keep expanded row valid
   useEffect(() => {
-    // when displayedLogs length shrinks, reset virtualizer cache
+    if (expandedId && !displayedLogs.some(e => e.id === expandedId)) setExpandedId(null)
+  }, [displayedLogs, expandedId])
+
+  // --- Virtualizer: fixed-height rows for robustness under high log churn ---
+  const rowVirtualizer = useVirtualizer({
+    count: displayedLogs.length,
+    getScrollElement: () => scrollParentRef.current,
+    estimateSize: (index) => {
+      const entry = displayedLogs[index]
+      return entry && entry.id === expandedId ? EXPANDED_ROW_HEIGHT : COLLAPSED_ROW_HEIGHT
+    },
+    overscan: 20,
+    getItemKey: (index) => displayedLogs[index]?.id ?? index,
+  })
+
+  // Force the virtualizer to re-read its estimate whenever the inputs that
+  // change row heights change. Without this, expanding a row leaves the
+  // virtualizer using the old collapsed estimate for that index.
+  useEffect(() => {
     rowVirtualizer.measure()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [virtualizerCount])
+  }, [expandedId, displayedLogs])
+
+  // Auto-scroll on new logs when in Live mode. Use scrollTop on the parent;
+  // it's immune to the virtualizer's internal bookkeeping being mid-update.
+  useEffect(() => {
+    if (!autoScroll) return
+    const el = scrollParentRef.current
+    if (!el) return
+    // Schedule after paint so the virtualizer has laid out the new rows.
+    const raf = requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [displayedLogs.length, autoScroll])
+
+  const handleScroll = useCallback(() => {
+    const el = scrollParentRef.current
+    if (!el) return
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30
+    if (atBottom && !autoScroll) setAutoScroll(true)
+    else if (!atBottom && autoScroll) setAutoScroll(false)
+  }, [autoScroll, setAutoScroll])
+
+  // --- Filter setters ---
+  const setSources = useCallback((next: string[]) => setFilter({ sources: next }), [setFilter])
+  const setLevels = useCallback((next: string[]) => setFilter({ levels: next as LogLevel[] }), [setFilter])
+  const setTimeRange = useCallback((r: [number, number] | null) => setFilter({ timeRange: r }), [setFilter])
 
   // --- Downloads ---
   const handleDownloadLog = useCallback(() => {
@@ -347,12 +341,12 @@ export function LogPanel({ onCollapse }: LogPanelProps) {
 
   // --- Facet options ---
   const sourceFacetOptions = useMemo(() => {
-    return sourceOptions.map(name => ({
-      value: name,
-      label: name,
-      count: facets.source[name],
+    return allSources.map(channel => ({
+      value: channel,
+      label: channel,
+      count: facets.source[channel] ?? 0,
     }))
-  }, [sourceOptions, facets])
+  }, [allSources, facets])
 
   const methodOptions = useMemo(() => {
     const keys = Object.keys(facets.method).sort()
@@ -592,13 +586,12 @@ export function LogPanel({ onCollapse }: LogPanelProps) {
               return (
                 <div
                   key={virtualRow.key}
-                  data-index={virtualRow.index}
-                  ref={rowVirtualizer.measureElement}
                   style={{
                     position: 'absolute',
                     top: 0,
                     left: 0,
                     width: '100%',
+                    height: virtualRow.size,
                     transform: `translateY(${virtualRow.start}px)`,
                   }}
                 >
