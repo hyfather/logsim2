@@ -23,7 +23,7 @@ import { ChevronRight, Download, Send, Pause, Play, Trash2 } from 'lucide-react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { LogHistogram } from '@/components/panels/LogHistogram'
 import { MultiSelectMenu } from '@/components/panels/MultiSelectMenu'
-import type { PanelMode } from '@/app/editor/page'
+import type { PanelMode } from '@/app/editor/EditorPageClient'
 
 const LEVEL_TEXT: Record<LogLevel, string> = {
   DEBUG: 'text-gray-500',
