@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx create-next-app@latest . --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --use-npm --yes)",
+      "Bash(nvm ls:*)",
+      "Read(//usr/local/bin/**)",
+      "Read(//Users/nikhil/.nvm/versions/**)",
+      "Bash(brew list:*)",
+      "Read(//opt/homebrew/bin/**)",
+      "Bash(export PATH=\"/opt/homebrew/bin:$PATH\")",
+      "Bash(mv SPEC.md /tmp/SPEC.md)",
+      "Bash(npx create-next-app@14 . --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --use-npm --yes)",
+      "Bash(mkdir -p /tmp/logsim2-init)",
+      "Read(//tmp/**)",
+      "Bash(cp -r /tmp/logsim2-init/. /Users/nikhil/code/logsim2/)",
+      "Bash(cp /tmp/SPEC.md /Users/nikhil/code/logsim2/SPEC.md)",
+      "Bash(npx shadcn@latest add slider select switch label input textarea separator badge tooltip scroll-area dialog dropdown-menu popover tabs progress)",
+      "Bash(npx shadcn@latest add checkbox card collapsible command)",
+      "Bash(npm run:*)",
+      "Bash(/Users/nikhil/code/logsim2/node_modules/.bin/next --version)",
+      "Bash(ls /Users/nikhil/code/logsim2/node_modules/next/dist/server/require-hook*)",
+      "Bash(node /Users/nikhil/code/logsim2/node_modules/next/dist/bin/next --version)",
+      "Bash(node node_modules/next/dist/bin/next build)",
+      "Bash(npx tsc:*)",
+      "Bash(go version *)",
+      "Bash(go mod *)",
+      "Bash(go get *)",
+      "Bash(go build *)",
+      "Bash(./logsim validate *)",
+      "Bash(go test *)",
+      "Bash(./logsim run *)",
+      "Bash(go run *)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -c \"import sys,json; [print\\(json.dumps\\(json.loads\\(l\\), indent=2\\)\\) for l in sys.stdin]\")",
+      "Bash(grep -v 'ExperimentalWarning\\\\|Use\\\\|^$\\\\|npm notice')",
+      "mcp__Claude_Preview__preview_start"
+    ]
+  }
+}

@@ -1,0 +1,147 @@
+- name: Web Service
+- description: | 
+    An AWS based web service composed of 3 EC2 instances. Two instances run a Node.js service. The services are connected to a load balancer. 
+    the load balancer is connected to the internet. The third instance runs a MySQL database. The database is connected to the two Node.js services. 
+    All instances are in the same subnet and in the same AWS VPC.
+- nodes:
+  - type: vpc
+    name: Web Service VPC
+    description: The AWS VPC for the web service.
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+    tags:
+      - Name: Web Service VPC
+        Value: Web Service VPC
+  - type: subnet
+    name: Web Service Subnet
+    description: The AWS subnet for the web service.
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.1.0/24
+    tags:
+      - Name: Web Service Subnet
+        Value: Web Service Subnet
+  - type: virtual_server
+    name: App Server 1
+    description: EC2 instance for the app service
+    provider: aws
+    region: us-east-1
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    private_ip: 10.0.1.10
+    security_groups:
+      - sg-01234567890123456
+    subnet: Web Service Subnet
+    tags:
+      - Name: App Server 1
+        Value: App Server 1
+  - type: virtual_server
+    name: App Server 2
+    description: EC2 instance for the app service
+    provider: aws
+    region: us-east-1
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    private_ip: 10.0.1.11
+    security_groups:
+      - sg-01234567890123456
+    subnet: Web Service Subnet
+    tags:
+      - Name: App Server 2
+        Value: App Server 2
+  - type: virtual_server
+    name: Database Server
+    description: EC2 instance for the database
+    provider: aws
+    region: us-east-1
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    private_ip: 10.0.1.12
+    security_groups:
+      - sg-01234567890123456
+    subnet: Web Service Subnet
+    tags:
+      - Name: Database Server
+        Value: Database Server
+  - type: load_balancer
+    name: Load Balancer
+    description: The load balancer for the web service.
+    provider: aws
+    region: us-east-1
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    private_ip: 10.0.1.13
+    security_groups:
+      - sg-01234567890123456
+    subnet: Web Service Subnet
+    tags:
+      - Name: Load Balancer
+        Value: Load Balancer
+  - type: User Clients
+    name: User Clients
+    description: Group of user client making requests to the load balancer
+    provider: null
+    clients:
+      - type: user_client
+        name: Web Client 1
+        description: User client making requests to the load balancer
+        user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36
+        ip: 45.45.45.1
+        rps: 1
+        traffic_pattern: steady mix of GET and POST requests
+      - type: user_client
+        name: Web Client 2
+        description: User client making requests to the load balancer
+        user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36
+        ip: 45.45.45.2
+        rps: 10
+        traffic_pattern: only GET requests
+      - type: user_client
+        name: Mobile App Client 1
+        description: User client making requests to the load balancer
+        user-agent: Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1
+        ip: 45.45.45.3
+        rps: 0.1
+        traffic_pattern: only POST requests
+- services:
+  - type: nodejs
+    name: User Directory Service
+    description: Node.js service running on App Server 1
+    host: App Server 1
+    generator:
+      type: nodejs
+      port: 3000
+      log_format: json
+      log_level: info
+      endpoints:
+        - method: GET
+          path: /api/users
+          avg_latency_ms: 100
+          error_rate: 0.01
+        - method: POST
+          path: /api/users
+          avg_latency_ms: 500
+          error_rate: 0.01
+  - type: mysql
+    name: App Database
+    description: MySQL database running on Database Server
+    host: Database Server
+    generator:
+      type: mysql      
+      port: 3306
+      database: users
+      slow_query_threshold: 1000
+- connections:
+  - source: User Clients
+    target: Load Balancer
+    protocol: https
+    port: 443
+  - source: Load Balancer
+    target: User Directory Service
+    protocol: http
+    port: 3000
+  - source: User Directory Service
+    target: App Database
+    protocol: mysql
+    port: 3306

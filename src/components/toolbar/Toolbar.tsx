@@ -1,0 +1,268 @@
+'use client'
+import React, { useCallback, useEffect, useRef } from 'react'
+import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { useScenarioStore } from '@/store/useScenarioStore'
+import { useUIStore } from '@/store/useUIStore'
+import { useSimulationStore } from '@/store/useSimulationStore'
+import { useDestinationsStore } from '@/store/useDestinationsStore'
+import { serializeScenario, deserializeScenario } from '@/lib/serialization'
+import { downloadJson } from '@/lib/serialization'
+import type { Connection } from '@/types/connections'
+import { getDefaultLabel, getDefaultConfig } from '@/registry/nodeRegistry'
+import type { NodeType, ServiceType } from '@/types/nodes'
+import { DEFAULT_NODE_SIZES } from '@/lib/defaults'
+import { asFlowEdgeData, asFlowNodeData } from '@/lib/flow-data'
+
+function InsertMenuItem({ type, serviceType, label, icon }: { type: NodeType; serviceType?: ServiceType; label: string; icon: string }) {
+  const { nodes, addNode } = useScenarioStore()
+  const handleInsert = useCallback(() => {
+    addNode({
+      type,
+      serviceType,
+      position: { x: 200 + Math.random() * 200, y: 200 + Math.random() * 200 },
+      size: DEFAULT_NODE_SIZES[type],
+      parentId: null,
+      label: getDefaultLabel(type, nodes.map(n => n.data), serviceType),
+      config: getDefaultConfig(type, serviceType),
+      provider: type === 'vpc' ? 'aws' : null,
+    })
+  }, [type, serviceType, nodes, addNode])
+
+  return (
+    <DropdownMenuItem onClick={handleInsert} className="text-xs cursor-pointer">
+      {icon} {label}
+    </DropdownMenuItem>
+  )
+}
+
+export function Toolbar() {
+  const { nodes, edges, metadata, setMetadata, resetScenario, loadScenario } = useScenarioStore()
+  const { setShowBulkGenerateModal, setShowKeyboardShortcuts } = useUIStore()
+  const { logBuffer } = useSimulationStore()
+  const { setShowManagerModal, setEditingId } = useDestinationsStore()
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const buildScenario = useCallback(() => serializeScenario(
+    nodes.map(n => n.data),
+    edges.map(e => e.data!).filter(Boolean) as Connection[],
+    metadata
+  ), [nodes, edges, metadata])
+
+  const persistAutosave = useCallback(() => {
+    const scenario = buildScenario()
+    localStorage.setItem('logsim-autosave', JSON.stringify(scenario))
+    localStorage.setItem('logsim-autosave-time', new Date().toISOString())
+  }, [buildScenario])
+
+  const handleSave = useCallback(() => {
+    const scenario = buildScenario()
+    downloadJson(scenario, `${metadata.name.toLowerCase().replace(/\s+/g, '-')}.logsim.json`)
+    persistAutosave()
+  }, [buildScenario, metadata.name, persistAutosave])
+
+  useEffect(() => {
+    window.addEventListener('logsim-save', handleSave as EventListener)
+    window.addEventListener('logsim-autosave', persistAutosave as EventListener)
+
+    return () => {
+      window.removeEventListener('logsim-save', handleSave as EventListener)
+      window.removeEventListener('logsim-autosave', persistAutosave as EventListener)
+    }
+  }, [handleSave, persistAutosave])
+
+  const handleOpen = useCallback(() => {
+    fileInputRef.current?.click()
+  }, [])
+
+  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    const reader = new FileReader()
+    reader.onload = (evt) => {
+      try {
+        const data = JSON.parse(evt.target?.result as string)
+        const scenario = deserializeScenario(data)
+
+        // Convert to flow nodes/edges
+        const flowNodes = scenario.nodes.map(n => ({
+          id: n.id,
+          type: n.type,
+          position: n.position,
+          parentId: n.parentId || undefined,
+          data: asFlowNodeData(n),
+          style: n.size ? { width: n.size.width, height: n.size.height } : {},
+          ...(n.parentId ? { extent: 'parent' as const } : {}),
+        }))
+        const flowEdges = scenario.connections.map(c => ({
+          id: c.id,
+          source: c.sourceId,
+          target: c.targetId,
+          sourceHandle: c.sourceHandle,
+          targetHandle: c.targetHandle,
+          type: 'connectionEdge' as const,
+          data: asFlowEdgeData(c),
+          label: c.protocol.toUpperCase(),
+        }))
+
+        loadScenario(flowNodes, flowEdges, scenario.metadata)
+      } catch (err) {
+        alert('Failed to load scenario: ' + String(err))
+      }
+    }
+    reader.readAsText(file)
+    e.target.value = ''
+  }, [loadScenario])
+
+  const handleNew = useCallback(() => {
+    if (nodes.length > 0) {
+      if (!confirm('Create a new scenario? Unsaved changes will be lost.')) return
+    }
+    resetScenario()
+  }, [nodes.length, resetScenario])
+
+  const handleExportLogs = useCallback(() => {
+    const text = logBuffer.map(l => l.raw).join('\n')
+    const blob = new Blob([text], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'logs.log'
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [logBuffer])
+
+  const handleExportJsonl = useCallback(() => {
+    const text = logBuffer.map(l => JSON.stringify(l)).join('\n')
+    const blob = new Blob([text], { type: 'application/jsonl' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'logs.jsonl'
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [logBuffer])
+
+  return (
+    <div className="flex items-center gap-0.5 px-2 py-1 border-b border-gray-200 bg-gray-50">
+      {/* App title */}
+      <div className="flex items-center gap-1.5 mr-3">
+        <span className="text-sm font-bold text-gray-800">LogSim</span>
+      </div>
+
+      {/* File menu */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs">File</Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent className="text-xs">
+          <DropdownMenuItem onClick={handleNew} className="text-xs cursor-pointer">📄 New Scenario</DropdownMenuItem>
+          <DropdownMenuItem onClick={handleOpen} className="text-xs cursor-pointer">📂 Open...</DropdownMenuItem>
+          <DropdownMenuItem onClick={handleSave} className="text-xs cursor-pointer">💾 Save (Ctrl+S)</DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={handleExportLogs} className="text-xs cursor-pointer">📋 Export Logs (.log)</DropdownMenuItem>
+          <DropdownMenuItem onClick={handleExportJsonl} className="text-xs cursor-pointer">📋 Export Logs (.jsonl)</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      {/* Insert menu */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs">Insert</Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent className="text-xs">
+          <InsertMenuItem type="vpc" label="VPC" icon="🌐" />
+          <InsertMenuItem type="subnet" label="Subnet" icon="🔲" />
+          <InsertMenuItem type="virtual_server" label="Virtual Server" icon="💻" />
+          <DropdownMenuSeparator />
+          <InsertMenuItem type="service" serviceType="nodejs" label="Node.js Service" icon="🟩" />
+          <InsertMenuItem type="service" serviceType="golang" label="Go Service" icon="🐹" />
+          <InsertMenuItem type="service" serviceType="postgres" label="PostgreSQL" icon="🐘" />
+          <InsertMenuItem type="service" serviceType="mysql" label="MySQL" icon="🐬" />
+          <InsertMenuItem type="service" serviceType="redis" label="Redis" icon="🔴" />
+          <InsertMenuItem type="service" serviceType="nginx" label="Nginx" icon="🌿" />
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      {/* Run menu */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs">Run</Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent className="text-xs">
+          <DropdownMenuItem
+            onClick={() => setShowBulkGenerateModal(true)}
+            className="text-xs cursor-pointer"
+          >
+            ⚡ Generate Batch...
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      {/* Configure menu */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs">Configure</Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent className="text-xs">
+          <DropdownMenuItem
+            onClick={() => {
+              const name = prompt('Scenario name:', metadata.name)
+              if (name) setMetadata({ name })
+            }}
+            className="text-xs cursor-pointer"
+          >
+            ✏️ Rename Scenario
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onClick={() => {
+              const desc = prompt('Description:', metadata.description)
+              if (desc !== null) setMetadata({ description: desc })
+            }}
+            className="text-xs cursor-pointer"
+          >
+            📝 Edit Description
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            onClick={() => { setEditingId(null); setShowManagerModal(true) }}
+            className="text-xs cursor-pointer"
+          >
+            ⚡ Log Destinations...
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      {/* Help menu */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs">Help</Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent className="text-xs">
+          <DropdownMenuItem onClick={() => setShowKeyboardShortcuts(true)} className="text-xs cursor-pointer">
+            ⌨️ Keyboard Shortcuts
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem className="text-xs">
+            ℹ️ LogSim v1.0 — Phases 1-3
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {/* Hidden file input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".json,.logsim.json"
+        className="hidden"
+        onChange={handleFileChange}
+      />
+    </div>
+  )
+}

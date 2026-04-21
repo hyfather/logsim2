@@ -1,0 +1,16 @@
+destinations:
+  - name: prod-cribl
+    type: cribl_hec
+    enabled: true
+    url: https://your-cribl-instance.example.com/services/collector/event
+    token: your-hec-token-here
+    batch_size: 100
+    flush_interval_ms: 2000
+
+  - name: staging-cribl
+    type: cribl_hec
+    enabled: false
+    url: https://staging.example.com/services/collector/event
+    token: staging-token-here
+    batch_size: 50
+    flush_interval_ms: 5000
