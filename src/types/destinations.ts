@@ -17,7 +17,7 @@ export interface CriblHecDestination extends BaseDestination {
   url: string
   token: string
   source: string      // empty string → use log channel per event
-  sourcetype: string  // default 'logsim:json'
+  sourcetype: string  // empty string → auto-map per generator (mysql → mysql:query, …)
   batchSize: number   // events per HTTP request, 1–500
 }
 

@@ -46,7 +46,7 @@ function CriblHecForm({ initial, onSave, onCancel, isEdit, destId }: HecFormProp
   const [url, setUrl]             = useState(initial.url ?? '')
   const [token, setToken]         = useState(initial.token ?? '')
   const [source, setSource]       = useState(initial.source ?? '')
-  const [sourcetype, setSourcetype] = useState(initial.sourcetype ?? 'logsim:json')
+  const [sourcetype, setSourcetype] = useState(initial.sourcetype ?? '')
   const [batchSize, setBatchSize] = useState(String(initial.batchSize ?? 100))
   const [enabled, setEnabled]     = useState(initial.enabled ?? true)
   const [testState, setTestState] = useState<TestState>('idle')
@@ -59,7 +59,9 @@ function CriblHecForm({ initial, onSave, onCancel, isEdit, destId }: HecFormProp
     url: url.trim(),
     token: token.trim(),
     source: source.trim(),
-    sourcetype: sourcetype.trim() || 'logsim:json',
+    // Empty string = auto-map per log generator (mysql → mysql:query, …).
+    // Setting a value pins every event to the same sourcetype.
+    sourcetype: sourcetype.trim(),
     batchSize: Math.max(1, Math.min(500, parseInt(batchSize, 10) || 100)),
     enabled,
   })
@@ -144,11 +146,11 @@ function CriblHecForm({ initial, onSave, onCancel, isEdit, destId }: HecFormProp
           />
         </div>
         <div className="space-y-1">
-          <Label className="text-xs font-medium text-gray-700">Sourcetype</Label>
+          <Label className="text-xs font-medium text-gray-700">Sourcetype Override</Label>
           <Input
             value={sourcetype}
             onChange={e => setSourcetype(e.target.value)}
-            placeholder="logsim:json"
+            placeholder="(auto per generator)"
             className="h-7 text-xs font-mono"
           />
         </div>

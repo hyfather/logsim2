@@ -141,11 +141,10 @@ func (s *sliceSink) Flush() error { return nil }
 func (s *sliceSink) Close() error { return nil }
 
 func forwardToCribl(r *http.Request, c *CriblConfig, entries []event.LogEntry) error {
-	if c.Sourcetype != "" {
-		for i := range entries {
-			entries[i].Sourcetype = c.Sourcetype
-		}
-	}
+	// Per-entry Sourcetype flows through to the sink which maps it to a Splunk
+	// vendor:product sourcetype (mysql:query, nginx:access, …). We deliberately
+	// do not flatten all entries to c.Sourcetype — that would erase the
+	// per-generator parsing hints Splunk relies on.
 	// One flush per request — no background ticker, no buffering beyond this call.
 	sink := sinks.NewCribl(c.URL, c.Token, len(entries)+1, 0)
 	if err := sink.Write(entries); err != nil {

@@ -157,25 +157,57 @@ func (s *CriblSink) post(body []byte) error {
 }
 
 // encodeBatch serialises entries as newline-delimited Splunk HEC JSON.
-// Each HEC event wraps the LogEntry under the standard HEC envelope.
+//
+// Envelope follows Splunk HEC conventions:
+//   - event:      the rendered log line (string) — so _raw in Splunk is the log
+//     itself, not a JSON blob
+//   - host:       the hierarchical channel (origin node path)
+//   - source:     same channel (overridable by a Cribl/Splunk pipeline)
+//   - sourcetype: mapped from the generator kind to vendor:product:type form
+//     (mysql → mysql:query, nginx → nginx:access, …) so Splunk
+//     picks the right parser per log family
+//   - fields:     indexed metadata (id, level, channel, generator) — searchable
+//     without cluttering _raw
 func encodeBatch(batch []event.LogEntry) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	for i := range batch {
 		e := &batch[i]
-		// Splunk HEC envelope: {"time":<epoch>,"event":<payload>,"sourcetype":<src>,"index":"main"}
+		fields := map[string]any{
+			"id":        e.ID,
+			"level":     e.Level,
+			"channel":   e.Source,
+			"generator": e.Sourcetype,
+		}
+		for k, v := range e.Fields {
+			fields[k] = v
+		}
 		env := map[string]any{
-			"time":       e.TS,
-			"event":      e,
-			"sourcetype": e.Sourcetype,
+			"time":       epochSeconds(e.TS),
+			"host":       e.Source,
+			"source":     e.Source,
+			"sourcetype": splunkSourcetype(e.Sourcetype),
 			"index":      "main",
+			"event":      e.Raw,
+			"fields":     fields,
 		}
 		if err := enc.Encode(env); err != nil {
 			return nil, err
 		}
 	}
 	return buf.Bytes(), nil
+}
+
+// epochSeconds parses an RFC3339Nano timestamp to Splunk HEC's expected
+// fractional-second epoch format. Returns 0 on parse failure so HEC falls back
+// to receive-time.
+func epochSeconds(ts string) float64 {
+	t, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		return 0
+	}
+	return float64(t.UnixNano()) / 1e9
 }
 
 // --- permanent-error sentinel ---
