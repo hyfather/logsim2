@@ -38,10 +38,6 @@ interface DestinationsState {
   sentCounts: Record<string, number>
   lastSentAt: Record<string, string>
 
-  // Modal state
-  showManagerModal: boolean
-  editingId: string | null   // id of destination being edited; null = adding new
-
   // Destination CRUD
   addDestination: (config: Omit<DestinationConfig, 'id'>) => string
   updateDestination: (id: string, patch: Partial<Omit<DestinationConfig, 'id' | 'type'>>) => void
@@ -51,10 +47,6 @@ interface DestinationsState {
   // Runtime status tracking
   setStatus: (id: string, status: DestinationStatus, error?: string) => void
   recordSent: (id: string, count: number) => void
-
-  // Modal controls
-  setShowManagerModal: (show: boolean) => void
-  setEditingId: (id: string | null) => void
 }
 
 // ── Store ────────────────────────────────────────────────────────────────────
@@ -67,8 +59,6 @@ export const useDestinationsStore = create<DestinationsState>()((set) => ({
   errors: {},
   sentCounts: {},
   lastSentAt: {},
-  showManagerModal: false,
-  editingId: null,
 
   addDestination: (config) => {
     const id = generateId()
@@ -130,7 +120,4 @@ export const useDestinationsStore = create<DestinationsState>()((set) => ({
       lastSentAt: { ...state.lastSentAt, [id]: new Date().toISOString() },
     }))
   },
-
-  setShowManagerModal: (show) => set({ showManagerModal: show }),
-  setEditingId: (id) => set({ editingId: id }),
 }))

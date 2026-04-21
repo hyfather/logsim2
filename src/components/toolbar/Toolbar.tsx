@@ -11,6 +11,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import Link from 'next/link'
 import { useScenarioStore } from '@/store/useScenarioStore'
 import { useUIStore } from '@/store/useUIStore'
 import { useEpisodeStore } from '@/store/useEpisodeStore'
@@ -24,7 +25,6 @@ interface ExampleEpisodeManifestEntry {
   totalTicks: number
 }
 import { useSimulationStore } from '@/store/useSimulationStore'
-import { useDestinationsStore } from '@/store/useDestinationsStore'
 import { serializeScenario, deserializeScenario } from '@/lib/serialization'
 import { downloadJson } from '@/lib/serialization'
 import type { Connection } from '@/types/connections'
@@ -59,7 +59,6 @@ export function Toolbar() {
   const { nodes, edges, metadata, setMetadata, resetScenario, loadScenario } = useScenarioStore()
   const { setShowBulkGenerateModal, setShowKeyboardShortcuts, mode, setMode } = useUIStore()
   const { logBuffer } = useSimulationStore()
-  const { setShowManagerModal, setEditingId } = useDestinationsStore()
   const { episode, setEpisode } = useEpisodeStore()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const episodeFileInputRef = useRef<HTMLInputElement>(null)
@@ -299,6 +298,10 @@ export function Toolbar() {
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={handleExportLogs} className="text-xs cursor-pointer">📋 Export Logs (.log)</DropdownMenuItem>
           <DropdownMenuItem onClick={handleExportJsonl} className="text-xs cursor-pointer">📋 Export Logs (.jsonl)</DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem asChild className="text-xs cursor-pointer">
+            <Link href="/settings">⚙️ Settings...</Link>
+          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
 
@@ -359,13 +362,6 @@ export function Toolbar() {
             className="text-xs cursor-pointer"
           >
             📝 Edit Description
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            onClick={() => { setEditingId(null); setShowManagerModal(true) }}
-            className="text-xs cursor-pointer"
-          >
-            ⚡ Log Destinations...
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

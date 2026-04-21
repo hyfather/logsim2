@@ -1,5 +1,6 @@
 'use client'
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
 import { ChevronDown, FastForward, Pencil, Play, RotateCcw, Square, StepForward } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -31,8 +32,6 @@ function DestinationsDropdown() {
     statuses,
     errors,
     toggleDestination,
-    setShowManagerModal,
-    setEditingId,
   } = useDestinationsStore()
 
   const enabled = destinations.filter(d => d.enabled)
@@ -114,24 +113,23 @@ function DestinationsDropdown() {
                   aria-label={`Toggle ${dest.name}`}
                   className="shrink-0 scale-75"
                 />
-                <button
-                  onClick={() => { setEditingId(dest.id); setShowManagerModal(true) }}
+                <Link
+                  href={`/settings?destination=${dest.id}`}
                   className="shrink-0 rounded p-1 text-gray-300 hover:bg-gray-100 hover:text-gray-600 transition-colors"
                   title="Edit"
                 >
                   <Pencil className="h-3 w-3" />
-                </button>
+                </Link>
               </div>
             )
           })
         )}
 
         <DropdownMenuSeparator />
-        <DropdownMenuItem
-          className="text-xs cursor-pointer text-gray-600"
-          onClick={() => { setEditingId(null); setShowManagerModal(true) }}
-        >
-          <span className="mr-1.5">⚙️</span> Manage Destinations…
+        <DropdownMenuItem asChild className="text-xs cursor-pointer text-gray-600">
+          <Link href="/settings">
+            <span className="mr-1.5">⚙️</span> Manage Destinations…
+          </Link>
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

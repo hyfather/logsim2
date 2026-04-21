@@ -7,7 +7,6 @@ import { LogPanel } from '@/components/panels/LogPanel'
 import { SimulationControls } from '@/components/panels/SimulationControls'
 import { Toolbar } from '@/components/toolbar/Toolbar'
 import { BulkGenerateModal } from '@/components/panels/BulkGenerateModal'
-import { DestinationManagerModal } from '@/components/panels/DestinationManagerModal'
 import { EpisodeMode } from '@/components/episodes/EpisodeMode'
 import { useUIStore } from '@/store/useUIStore'
 import { useScenarioStore } from '@/store/useScenarioStore'
@@ -319,7 +318,6 @@ export default function EditorPageClient() {
       {/* Modals */}
       <BulkGenerateModal />
       <KeyboardShortcutsDialog />
-      <DestinationManagerModal />
     </ReactFlowProvider>
   )
 }
