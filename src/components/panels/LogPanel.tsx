@@ -2,23 +2,43 @@
 import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { useSimulationStore } from '@/store/useSimulationStore'
 import { useScenarioStore } from '@/store/useScenarioStore'
-import { matchesChannel } from '@/engine/channels/ChannelMatcher'
+import { useDestinationsStore } from '@/store/useDestinationsStore'
+import { forwardToHec } from '@/lib/criblForwarder'
+import type { CriblHecDestination, DestinationConfig } from '@/types/destinations'
 import type { LogEntry, LogLevel } from '@/types/logs'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Checkbox } from '@/components/ui/checkbox'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuCheckboxItem,
+} from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRight, Download, Send, Pause, Play, Trash2 } from 'lucide-react'
+import { useVirtualizer } from '@tanstack/react-virtual'
+import { LogHistogram } from '@/components/panels/LogHistogram'
+import { MultiSelectMenu } from '@/components/panels/MultiSelectMenu'
 import type { PanelMode } from '@/app/editor/page'
 
-const LEVEL_COLORS: Record<LogLevel, string> = {
-  DEBUG: 'text-gray-400',
-  INFO: 'text-blue-500',
-  WARN: 'text-yellow-500',
-  ERROR: 'text-red-500',
-  FATAL: 'text-red-700 font-bold',
+const LEVEL_TEXT: Record<LogLevel, string> = {
+  DEBUG: 'text-gray-500',
+  INFO: 'text-blue-600',
+  WARN: 'text-yellow-600',
+  ERROR: 'text-red-600',
+  FATAL: 'text-red-800 font-bold',
+}
+
+const LEVEL_DOT: Record<LogLevel, string> = {
+  DEBUG: 'bg-gray-300',
+  INFO: 'bg-blue-400',
+  WARN: 'bg-yellow-400',
+  ERROR: 'bg-red-500',
+  FATAL: 'bg-red-700',
 }
 
 const LEVEL_BG: Record<LogLevel, string> = {
@@ -30,15 +50,26 @@ const LEVEL_BG: Record<LogLevel, string> = {
 }
 
 const ALL_LEVELS: LogLevel[] = ['DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL']
-const CUSTOM_CHANNEL_VALUE = '__custom__'
-const MAX_RENDERED_LOGS = 500
 
-function channelPresetValue(channel: string): string {
-  return `${channel},${channel}.**`
+// --- HTTP method / status regexes for auto-derived facets ---
+const METHOD_REGEX = /\b(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\b/
+const STATUS_REGEX = /\s(\d{3})\s/
+
+function extractMethod(raw: string): string | null {
+  const m = raw.match(METHOD_REGEX)
+  return m ? m[1] : null
 }
 
-function isPresetChannelValue(value: string, channels: string[]): boolean {
-  return value === '*' || channels.some(channel => channelPresetValue(channel) === value)
+function extractStatusClass(raw: string): string | null {
+  const m = raw.match(STATUS_REGEX)
+  if (!m) return null
+  const code = parseInt(m[1], 10)
+  if (code < 100 || code > 599) return null
+  return `${Math.floor(code / 100)}xx`
+}
+
+function channelMatchesSource(channel: string, source: string): boolean {
+  return channel === source || channel.startsWith(source + '.') || channel.endsWith('.' + source) || channel.includes('.' + source + '.')
 }
 
 function highlightKeyword(text: string, keyword: string): React.ReactNode {
@@ -63,19 +94,15 @@ function downloadTextFile(filename: string, content: string, type: string) {
   URL.revokeObjectURL(url)
 }
 
-function LogRow({
-  entry,
-  keyword,
-  expanded,
-  onClick,
-}: {
+interface LogRowProps {
   entry: LogEntry
   keyword: string
   expanded: boolean
-  onClick: () => void
-}) {
-  const channelShort = entry.channel.split('.').slice(-2).join('.')
+  onToggle: () => void
+}
 
+const LogRow = React.memo(function LogRow({ entry, keyword, expanded, onToggle }: LogRowProps) {
+  const channelShort = entry.channel.split('.').slice(-2).join('.')
   return (
     <div
       className={cn(
@@ -83,11 +110,10 @@ function LogRow({
         LEVEL_BG[entry.level],
         expanded && 'border-blue-400 bg-blue-50',
       )}
-      onClick={onClick}
+      onClick={onToggle}
     >
-      {/* Meta row: level + channel + timestamp */}
       <div className="flex items-center gap-1.5 font-mono text-[10px]">
-        <span className={cn('shrink-0 font-bold', LEVEL_COLORS[entry.level])}>
+        <span className={cn('shrink-0 font-bold', LEVEL_TEXT[entry.level])}>
           {entry.level.slice(0, 4)}
         </span>
         <span className="min-w-0 flex-1 truncate text-gray-400" title={entry.channel}>
@@ -97,7 +123,6 @@ function LogRow({
           {entry.ts.slice(11, 23)}
         </span>
       </div>
-      {/* Message row */}
       <div
         className={cn(
           'mt-0.5 font-mono text-[11px] leading-snug text-gray-700',
@@ -115,137 +140,341 @@ function LogRow({
       )}
     </div>
   )
-}
+})
 
-export function LogPanel({
-  onCollapse,
-}: {
+interface LogPanelProps {
   panelMode: PanelMode
   onCollapse: () => void
   onSetWidth: (fraction: number) => void
-}) {
-  const { logBuffer, filter, autoScroll, setFilter, setAutoScroll, clearLogs } = useSimulationStore()
-  const { nodes } = useScenarioStore()
+}
+
+export function LogPanel({ onCollapse }: LogPanelProps) {
+  const logBuffer = useSimulationStore(s => s.logBuffer)
+  const filter = useSimulationStore(s => s.filter)
+  const autoScroll = useSimulationStore(s => s.autoScroll)
+  const accumulateMode = useSimulationStore(s => s.accumulateMode)
+  const setFilter = useSimulationStore(s => s.setFilter)
+  const setAutoScroll = useSimulationStore(s => s.setAutoScroll)
+  const setAccumulateMode = useSimulationStore(s => s.setAccumulateMode)
+  const clearLogs = useSimulationStore(s => s.clearLogs)
+  const nodes = useScenarioStore(s => s.nodes)
+  const destinations = useDestinationsStore(s => s.destinations)
+  const setDestStatus = useDestinationsStore(s => s.setStatus)
+  const recordSent = useDestinationsStore(s => s.recordSent)
+
   const [expandedId, setExpandedId] = useState<string | null>(null)
-  const [channelInput, setChannelInput] = useState(filter.channelGlob)
-  const [channelPreset, setChannelPreset] = useState<string>(filter.channelGlob)
-  const [renderWindowEnd, setRenderWindowEnd] = useState(MAX_RENDERED_LOGS)
-  const scrollRef = useRef<HTMLDivElement>(null)
+  const scrollParentRef = useRef<HTMLDivElement>(null)
   const deferredKeyword = useDeferredValue(filter.keyword)
-  const previousFilterKey = useRef('')
+  const [forwardingDestId, setForwardingDestId] = useState<string | null>(null)
+  const [forwardToast, setForwardToast] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null)
 
-  const channels = useMemo(() =>
-    [...new Set(nodes.map(n => n.data.channel).filter(Boolean))].sort(),
-    [nodes]
-  )
-
+  // Auto-dismiss toast
   useEffect(() => {
-    setChannelInput(filter.channelGlob)
-    setChannelPreset(isPresetChannelValue(filter.channelGlob, channels) ? filter.channelGlob : CUSTOM_CHANNEL_VALUE)
-  }, [channels, filter.channelGlob])
+    if (!forwardToast) return
+    const t = setTimeout(() => setForwardToast(null), 3500)
+    return () => clearTimeout(t)
+  }, [forwardToast])
 
-  const filteredLogs = useMemo(() => {
+  // Available sources (from scenario nodes)
+  const sourceOptions = useMemo(() => {
+    const names = [...new Set(nodes.map(n => n.data.channel).filter(Boolean))].sort()
+    return names
+  }, [nodes])
+
+  // --- Single-pass filtering + facet counting ---
+  type FacetCounts = {
+    level: Record<LogLevel, number>
+    source: Record<string, number>
+    method: Record<string, number>
+    statusClass: Record<string, number>
+  }
+
+  const { filteredLogs, facets } = useMemo(() => {
     const normalizedKeyword = deferredKeyword.trim().toLowerCase()
+    const sourceSet = filter.sources.length ? new Set(filter.sources) : null
+    const levelSet = new Set(filter.levels)
+    const timeRange = filter.timeRange
+    const facets: FacetCounts = {
+      level: { DEBUG: 0, INFO: 0, WARN: 0, ERROR: 0, FATAL: 0 },
+      source: {},
+      method: {},
+      statusClass: {},
+    }
+    const out: LogEntry[] = []
 
-    return logBuffer.filter(entry => {
-      if (!matchesChannel(entry.channel, filter.channelGlob)) return false
-      if (!filter.levels.includes(entry.level)) return false
-      if (normalizedKeyword && !entry.raw.toLowerCase().includes(normalizedKeyword)) return false
-      return true
-    })
-  }, [deferredKeyword, filter.channelGlob, filter.levels, logBuffer])
+    for (let i = 0; i < logBuffer.length; i++) {
+      const entry = logBuffer[i]
 
-  const activeFilterKey = `${filter.channelGlob}__${filter.levels.join(',')}__${deferredKeyword.trim().toLowerCase()}`
+      // Non-level filters first, so per-level facet counts reflect remaining dimensions.
+      if (sourceSet) {
+        let matched = false
+        for (const s of sourceSet) {
+          if (channelMatchesSource(entry.channel, s)) { matched = true; break }
+        }
+        if (!matched) continue
+      }
+      if (normalizedKeyword && !entry.raw.toLowerCase().includes(normalizedKeyword)) continue
+      if (timeRange) {
+        const t = Date.parse(entry.ts)
+        if (t < timeRange[0] || t > timeRange[1]) continue
+      }
 
-  useEffect(() => {
-    if (previousFilterKey.current !== activeFilterKey) {
-      previousFilterKey.current = activeFilterKey
-      setRenderWindowEnd(filteredLogs.length)
-      return
+      // For level facet, count without applying current level filter.
+      facets.level[entry.level]++
+
+      if (!levelSet.has(entry.level)) continue
+
+      out.push(entry)
+
+      // Source facet: count leaf segment of channel.
+      const segs = entry.channel.split('.')
+      const leaf = segs[segs.length - 1]
+      facets.source[leaf] = (facets.source[leaf] ?? 0) + 1
+
+      const method = extractMethod(entry.raw)
+      if (method) facets.method[method] = (facets.method[method] ?? 0) + 1
+
+      const sc = extractStatusClass(entry.raw)
+      if (sc) facets.statusClass[sc] = (facets.statusClass[sc] ?? 0) + 1
     }
 
-    if (autoScroll) {
-      setRenderWindowEnd(filteredLogs.length)
-      return
-    }
+    return { filteredLogs: out, facets }
+  }, [logBuffer, filter.sources, filter.levels, filter.timeRange, deferredKeyword])
 
-    setRenderWindowEnd(prev => Math.min(prev, filteredLogs.length))
-  }, [activeFilterKey, autoScroll, filteredLogs.length])
-
+  // Keep expanded row valid
   useEffect(() => {
-    setExpandedId(current => current && filteredLogs.some(entry => entry.id === current) ? current : null)
-  }, [filteredLogs])
+    if (expandedId && !filteredLogs.some(e => e.id === expandedId)) setExpandedId(null)
+  }, [filteredLogs, expandedId])
 
-  const visibleStart = Math.max(0, renderWindowEnd - MAX_RENDERED_LOGS)
-  const visibleLogs = useMemo(
-    () => filteredLogs.slice(visibleStart, renderWindowEnd),
-    [filteredLogs, renderWindowEnd, visibleStart]
-  )
-  const hiddenAboveCount = visibleStart
-  const hiddenBelowCount = Math.max(0, filteredLogs.length - renderWindowEnd)
+  // --- Virtualizer ---
+  const rowVirtualizer = useVirtualizer({
+    count: filteredLogs.length,
+    getScrollElement: () => scrollParentRef.current,
+    estimateSize: (index) => (filteredLogs[index]?.id === expandedId ? 110 : 42),
+    overscan: 20,
+    getItemKey: (index) => filteredLogs[index]?.id ?? index,
+  })
+
+  // Re-measure when expanded row changes
+  useEffect(() => {
+    rowVirtualizer.measure()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandedId])
+
+  // Auto-scroll on new logs when in Live mode
+  useEffect(() => {
+    if (!autoScroll) return
+    if (filteredLogs.length === 0) return
+    rowVirtualizer.scrollToIndex(filteredLogs.length - 1, { align: 'end', behavior: 'auto' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredLogs.length, autoScroll])
 
   const handleScroll = useCallback(() => {
-    const el = scrollRef.current
+    const el = scrollParentRef.current
     if (!el) return
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30
-    if (atBottom && !autoScroll) {
-      setRenderWindowEnd(filteredLogs.length)
-      setAutoScroll(true)
-    } else if (!atBottom && autoScroll) {
-      setAutoScroll(false)
+    if (atBottom && !autoScroll) setAutoScroll(true)
+    else if (!atBottom && autoScroll) setAutoScroll(false)
+  }, [autoScroll, setAutoScroll])
+
+  // --- Filter setters ---
+  const setSources = useCallback((next: string[]) => setFilter({ sources: next }), [setFilter])
+  const setLevels = useCallback((next: string[]) => setFilter({ levels: next as LogLevel[] }), [setFilter])
+  const setTimeRange = useCallback((r: [number, number] | null) => setFilter({ timeRange: r }), [setFilter])
+
+  // --- Method / status-class derived filters ---
+  // Stored in component state (not persisted) since they're view-level facets.
+  const [methodFilter, setMethodFilter] = useState<string[]>([])
+  const [statusClassFilter, setStatusClassFilter] = useState<string[]>([])
+
+  // Apply method/statusClass filters in a second pass (they're cheap relative to buffer filter).
+  const displayedLogs = useMemo(() => {
+    if (methodFilter.length === 0 && statusClassFilter.length === 0) return filteredLogs
+    return filteredLogs.filter(entry => {
+      if (methodFilter.length > 0) {
+        const m = extractMethod(entry.raw)
+        if (!m || !methodFilter.includes(m)) return false
+      }
+      if (statusClassFilter.length > 0) {
+        const sc = extractStatusClass(entry.raw)
+        if (!sc || !statusClassFilter.includes(sc)) return false
+      }
+      return true
+    })
+  }, [filteredLogs, methodFilter, statusClassFilter])
+
+  // Re-wire virtualizer to displayedLogs count
+  const virtualizerCount = displayedLogs.length
+  useEffect(() => {
+    // when displayedLogs length shrinks, reset virtualizer cache
+    rowVirtualizer.measure()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [virtualizerCount])
+
+  // --- Downloads ---
+  const handleDownloadLog = useCallback(() => {
+    downloadTextFile('logs.log', displayedLogs.map(e => e.raw).join('\n'), 'text/plain')
+  }, [displayedLogs])
+
+  const handleDownloadJsonl = useCallback(() => {
+    downloadTextFile('logs.jsonl', displayedLogs.map(e => JSON.stringify(e)).join('\n'), 'application/jsonl')
+  }, [displayedLogs])
+
+  // --- Manual forward (accumulate-then-forward) ---
+  const enabledDests = destinations.filter(d => d.enabled)
+
+  const handleForward = useCallback(async (dest: DestinationConfig) => {
+    if (displayedLogs.length === 0) {
+      setForwardToast({ kind: 'err', msg: 'Nothing to forward' })
+      return
     }
-  }, [autoScroll, filteredLogs.length, setAutoScroll])
+    setForwardingDestId(dest.id)
+    setDestStatus(dest.id, 'sending')
+    try {
+      if (dest.type === 'cribl-hec') {
+        await forwardToHec(displayedLogs, dest as CriblHecDestination)
+      }
+      recordSent(dest.id, displayedLogs.length)
+      setForwardToast({ kind: 'ok', msg: `Forwarded ${displayedLogs.length} logs → ${dest.name || dest.type}` })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setDestStatus(dest.id, 'error', msg)
+      setForwardToast({ kind: 'err', msg })
+    } finally {
+      setForwardingDestId(null)
+    }
+  }, [displayedLogs, setDestStatus, recordSent])
 
-  const applyChannel = useCallback((value: string) => {
-    setChannelInput(value)
-    setFilter({ channelGlob: value || '*' })
-  }, [setFilter])
+  // --- Facet options ---
+  const sourceFacetOptions = useMemo(() => {
+    return sourceOptions.map(name => ({
+      value: name,
+      label: name,
+      count: facets.source[name],
+    }))
+  }, [sourceOptions, facets])
 
-  const handlePresetChange = useCallback((value: string) => {
-    setChannelPreset(value)
-    if (value !== CUSTOM_CHANNEL_VALUE) applyChannel(value)
-  }, [applyChannel])
+  const methodOptions = useMemo(() => {
+    const keys = Object.keys(facets.method).sort()
+    return keys.map(k => ({ value: k, label: k, count: facets.method[k] }))
+  }, [facets.method])
 
-  const handleLevelToggle = useCallback((level: LogLevel, checked: boolean) => {
-    const levels = checked ? [...filter.levels, level] : filter.levels.filter(l => l !== level)
-    setFilter({ levels })
-  }, [filter.levels, setFilter])
+  const statusClassOptions = useMemo(() => {
+    const keys = Object.keys(facets.statusClass).sort()
+    return keys.map(k => ({ value: k, label: k, count: facets.statusClass[k] }))
+  }, [facets.statusClass])
 
-  const handleScrollToBottom = useCallback(() => {
-    setRenderWindowEnd(filteredLogs.length)
-    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    setAutoScroll(true)
-  }, [filteredLogs.length, setAutoScroll])
+  const levelOptions = useMemo(() =>
+    ALL_LEVELS.map(l => ({
+      value: l,
+      label: l,
+      count: facets.level[l],
+      dotClassName: LEVEL_DOT[l],
+    })),
+    [facets.level]
+  )
 
-  const handleShowOlder = useCallback(() => {
-    setAutoScroll(false)
-    setRenderWindowEnd(prev => Math.max(MAX_RENDERED_LOGS, prev - MAX_RENDERED_LOGS))
-    if (scrollRef.current) scrollRef.current.scrollTop = 0
-  }, [setAutoScroll])
-
-  const handleShowNewer = useCallback(() => {
-    setRenderWindowEnd(prev => Math.min(filteredLogs.length, prev + MAX_RENDERED_LOGS))
-    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-  }, [filteredLogs.length])
-
-  const handleDownloadVisibleText = useCallback(() => {
-    downloadTextFile('visible-logs.log', filteredLogs.map(entry => entry.raw).join('\n'), 'text/plain')
-  }, [filteredLogs])
-
-  const handleDownloadVisibleJsonl = useCallback(() => {
-    downloadTextFile('visible-logs.jsonl', filteredLogs.map(entry => JSON.stringify(entry)).join('\n'), 'application/jsonl')
-  }, [filteredLogs])
+  const items = rowVirtualizer.getVirtualItems()
+  const totalSize = rowVirtualizer.getTotalSize()
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-white">
+      {/* ── Header ───────────────────────────────────────────── */}
       <div className="shrink-0 border-b border-gray-200 bg-gray-50 px-3 py-2">
-        {/* Title row */}
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold text-gray-800">Logs</span>
           <Badge variant="outline" className="px-1.5 text-[9px]">
-            {filteredLogs.length} / {logBuffer.length}
+            {displayedLogs.length} / {logBuffer.length}
           </Badge>
-          <div className="ml-auto flex items-center gap-0.5">
+
+          <div className="ml-auto flex items-center gap-1">
+            {/* Download menu */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  title="Download logs"
+                  className="rounded p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-40">
+                <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-gray-500">Export visible</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={handleDownloadLog} className="text-xs">
+                  <span className="font-mono text-[11px] text-gray-400">.log</span>
+                  <span className="ml-2">Plain text</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={handleDownloadJsonl} className="text-xs">
+                  <span className="font-mono text-[11px] text-gray-400">.jsonl</span>
+                  <span className="ml-2">JSON lines</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {/* Forward menu */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  title={enabledDests.length === 0 ? 'No destinations configured' : 'Forward to destination'}
+                  className={cn(
+                    'rounded p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900',
+                    forwardingDestId && 'animate-pulse text-blue-600',
+                  )}
+                >
+                  <Send className="h-3.5 w-3.5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-gray-500">
+                  Forward {displayedLogs.length} logs to
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {enabledDests.length === 0 && (
+                  <div className="px-2 py-3 text-[11px] text-gray-400">
+                    No enabled destinations.
+                    <br />
+                    Configure via the Destinations toolbar.
+                  </div>
+                )}
+                {enabledDests.map(dest => (
+                  <DropdownMenuItem
+                    key={dest.id}
+                    onSelect={() => handleForward(dest)}
+                    className="text-xs"
+                    disabled={forwardingDestId !== null}
+                  >
+                    <span className="flex w-full items-center justify-between gap-2">
+                      <span className="truncate">{dest.name || dest.type}</span>
+                      <span className="shrink-0 text-[10px] uppercase text-gray-400">{dest.type}</span>
+                    </span>
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuCheckboxItem
+                  checked={accumulateMode}
+                  onCheckedChange={setAccumulateMode}
+                  onSelect={(e) => e.preventDefault()}
+                  className="text-xs"
+                >
+                  <span>Accumulate mode</span>
+                </DropdownMenuCheckboxItem>
+                <div className="px-2 pb-2 pt-1 text-[10px] leading-snug text-gray-400">
+                  {accumulateMode
+                    ? 'Auto-forward paused. Use this menu to send on demand.'
+                    : 'Auto-forward is on. Toggle to hold logs here and send manually.'}
+                </div>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            <button
+              title="Clear logs"
+              onClick={clearLogs}
+              className="rounded p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+
             <button
               title="Collapse panel"
               onClick={onCollapse}
@@ -256,131 +485,147 @@ export function LogPanel({
           </div>
         </div>
 
-        <div className="mt-2 space-y-1.5">
-          {/* Source filter */}
-          <div className="flex items-center gap-1.5">
-            <Select value={channelPreset} onValueChange={handlePresetChange}>
-              <SelectTrigger className="h-7 flex-1 min-w-0 text-xs">
-                <SelectValue placeholder="Source" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="*" className="text-xs">All sources</SelectItem>
-                {channels.map(channel => (
-                  <SelectItem key={channel} value={channelPresetValue(channel)} className="text-xs">
-                    {channel}
-                  </SelectItem>
-                ))}
-                <SelectItem value={CUSTOM_CHANNEL_VALUE} className="text-xs">Custom pattern…</SelectItem>
-              </SelectContent>
-            </Select>
-            {channelPreset === CUSTOM_CHANNEL_VALUE && (
-              <Input
-                value={channelInput}
-                onChange={e => {
-                  setChannelInput(e.target.value)
-                  setChannelPreset(CUSTOM_CHANNEL_VALUE)
-                }}
-                onBlur={() => applyChannel(channelInput || '*')}
-                onKeyDown={e => {
-                  if (e.key === 'Enter') applyChannel(channelInput || '*')
-                }}
-                placeholder="glob pattern…"
-                className="h-7 w-28 shrink-0 font-mono text-xs"
+        {/* Filter row */}
+        <div className="mt-2 grid grid-cols-2 gap-1.5">
+          <MultiSelectMenu
+            label="Sources"
+            options={sourceFacetOptions}
+            selected={filter.sources}
+            onChange={setSources}
+            renderTriggerText={(sel, opts) =>
+              sel.length === 0
+                ? 'All sources'
+                : sel.length === 1
+                  ? (opts.find(o => o.value === sel[0])?.label ?? sel[0]) as React.ReactNode
+                  : `${sel.length} sources`
+            }
+          />
+          <MultiSelectMenu
+            label="Levels"
+            options={levelOptions}
+            selected={filter.levels}
+            onChange={setLevels}
+            renderTriggerText={(sel) =>
+              sel.length === ALL_LEVELS.length
+                ? 'All levels'
+                : sel.length === 0
+                  ? 'No levels'
+                  : sel.map(l => l.slice(0, 1)).join(' · ')
+            }
+          />
+        </div>
+
+        {/* Search + Live */}
+        <div className="mt-1.5 flex items-center gap-1.5">
+          <Input
+            value={filter.keyword}
+            onChange={e => setFilter({ keyword: e.target.value })}
+            placeholder="Search logs…"
+            className="h-7 flex-1 min-w-0 text-xs"
+          />
+          <Button
+            variant={autoScroll ? 'default' : 'outline'}
+            size="sm"
+            className="h-7 shrink-0 gap-1 px-2 text-[10px]"
+            onClick={() => setAutoScroll(!autoScroll)}
+          >
+            {autoScroll ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />}
+            Live
+          </Button>
+        </div>
+
+        {/* Extra facets: only appear if the logs have them */}
+        {(methodOptions.length > 0 || statusClassOptions.length > 0) && (
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {methodOptions.length > 0 && (
+              <MultiSelectMenu
+                label="Methods"
+                options={methodOptions}
+                selected={methodFilter}
+                onChange={setMethodFilter}
+                triggerClassName="flex-1 min-w-0"
+                renderTriggerText={(sel) =>
+                  sel.length === 0 ? 'Any method' : sel.length === 1 ? sel[0] : `${sel.length} methods`
+                }
+              />
+            )}
+            {statusClassOptions.length > 0 && (
+              <MultiSelectMenu
+                label="Status"
+                options={statusClassOptions}
+                selected={statusClassFilter}
+                onChange={setStatusClassFilter}
+                triggerClassName="flex-1 min-w-0"
+                renderTriggerText={(sel) =>
+                  sel.length === 0 ? 'Any status' : sel.length === 1 ? sel[0] : `${sel.length} statuses`
+                }
               />
             )}
           </div>
-
-          {/* Search + auto-scroll */}
-          <div className="flex items-center gap-1.5">
-            <Input
-              value={filter.keyword}
-              onChange={e => setFilter({ keyword: e.target.value })}
-              placeholder="Search logs…"
-              className="h-7 flex-1 min-w-0 text-xs"
-            />
-            <Button
-              variant={autoScroll ? 'default' : 'outline'}
-              size="sm"
-              className="h-7 shrink-0 px-2 text-[10px]"
-              onClick={() => setAutoScroll(!autoScroll)}
-            >
-              Live
-            </Button>
-          </div>
-
-          {/* Level toggles + actions */}
-          <div className="flex items-center justify-between gap-1">
-            <div className="flex items-center gap-2">
-              {ALL_LEVELS.map(level => (
-                <label key={level} className="flex cursor-pointer items-center gap-0.5">
-                  <Checkbox
-                    checked={filter.levels.includes(level)}
-                    onCheckedChange={checked => handleLevelToggle(level, !!checked)}
-                    className="h-3 w-3"
-                  />
-                  <span className={cn('text-[10px] font-semibold', LEVEL_COLORS[level])}>{level.slice(0, 1)}</span>
-                </label>
-              ))}
-            </div>
-            <div className="flex items-center gap-1">
-              <Button variant="outline" size="sm" className="h-6 px-1.5 text-[10px]" onClick={handleDownloadVisibleText}>
-                .log
-              </Button>
-              <Button variant="outline" size="sm" className="h-6 px-1.5 text-[10px]" onClick={handleDownloadVisibleJsonl}>
-                .jsonl
-              </Button>
-              <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[10px]" onClick={clearLogs}>
-                Clear
-              </Button>
-            </div>
-          </div>
-        </div>
+        )}
       </div>
 
-      <div ref={scrollRef} className="flex-1 overflow-x-hidden overflow-y-auto" onScroll={handleScroll}>
-        {(hiddenAboveCount > 0 || hiddenBelowCount > 0) && (
-          <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-gray-200 bg-white/95 px-3 py-2 backdrop-blur">
-            <span className="text-[10px] text-gray-500">
-              Showing {visibleLogs.length} of {filteredLogs.length} matching logs
-            </span>
-            <div className="flex items-center gap-1">
-              {hiddenAboveCount > 0 && (
-                <Button variant="outline" size="sm" className="h-6 px-2 text-[10px]" onClick={handleShowOlder}>
-                  Older
-                </Button>
-              )}
-              {hiddenBelowCount > 0 && (
-                <Button variant="outline" size="sm" className="h-6 px-2 text-[10px]" onClick={handleShowNewer}>
-                  Newer
-                </Button>
-              )}
-            </div>
-          </div>
-        )}
-        {filteredLogs.length === 0 ? (
+      {/* ── Histogram ────────────────────────────────────────── */}
+      <LogHistogram
+        logs={filteredLogs}
+        selectedRange={filter.timeRange}
+        onSelectRange={setTimeRange}
+      />
+
+      {/* ── Virtualized log list ─────────────────────────────── */}
+      <div
+        ref={scrollParentRef}
+        className="flex-1 overflow-x-hidden overflow-y-auto"
+        onScroll={handleScroll}
+      >
+        {displayedLogs.length === 0 ? (
           <div className="flex h-full items-center justify-center px-6 text-center text-xs text-gray-400">
             {logBuffer.length === 0
               ? 'No logs yet. Run the simulation or step a tick to start collecting them.'
               : 'No logs match the current filters.'}
           </div>
         ) : (
-          visibleLogs.map(entry => (
-            <LogRow
-              key={entry.id}
-              entry={entry}
-              keyword={filter.keyword}
-              expanded={expandedId === entry.id}
-              onClick={() => setExpandedId(expandedId === entry.id ? null : entry.id)}
-            />
-          ))
+          <div style={{ height: totalSize, position: 'relative', width: '100%' }}>
+            {items.map(virtualRow => {
+              const entry = displayedLogs[virtualRow.index]
+              if (!entry) return null
+              return (
+                <div
+                  key={virtualRow.key}
+                  data-index={virtualRow.index}
+                  ref={rowVirtualizer.measureElement}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                >
+                  <LogRow
+                    entry={entry}
+                    keyword={filter.keyword}
+                    expanded={expandedId === entry.id}
+                    onToggle={() => setExpandedId(expandedId === entry.id ? null : entry.id)}
+                  />
+                </div>
+              )
+            })}
+          </div>
         )}
       </div>
 
-      {hiddenBelowCount > 0 && (
-        <div className="absolute bottom-4 right-4">
-          <Button size="sm" className="h-7 bg-blue-600 text-xs hover:bg-blue-700" onClick={handleScrollToBottom}>
-            Show latest ({hiddenBelowCount})
-          </Button>
+      {/* Toast */}
+      {forwardToast && (
+        <div
+          className={cn(
+            'absolute bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-md px-3 py-2 text-[11px] shadow-lg',
+            forwardToast.kind === 'ok'
+              ? 'bg-green-600 text-white'
+              : 'bg-red-600 text-white',
+          )}
+        >
+          {forwardToast.msg}
         </div>
       )}
     </div>

@@ -70,6 +70,9 @@ export default function EditorPage() {
   const editingSegment = canvasEditSegmentId ? episode.segments.find(s => s.id === canvasEditSegmentId) : null
   const { loadScenario } = useScenarioStore()
   const { logBuffer } = useSimulationStore()
+  const accumulateMode = useSimulationStore(s => s.accumulateMode)
+  const accumulateModeRef = useRef(accumulateMode)
+  accumulateModeRef.current = accumulateMode
   const { destinations, setStatus, recordSent } = useDestinationsStore()
   const resizingRef = useRef(false)
   const [panelMode, setPanelMode] = useState<PanelMode>('quarter')
@@ -139,6 +142,13 @@ export default function EditorPage() {
     const FLUSH_INTERVAL_MS = 3_000
 
     const flush = () => {
+      if (accumulateModeRef.current) {
+        // In accumulate mode the user forwards manually from the log panel.
+        // Advance the cursor so that when they re-enable auto-forward we don't
+        // double-send everything collected while paused.
+        forwardedUpToRef.current = logBufferRef.current.length
+        return
+      }
       const buffer = logBufferRef.current
       const dests  = destinationsRef.current
       const newLogs = buffer.slice(forwardedUpToRef.current)

@@ -12,7 +12,9 @@ export interface LogEntry {
 }
 
 export interface LogFilter {
-  channelGlob: string
+  channelGlob: string          // legacy / custom pattern
+  sources: string[]            // selected channel names (empty = all)
   levels: LogLevel[]
   keyword: string
+  timeRange: [number, number] | null  // [startMs, endMs] inclusive; null = unfiltered
 }
