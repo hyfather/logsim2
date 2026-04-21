@@ -103,25 +103,40 @@ export function MultiSelectMenu({
         {options.length === 0 && (
           <div className="px-2 py-3 text-[11px] text-gray-400">no options</div>
         )}
-        {options.map(opt => (
-          <DropdownMenuCheckboxItem
-            key={opt.value}
-            checked={selected.includes(opt.value)}
-            onCheckedChange={() => toggle(opt.value)}
-            onSelect={(e) => e.preventDefault()}
-            className="py-1 pr-2 text-xs"
-          >
-            <span className="flex min-w-0 flex-1 items-center gap-2" title={opt.title}>
-              {opt.dotClassName && (
-                <span className={cn('h-2 w-2 shrink-0 rounded-full', opt.dotClassName)} />
-              )}
-              <span className="min-w-0 flex-1 truncate">{opt.label}</span>
-              {opt.count !== undefined && (
-                <span className="shrink-0 text-[10px] text-gray-400">{opt.count}</span>
-              )}
-            </span>
-          </DropdownMenuCheckboxItem>
-        ))}
+        {options.map(opt => {
+          const isOnly = selected.length === 1 && selected[0] === opt.value
+          return (
+            <DropdownMenuCheckboxItem
+              key={opt.value}
+              checked={selected.includes(opt.value)}
+              onCheckedChange={() => toggle(opt.value)}
+              onSelect={(e) => e.preventDefault()}
+              className="group py-1 pr-2 text-xs"
+            >
+              <span className="flex min-w-0 flex-1 items-center gap-2" title={opt.title}>
+                {opt.dotClassName && (
+                  <span className={cn('h-2 w-2 shrink-0 rounded-full', opt.dotClassName)} />
+                )}
+                <span className="min-w-0 flex-1 truncate">{opt.label}</span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    onChange(isOnly ? options.map(o => o.value) : [opt.value])
+                  }}
+                  className="shrink-0 rounded px-1 py-0.5 text-[10px] font-medium text-blue-600 opacity-0 hover:bg-blue-50 group-hover:opacity-100 focus:opacity-100"
+                  title={isOnly ? 'Select all' : `Select only ${typeof opt.label === 'string' ? opt.label : opt.value}`}
+                >
+                  {isOnly ? 'all' : 'only'}
+                </button>
+                {opt.count !== undefined && (
+                  <span className="shrink-0 text-[10px] text-gray-400">{opt.count}</span>
+                )}
+              </span>
+            </DropdownMenuCheckboxItem>
+          )
+        })}
       </DropdownMenuContent>
     </DropdownMenu>
   )
