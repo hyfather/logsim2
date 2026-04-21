@@ -21,6 +21,9 @@ import { asFlowEdgeData, asFlowNodeData } from '@/lib/flow-data'
 import { cn } from '@/lib/utils'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { useUrlSync } from '@/hooks/useUrlSync'
+import { useSegmentCanvasBridge } from '@/hooks/useSegmentCanvasBridge'
+import { useEpisodeStore } from '@/store/useEpisodeStore'
 
 function KeyboardShortcutsDialog() {
   const { showKeyboardShortcuts, setShowKeyboardShortcuts } = useUIStore()
@@ -58,7 +61,13 @@ function KeyboardShortcutsDialog() {
 export type PanelMode = 'collapsed' | 'quarter' | 'custom'
 
 export default function EditorPage() {
+  useUrlSync()
+  useSegmentCanvasBridge()
   const { logPanelOpen, logPanelWidth, setLogPanelOpen, setLogPanelWidth, mode } = useUIStore()
+  const canvasEditSegmentId = useEpisodeStore(s => s.canvasEditSegmentId)
+  const setCanvasEditSegment = useEpisodeStore(s => s.setCanvasEditSegment)
+  const episode = useEpisodeStore(s => s.episode)
+  const editingSegment = canvasEditSegmentId ? episode.segments.find(s => s.id === canvasEditSegmentId) : null
   const { loadScenario } = useScenarioStore()
   const { logBuffer } = useSimulationStore()
   const { destinations, setStatus, recordSent } = useDestinationsStore()
@@ -232,8 +241,29 @@ export default function EditorPage() {
         <div className="flex flex-1 overflow-hidden">
           {mode === 'design' && <Palette />}
 
-          <div className="flex-1 relative overflow-hidden">
-            {mode === 'design' ? <Canvas /> : <EpisodeMode />}
+          <div className="flex-1 relative overflow-hidden flex flex-col">
+            {mode === 'design' && editingSegment && (
+              <div className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-xs text-amber-900">
+                <span className="rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider">
+                  Editing segment
+                </span>
+                <span className="font-medium">{editingSegment.name}</span>
+                <span className="text-[10px] text-amber-700">— canvas edits auto-save to this segment</span>
+                <div className="ml-auto flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-6 gap-1 px-2 text-[11px]"
+                    onClick={() => { setCanvasEditSegment(null); useUIStore.getState().setMode('episodes') }}
+                  >
+                    Done
+                  </Button>
+                </div>
+              </div>
+            )}
+            <div className="flex-1 relative overflow-hidden">
+              {mode === 'design' ? <Canvas /> : <EpisodeMode />}
+            </div>
           </div>
 
           <div

@@ -36,7 +36,8 @@
       "mcp__Claude_Preview__preview_start",
       "Bash(xargs sed *)",
       "Bash(go vet *)",
-      "Bash(node scripts/build-example-episodes.mjs)"
+      "Bash(node scripts/build-example-episodes.mjs)",
+      "Bash(npm install *)"
     ]
   }
 }

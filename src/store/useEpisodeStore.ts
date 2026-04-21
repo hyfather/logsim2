@@ -1,6 +1,6 @@
 'use client'
 import { create } from 'zustand'
-import type { Episode, EpisodeSegment } from '@/types/episode'
+import type { Episode, EpisodeSegment, SegmentCanvasSnapshot } from '@/types/episode'
 import { generateId } from '@/lib/id'
 
 export type EpisodeRunStatus = 'idle' | 'running' | 'stopped'
@@ -9,6 +9,8 @@ interface EpisodeState {
   episode: Episode
   selectedSegmentId: string | null
   editingSegmentId: string | null
+  /** If set, scenario store edits in design mode are saved back into this segment's canvas. */
+  canvasEditSegmentId: string | null
   runStatus: EpisodeRunStatus
   runningSegmentId: string | null
   runProgressTicks: number // ticks within the currently running segment
@@ -22,6 +24,8 @@ interface EpisodeState {
   moveSegment: (segmentId: string, delta: -1 | 1) => void
   selectSegment: (id: string | null) => void
   setEditingSegment: (id: string | null) => void
+  setCanvasEditSegment: (id: string | null) => void
+  updateSegmentCanvas: (segmentId: string, snapshot: SegmentCanvasSnapshot) => void
   setRunStatus: (s: EpisodeRunStatus) => void
   setRunningSegment: (id: string | null) => void
   setRunProgress: (ticks: number) => void
@@ -59,6 +63,7 @@ export const useEpisodeStore = create<EpisodeState>()((set, get) => ({
   episode: defaultEpisode(),
   selectedSegmentId: null,
   editingSegmentId: null,
+  canvasEditSegmentId: null,
   runStatus: 'idle',
   runningSegmentId: null,
   runProgressTicks: 0,
@@ -67,6 +72,7 @@ export const useEpisodeStore = create<EpisodeState>()((set, get) => ({
     episode,
     selectedSegmentId: episode.segments[0]?.id ?? null,
     editingSegmentId: null,
+    canvasEditSegmentId: null,
     runStatus: 'idle',
     runningSegmentId: null,
     runProgressTicks: 0,
@@ -108,6 +114,7 @@ export const useEpisodeStore = create<EpisodeState>()((set, get) => ({
       ticks: parent.ticks,
       scenarioYaml: parent.scenarioYaml,
       parentId: parent.id,
+      canvas: parent.canvas,
     }
     const idx = episode.segments.findIndex(s => s.id === segmentId)
     const nextSegments = [
@@ -157,6 +164,16 @@ export const useEpisodeStore = create<EpisodeState>()((set, get) => ({
 
   selectSegment: (id) => set({ selectedSegmentId: id }),
   setEditingSegment: (id) => set({ editingSegmentId: id }),
+  setCanvasEditSegment: (id) => set({ canvasEditSegmentId: id }),
+  updateSegmentCanvas: (segmentId, snapshot) => set(state => ({
+    episode: {
+      ...state.episode,
+      segments: state.episode.segments.map(s =>
+        s.id === segmentId ? { ...s, canvas: snapshot } : s
+      ),
+      updatedAt: new Date().toISOString(),
+    },
+  })),
   setRunStatus: (runStatus) => set({ runStatus }),
   setRunningSegment: (id) => set({ runningSegmentId: id }),
   setRunProgress: (runProgressTicks) => set({ runProgressTicks }),
