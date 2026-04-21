@@ -80,6 +80,7 @@ export function pickCriblPayload(destinations: DestinationConfig[]): CriblPayloa
     enabled: true,
     url: enabled.url,
     token: enabled.token,
-    sourcetype: enabled.sourcetype || 'logsim:json',
+    // Empty = let the backend sink auto-map per generator.
+    sourcetype: enabled.sourcetype,
   }
 }

@@ -1,21 +1,24 @@
 import type { LogEntry } from '@/types/logs'
 import type { CriblHecDestination } from '@/types/destinations'
+import { splunkSourcetype } from '@/lib/splunkSourcetype'
 
 /** Server-side proxy — avoids browser CORS restrictions. */
 const PROXY = '/api/cribl'
 
+// Standard Splunk HEC envelope. The event body is the raw log line so Splunk's
+// _raw field is the log itself, not a nested JSON blob. Metadata that would
+// otherwise be buried in _raw is promoted to indexed `fields`.
 interface HecEvent {
   time: number
   host: string
   source: string
   sourcetype: string
-  event: {
+  event: string
+  fields: {
     id: string
-    ts: string
     channel: string
     level: string
-    source: string
-    raw: string
+    generator: string
   }
 }
 
@@ -25,14 +28,15 @@ function toHecEvent(entry: LogEntry, dest: CriblHecDestination): HecEvent {
     host: entry.channel,
     // Empty source override → use the log's channel path per-event
     source: dest.source || entry.channel,
-    sourcetype: dest.sourcetype || 'logsim:json',
-    event: {
+    // Per-entry mapping unless the destination pins a global override.
+    // mysql → mysql:query, nginx → nginx:access, vpc-flow → aws:vpcflow, …
+    sourcetype: dest.sourcetype || splunkSourcetype(entry.source),
+    event: entry.raw,
+    fields: {
       id: entry.id,
-      ts: entry.ts,
       channel: entry.channel,
       level: entry.level,
-      source: entry.source,
-      raw: entry.raw,
+      generator: entry.source,
     },
   }
 }
@@ -78,8 +82,9 @@ export async function testHecConnection(dest: CriblHecDestination): Promise<void
     time: Date.now() / 1000,
     host: 'logsim-test',
     source: dest.source || 'logsim-test',
-    sourcetype: dest.sourcetype || 'logsim:json',
-    event: { message: 'LogSim connectivity test', level: 'INFO' },
+    sourcetype: dest.sourcetype || 'logsim:test',
+    event: 'LogSim connectivity test',
+    fields: { level: 'INFO', generator: 'logsim-test' },
   })
   await postViaProxy(testEvent, dest)
 }

@@ -110,7 +110,10 @@ func TestCribl_HECEnvelope(t *testing.T) {
 
 	entry := event.LogEntry{
 		ID:         "abc",
-		Sourcetype: "nodejs",
+		TS:         "2026-04-21T03:11:38.110Z",
+		Source:     "prod.vpc.subnet.host.app",
+		Level:      "INFO",
+		Sourcetype: "mysql",
 		Raw:        "hello world",
 	}
 	s := NewCribl(srv.URL, "tok", 1, 0)
@@ -121,14 +124,45 @@ func TestCribl_HECEnvelope(t *testing.T) {
 	if err := json.Unmarshal([]byte(strings.TrimSpace(gotBody)), &env); err != nil {
 		t.Fatalf("unmarshal HEC envelope: %v", err)
 	}
-	if env["sourcetype"] != "nodejs" {
-		t.Errorf("sourcetype: got %v, want nodejs", env["sourcetype"])
+	// sourcetype must be mapped to Splunk convention (mysql → mysql:query),
+	// not the raw generator name.
+	if env["sourcetype"] != "mysql:query" {
+		t.Errorf("sourcetype: got %v, want mysql:query", env["sourcetype"])
+	}
+	if env["host"] != "prod.vpc.subnet.host.app" {
+		t.Errorf("host: got %v, want channel path", env["host"])
+	}
+	if env["source"] != "prod.vpc.subnet.host.app" {
+		t.Errorf("source: got %v, want channel path", env["source"])
 	}
 	if env["index"] != "main" {
 		t.Errorf("index: got %v, want main", env["index"])
 	}
-	if _, ok := env["event"]; !ok {
-		t.Error("envelope missing 'event' field")
+	// event must be the raw log string (so _raw in Splunk is the log line,
+	// not a nested JSON blob).
+	if env["event"] != "hello world" {
+		t.Errorf("event: got %v, want raw log string", env["event"])
+	}
+	// indexed fields must carry the channel/level/generator metadata
+	fields, ok := env["fields"].(map[string]any)
+	if !ok {
+		t.Fatalf("fields: want object, got %T", env["fields"])
+	}
+	if fields["channel"] != "prod.vpc.subnet.host.app" {
+		t.Errorf("fields.channel: got %v", fields["channel"])
+	}
+	if fields["level"] != "INFO" {
+		t.Errorf("fields.level: got %v", fields["level"])
+	}
+	if fields["generator"] != "mysql" {
+		t.Errorf("fields.generator: got %v", fields["generator"])
+	}
+	if fields["id"] != "abc" {
+		t.Errorf("fields.id: got %v", fields["id"])
+	}
+	// time must be epoch seconds (float), not an ISO string
+	if _, ok := env["time"].(float64); !ok {
+		t.Errorf("time: want float64 epoch seconds, got %T (%v)", env["time"], env["time"])
 	}
 }
 
