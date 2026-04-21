@@ -1,6 +1,6 @@
 package generators
 
-import "github.com/nikhilm/logsim2/internal/scenario"
+import "github.com/nikhilm/logsim2/pkg/scenario"
 
 // ForService returns the Generator for the given service type, or nil.
 func ForService(serviceType scenario.ServiceType) Generator {

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nikhilm/logsim2/internal/event"
+	"github.com/nikhilm/logsim2/pkg/event"
 )
 
 func makeEntries(n int) []event.LogEntry {

@@ -5,8 +5,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/nikhilm/logsim2/internal/event"
-	"github.com/nikhilm/logsim2/internal/scenario"
+	"github.com/nikhilm/logsim2/pkg/event"
+	"github.com/nikhilm/logsim2/pkg/scenario"
 )
 
 // trafficSimulator computes per-tick Flows for all connections in a scenario.

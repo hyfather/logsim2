@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"math/rand"
 
-	"github.com/nikhilm/logsim2/internal/event"
-	"github.com/nikhilm/logsim2/internal/scenario"
+	"github.com/nikhilm/logsim2/pkg/event"
+	"github.com/nikhilm/logsim2/pkg/scenario"
 )
 
 // Common query patterns for a generic user/app database.

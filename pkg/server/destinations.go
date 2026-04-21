@@ -6,9 +6,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/nikhilm/logsim2/internal/config"
-	"github.com/nikhilm/logsim2/internal/event"
-	"github.com/nikhilm/logsim2/internal/sinks"
+	"github.com/nikhilm/logsim2/pkg/config"
+	"github.com/nikhilm/logsim2/pkg/event"
+	"github.com/nikhilm/logsim2/pkg/sinks"
 )
 
 // safeDestination is a redacted view of a Destination (no token).

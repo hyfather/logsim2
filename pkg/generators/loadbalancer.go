@@ -3,7 +3,7 @@ package generators
 import (
 	"fmt"
 
-	"github.com/nikhilm/logsim2/internal/event"
+	"github.com/nikhilm/logsim2/pkg/event"
 )
 
 // LoadBalancerGenerator emits Nginx-combined-format access logs for each

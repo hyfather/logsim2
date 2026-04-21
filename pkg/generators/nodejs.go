@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nikhilm/logsim2/internal/event"
-	"github.com/nikhilm/logsim2/internal/scenario"
+	"github.com/nikhilm/logsim2/pkg/event"
+	"github.com/nikhilm/logsim2/pkg/scenario"
 )
 
 var nodejsSuccessCodes = []int{200, 200, 200, 200, 201, 202, 204, 301, 304}

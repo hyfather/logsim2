@@ -3,7 +3,7 @@ package sinks
 import (
 	"fmt"
 
-	"github.com/nikhilm/logsim2/internal/config"
+	"github.com/nikhilm/logsim2/pkg/config"
 )
 
 // ForDestination constructs a Sink from a parsed Destination config.

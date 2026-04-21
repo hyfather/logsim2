@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nikhilm/logsim2/internal/event"
+	"github.com/nikhilm/logsim2/pkg/event"
 )
 
 // CriblSink posts log batches to a Cribl Stream (or any Splunk-compatible) HEC endpoint.

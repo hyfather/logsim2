@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/nikhilm/logsim2/internal/scenario"
+	"github.com/nikhilm/logsim2/pkg/scenario"
 	"github.com/spf13/cobra"
 )
 

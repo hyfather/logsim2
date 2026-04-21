@@ -6,10 +6,10 @@ import (
 	"sort"
 	"time"
 
-	"github.com/nikhilm/logsim2/internal/event"
-	"github.com/nikhilm/logsim2/internal/generators"
-	"github.com/nikhilm/logsim2/internal/scenario"
-	"github.com/nikhilm/logsim2/internal/sinks"
+	"github.com/nikhilm/logsim2/pkg/event"
+	"github.com/nikhilm/logsim2/pkg/generators"
+	"github.com/nikhilm/logsim2/pkg/scenario"
+	"github.com/nikhilm/logsim2/pkg/sinks"
 )
 
 // Config controls how the engine runs.

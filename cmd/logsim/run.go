@@ -7,10 +7,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/nikhilm/logsim2/internal/config"
-	"github.com/nikhilm/logsim2/internal/engine"
-	"github.com/nikhilm/logsim2/internal/scenario"
-	"github.com/nikhilm/logsim2/internal/sinks"
+	"github.com/nikhilm/logsim2/pkg/config"
+	"github.com/nikhilm/logsim2/pkg/engine"
+	"github.com/nikhilm/logsim2/pkg/scenario"
+	"github.com/nikhilm/logsim2/pkg/sinks"
 	"github.com/spf13/cobra"
 )
 

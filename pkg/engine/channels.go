@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/nikhilm/logsim2/internal/scenario"
+	"github.com/nikhilm/logsim2/pkg/scenario"
 )
 
 var slugRe = regexp.MustCompile(`[^a-z0-9-]+`)

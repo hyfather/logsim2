@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nikhilm/logsim2/internal/scenario"
-	"github.com/nikhilm/logsim2/internal/sinks"
+	"github.com/nikhilm/logsim2/pkg/scenario"
+	"github.com/nikhilm/logsim2/pkg/sinks"
 )
 
 const fullScenarioYAML = `

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/nikhilm/logsim2/internal/event"
-	"github.com/nikhilm/logsim2/internal/scenario"
+	"github.com/nikhilm/logsim2/pkg/event"
+	"github.com/nikhilm/logsim2/pkg/scenario"
 )
 
 // protocolNumber maps connection protocol strings to IANA protocol numbers.

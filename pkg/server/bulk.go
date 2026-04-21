@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nikhilm/logsim2/internal/engine"
-	"github.com/nikhilm/logsim2/internal/event"
-	"github.com/nikhilm/logsim2/internal/sinks"
+	"github.com/nikhilm/logsim2/pkg/engine"
+	"github.com/nikhilm/logsim2/pkg/event"
+	"github.com/nikhilm/logsim2/pkg/sinks"
 )
 
 // handleBulk runs a simulation and returns all log entries in a ZIP archive.

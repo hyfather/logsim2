@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nikhilm/logsim2/internal/engine"
-	"github.com/nikhilm/logsim2/internal/event"
-	"github.com/nikhilm/logsim2/internal/scenario"
-	"github.com/nikhilm/logsim2/internal/sinks"
+	"github.com/nikhilm/logsim2/pkg/engine"
+	"github.com/nikhilm/logsim2/pkg/event"
+	"github.com/nikhilm/logsim2/pkg/scenario"
+	"github.com/nikhilm/logsim2/pkg/sinks"
 )
 
 // Hobby execution cap is 10s. A 1s simulated window completes well under that;

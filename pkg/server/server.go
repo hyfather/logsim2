@@ -12,7 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"github.com/nikhilm/logsim2/internal/config"
+	"github.com/nikhilm/logsim2/pkg/config"
 )
 
 // Server holds runtime state shared across handlers.

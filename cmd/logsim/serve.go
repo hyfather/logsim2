@@ -12,7 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/nikhilm/logsim2/internal/server"
+	"github.com/nikhilm/logsim2/pkg/server"
 )
 
 func newServeCmd() *cobra.Command {

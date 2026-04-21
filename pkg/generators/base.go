@@ -5,8 +5,8 @@ import (
 	"math"
 	"time"
 
-	"github.com/nikhilm/logsim2/internal/event"
-	"github.com/nikhilm/logsim2/internal/scenario"
+	"github.com/nikhilm/logsim2/pkg/event"
+	"github.com/nikhilm/logsim2/pkg/scenario"
 )
 
 // Generator produces log entries for a scenario entity on one tick.

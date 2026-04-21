@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/nikhilm/logsim2/internal/event"
+	"github.com/nikhilm/logsim2/pkg/event"
 )
 
 // Format controls how log entries are serialised.
