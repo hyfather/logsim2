@@ -35,7 +35,8 @@
       "Bash(grep -v 'ExperimentalWarning\\\\|Use\\\\|^$\\\\|npm notice')",
       "mcp__Claude_Preview__preview_start",
       "Bash(xargs sed *)",
-      "Bash(go vet *)"
+      "Bash(go vet *)",
+      "Bash(node scripts/build-example-episodes.mjs)"
     ]
   }
 }

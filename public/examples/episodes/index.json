@@ -1,0 +1,23 @@
+[
+  {
+    "file": "db-slowdown-incident.episode.json",
+    "title": "Database Slowdown Incident",
+    "description": "Five minutes of healthy traffic, then the app database begins returning slow queries and the POST /api/users endpoint degrades with 15% error rate. After five minutes of degraded service the issue is mitigated.",
+    "segmentCount": 3,
+    "totalTicks": 780
+  },
+  {
+    "file": "api-error-burst.episode.json",
+    "title": "API Error Burst",
+    "description": "Baseline traffic for five minutes, then GET /api/users starts returning ~40% errors (e.g. a bad release on the read path) for three minutes, then recovers.",
+    "segmentCount": 3,
+    "totalTicks": 600
+  },
+  {
+    "file": "traffic-spike-and-bad-deploy.episode.json",
+    "title": "Traffic Spike Into Bad Deploy",
+    "description": "Baseline is fine. A marketing push drives a 20x traffic spike. Under load a bad deploy surfaces on App Server 1 and errors jump to 70%. After rollback the system stabilises at the higher traffic level.",
+    "segmentCount": 4,
+    "totalTicks": 900
+  }
+]
