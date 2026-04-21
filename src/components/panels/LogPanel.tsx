@@ -15,10 +15,9 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
-  DropdownMenuCheckboxItem,
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
-import { ChevronRight, Download, Send, Pause, Play, Trash2 } from 'lucide-react'
+import { ChevronRight, Download, Send, Trash2, Loader2, Check, AlertCircle } from 'lucide-react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { LogHistogram } from '@/components/panels/LogHistogram'
 import { MultiSelectMenu } from '@/components/panels/MultiSelectMenu'
@@ -163,27 +162,20 @@ export function LogPanel({ onCollapse }: LogPanelProps) {
   const logBuffer = useSimulationStore(s => s.logBuffer)
   const filter = useSimulationStore(s => s.filter)
   const autoScroll = useSimulationStore(s => s.autoScroll)
-  const accumulateMode = useSimulationStore(s => s.accumulateMode)
   const setFilter = useSimulationStore(s => s.setFilter)
   const setAutoScroll = useSimulationStore(s => s.setAutoScroll)
-  const setAccumulateMode = useSimulationStore(s => s.setAccumulateMode)
   const clearLogs = useSimulationStore(s => s.clearLogs)
   const destinations = useDestinationsStore(s => s.destinations)
+  const destStatuses = useDestinationsStore(s => s.statuses)
+  const destErrors = useDestinationsStore(s => s.errors)
   const setDestStatus = useDestinationsStore(s => s.setStatus)
   const recordSent = useDestinationsStore(s => s.recordSent)
 
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const scrollParentRef = useRef<HTMLDivElement>(null)
   const deferredKeyword = useDeferredValue(filter.keyword)
-  const [forwardingDestId, setForwardingDestId] = useState<string | null>(null)
-  const [forwardToast, setForwardToast] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null)
-
-  // Auto-dismiss toast
-  useEffect(() => {
-    if (!forwardToast) return
-    const t = setTimeout(() => setForwardToast(null), 3500)
-    return () => clearTimeout(t)
-  }, [forwardToast])
+  // Per-destination transient success indicators ("Sent N" that fades)
+  const [recentSent, setRecentSent] = useState<Record<string, number>>({})
 
   // All source channels present in the current buffer (pre-filter).
   // Derived from real logs so this works in any mode, whether or not the
@@ -327,28 +319,29 @@ export function LogPanel({ onCollapse }: LogPanelProps) {
     downloadTextFile('logs.jsonl', displayedLogs.map(e => JSON.stringify(e)).join('\n'), 'application/jsonl')
   }, [displayedLogs])
 
-  // --- Manual forward (accumulate-then-forward) ---
-  const enabledDests = destinations.filter(d => d.enabled)
-
+  // --- Manual forward (on-demand) ---
   const handleForward = useCallback(async (dest: DestinationConfig) => {
     if (displayedLogs.length === 0) {
-      setForwardToast({ kind: 'err', msg: 'Nothing to forward' })
+      setDestStatus(dest.id, 'error', 'Nothing to forward')
       return
     }
-    setForwardingDestId(dest.id)
+    const count = displayedLogs.length
     setDestStatus(dest.id, 'sending')
     try {
       if (dest.type === 'cribl-hec') {
         await forwardToHec(displayedLogs, dest as CriblHecDestination)
       }
-      recordSent(dest.id, displayedLogs.length)
-      setForwardToast({ kind: 'ok', msg: `Forwarded ${displayedLogs.length} logs → ${dest.name || dest.type}` })
+      recordSent(dest.id, count)
+      setRecentSent(prev => ({ ...prev, [dest.id]: count }))
+      setTimeout(() => {
+        setRecentSent(prev => {
+          const { [dest.id]: _, ...rest } = prev
+          return rest
+        })
+      }, 3000)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       setDestStatus(dest.id, 'error', msg)
-      setForwardToast({ kind: 'err', msg })
-    } finally {
-      setForwardingDestId(null)
     }
   }, [displayedLogs, setDestStatus, recordSent])
 
@@ -400,13 +393,83 @@ export function LogPanel({ onCollapse }: LogPanelProps) {
             {displayedLogs.length} / {logBuffer.length}
           </Badge>
 
-          <div className="ml-auto flex items-center gap-1">
+          <div className="ml-auto flex items-center gap-0.5">
+            {/* Forward menu */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mr-1 h-7 gap-1.5 border-gray-200 px-2.5 text-[11px] font-medium text-gray-700 hover:bg-gray-100 hover:text-gray-900"
+                  title={destinations.length === 0 ? 'No destinations configured' : 'Forward visible logs'}
+                >
+                  <Send className="h-3 w-3 text-blue-600" />
+                  Forward logs
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-64">
+                <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-gray-500">
+                  Forward {displayedLogs.length} logs to
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {destinations.length === 0 && (
+                  <div className="px-2 py-3 text-[11px] text-gray-400">
+                    No destinations configured.
+                    <br />
+                    Add one in Settings.
+                  </div>
+                )}
+                {destinations.map(dest => {
+                  const status = destStatuses[dest.id] ?? 'idle'
+                  const error = destErrors[dest.id]
+                  const sentCount = recentSent[dest.id]
+                  const isSending = status === 'sending'
+                  const hasError = status === 'error' && !!error
+                  const hasJustSent = sentCount !== undefined
+                  return (
+                    <DropdownMenuItem
+                      key={dest.id}
+                      onSelect={(e) => {
+                        e.preventDefault()
+                        if (!isSending) handleForward(dest)
+                      }}
+                      className="flex-col items-start gap-0.5 text-xs"
+                      disabled={isSending}
+                    >
+                      <span className="flex w-full items-center justify-between gap-2">
+                        <span className="truncate">{dest.name || dest.type}</span>
+                        <span className="shrink-0 text-[10px] uppercase text-gray-400">{dest.type}</span>
+                      </span>
+                      {isSending && (
+                        <span className="flex items-center gap-1 text-[10px] text-blue-600">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          Sending {displayedLogs.length}…
+                        </span>
+                      )}
+                      {!isSending && hasJustSent && (
+                        <span className="flex items-center gap-1 text-[10px] text-green-600">
+                          <Check className="h-3 w-3" />
+                          Sent {sentCount}
+                        </span>
+                      )}
+                      {!isSending && !hasJustSent && hasError && (
+                        <span className="flex items-start gap-1 text-[10px] text-red-600">
+                          <AlertCircle className="mt-[1px] h-3 w-3 shrink-0" />
+                          <span className="break-words">{error}</span>
+                        </span>
+                      )}
+                    </DropdownMenuItem>
+                  )
+                })}
+              </DropdownMenuContent>
+            </DropdownMenu>
+
             {/* Download menu */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button
                   title="Download logs"
-                  className="rounded p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900"
                 >
                   <Download className="h-3.5 w-3.5" />
                 </button>
@@ -425,73 +488,20 @@ export function LogPanel({ onCollapse }: LogPanelProps) {
               </DropdownMenuContent>
             </DropdownMenu>
 
-            {/* Forward menu */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  title={enabledDests.length === 0 ? 'No destinations configured' : 'Forward to destination'}
-                  className={cn(
-                    'rounded p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900',
-                    forwardingDestId && 'animate-pulse text-blue-600',
-                  )}
-                >
-                  <Send className="h-3.5 w-3.5" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-gray-500">
-                  Forward {displayedLogs.length} logs to
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {enabledDests.length === 0 && (
-                  <div className="px-2 py-3 text-[11px] text-gray-400">
-                    No enabled destinations.
-                    <br />
-                    Configure via the Destinations toolbar.
-                  </div>
-                )}
-                {enabledDests.map(dest => (
-                  <DropdownMenuItem
-                    key={dest.id}
-                    onSelect={() => handleForward(dest)}
-                    className="text-xs"
-                    disabled={forwardingDestId !== null}
-                  >
-                    <span className="flex w-full items-center justify-between gap-2">
-                      <span className="truncate">{dest.name || dest.type}</span>
-                      <span className="shrink-0 text-[10px] uppercase text-gray-400">{dest.type}</span>
-                    </span>
-                  </DropdownMenuItem>
-                ))}
-                <DropdownMenuSeparator />
-                <DropdownMenuCheckboxItem
-                  checked={accumulateMode}
-                  onCheckedChange={setAccumulateMode}
-                  onSelect={(e) => e.preventDefault()}
-                  className="text-xs"
-                >
-                  <span>Accumulate mode</span>
-                </DropdownMenuCheckboxItem>
-                <div className="px-2 pb-2 pt-1 text-[10px] leading-snug text-gray-400">
-                  {accumulateMode
-                    ? 'Auto-forward paused. Use this menu to send on demand.'
-                    : 'Auto-forward is on. Toggle to hold logs here and send manually.'}
-                </div>
-              </DropdownMenuContent>
-            </DropdownMenu>
-
             <button
               title="Clear logs"
               onClick={clearLogs}
-              className="rounded p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900"
             >
               <Trash2 className="h-3.5 w-3.5" />
             </button>
 
+            <div className="mx-1 h-5 w-px bg-gray-200" aria-hidden />
+
             <button
               title="Collapse panel"
               onClick={onCollapse}
-              className="rounded p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
             >
               <ChevronRight className="h-3.5 w-3.5" />
             </button>
@@ -538,13 +548,24 @@ export function LogPanel({ onCollapse }: LogPanelProps) {
             className="h-7 flex-1 min-w-0 text-xs"
           />
           <Button
-            variant={autoScroll ? 'default' : 'outline'}
+            variant="outline"
             size="sm"
-            className="h-7 shrink-0 gap-1 px-2 text-[10px]"
+            className={cn(
+              'h-7 shrink-0 gap-1.5 border-gray-200 px-2.5 text-[11px] font-medium',
+              autoScroll
+                ? 'bg-green-50 text-green-700 hover:bg-green-100 hover:text-green-800'
+                : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900',
+            )}
             onClick={() => setAutoScroll(!autoScroll)}
+            title={autoScroll ? 'Tailing — click to pause' : 'Paused — click to resume tailing'}
           >
-            {autoScroll ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />}
-            Live
+            <span
+              className={cn(
+                'h-1.5 w-1.5 rounded-full',
+                autoScroll ? 'bg-green-500 animate-pulse' : 'bg-gray-300',
+              )}
+            />
+            Tail
           </Button>
         </div>
 
@@ -629,19 +650,6 @@ export function LogPanel({ onCollapse }: LogPanelProps) {
         )}
       </div>
 
-      {/* Toast */}
-      {forwardToast && (
-        <div
-          className={cn(
-            'absolute bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-md px-3 py-2 text-[11px] shadow-lg',
-            forwardToast.kind === 'ok'
-              ? 'bg-green-600 text-white'
-              : 'bg-red-600 text-white',
-          )}
-        >
-          {forwardToast.msg}
-        </div>
-      )}
     </div>
   )
 }
