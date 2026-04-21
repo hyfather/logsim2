@@ -7,7 +7,10 @@ export interface PendingConnection {
   handleId: AnchorHandleId
 }
 
+export type EditorMode = 'design' | 'episodes'
+
 interface UIState {
+  mode: EditorMode
   selectedNodeId: string | null
   selectedEdgeId: string | null
   pendingConnection: PendingConnection | null
@@ -20,6 +23,7 @@ interface UIState {
   paletteNodeType: string | null
   showBulkGenerateModal: boolean
   showKeyboardShortcuts: boolean
+  setMode: (mode: EditorMode) => void
   // Actions
   selectNode: (id: string | null) => void
   selectEdge: (id: string | null) => void
@@ -36,6 +40,8 @@ interface UIState {
 }
 
 export const useUIStore = create<UIState>()((set) => ({
+  mode: 'design',
+  setMode: (mode) => set({ mode }),
   selectedNodeId: null,
   selectedEdgeId: null,
   pendingConnection: null,

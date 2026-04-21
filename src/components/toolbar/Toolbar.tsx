@@ -10,6 +10,8 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useScenarioStore } from '@/store/useScenarioStore'
 import { useUIStore } from '@/store/useUIStore'
+import { useEpisodeStore } from '@/store/useEpisodeStore'
+import type { Episode, EpisodeFileV1 } from '@/types/episode'
 import { useSimulationStore } from '@/store/useSimulationStore'
 import { useDestinationsStore } from '@/store/useDestinationsStore'
 import { serializeScenario, deserializeScenario } from '@/lib/serialization'
@@ -44,10 +46,45 @@ function InsertMenuItem({ type, serviceType, label, icon }: { type: NodeType; se
 
 export function Toolbar() {
   const { nodes, edges, metadata, setMetadata, resetScenario, loadScenario } = useScenarioStore()
-  const { setShowBulkGenerateModal, setShowKeyboardShortcuts } = useUIStore()
+  const { setShowBulkGenerateModal, setShowKeyboardShortcuts, mode, setMode } = useUIStore()
   const { logBuffer } = useSimulationStore()
   const { setShowManagerModal, setEditingId } = useDestinationsStore()
+  const { episode, setEpisode } = useEpisodeStore()
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const episodeFileInputRef = useRef<HTMLInputElement>(null)
+
+  const handleEpisodeSave = useCallback(() => {
+    const payload: EpisodeFileV1 = { version: 1, episode }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${episode.name.toLowerCase().replace(/\s+/g, '-')}.episode.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [episode])
+
+  const handleEpisodeOpen = useCallback(() => {
+    episodeFileInputRef.current?.click()
+  }, [])
+
+  const handleEpisodeFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (evt) => {
+      try {
+        const data = JSON.parse(evt.target?.result as string) as EpisodeFileV1 | Episode
+        const ep = 'episode' in data ? data.episode : data
+        if (!ep || !Array.isArray(ep.segments)) throw new Error('Invalid episode file')
+        setEpisode(ep)
+      } catch (err) {
+        alert('Failed to load episode: ' + String(err))
+      }
+    }
+    reader.readAsText(file)
+    e.target.value = ''
+  }, [setEpisode])
 
   const buildScenario = useCallback(() => serializeScenario(
     nodes.map(n => n.data),
@@ -157,6 +194,26 @@ export function Toolbar() {
         <span className="text-sm font-bold text-gray-800">LogSim</span>
       </div>
 
+      {/* Mode toggle */}
+      <div className="mr-3 flex overflow-hidden rounded-md border border-slate-200">
+        <button
+          onClick={() => setMode('design')}
+          className={`px-2 py-0.5 text-[11px] font-medium transition-colors ${
+            mode === 'design' ? 'bg-slate-800 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'
+          }`}
+        >
+          Design
+        </button>
+        <button
+          onClick={() => setMode('episodes')}
+          className={`px-2 py-0.5 text-[11px] font-medium transition-colors ${
+            mode === 'episodes' ? 'bg-slate-800 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'
+          }`}
+        >
+          Episodes
+        </button>
+      </div>
+
       {/* File menu */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -164,8 +221,11 @@ export function Toolbar() {
         </DropdownMenuTrigger>
         <DropdownMenuContent className="text-xs">
           <DropdownMenuItem onClick={handleNew} className="text-xs cursor-pointer">📄 New Scenario</DropdownMenuItem>
-          <DropdownMenuItem onClick={handleOpen} className="text-xs cursor-pointer">📂 Open...</DropdownMenuItem>
-          <DropdownMenuItem onClick={handleSave} className="text-xs cursor-pointer">💾 Save (Ctrl+S)</DropdownMenuItem>
+          <DropdownMenuItem onClick={handleOpen} className="text-xs cursor-pointer">📂 Open Scenario...</DropdownMenuItem>
+          <DropdownMenuItem onClick={handleSave} className="text-xs cursor-pointer">💾 Save Scenario (Ctrl+S)</DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={handleEpisodeOpen} className="text-xs cursor-pointer">🎬 Open Episode...</DropdownMenuItem>
+          <DropdownMenuItem onClick={handleEpisodeSave} className="text-xs cursor-pointer">🎬 Save Episode</DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={handleExportLogs} className="text-xs cursor-pointer">📋 Export Logs (.log)</DropdownMenuItem>
           <DropdownMenuItem onClick={handleExportJsonl} className="text-xs cursor-pointer">📋 Export Logs (.jsonl)</DropdownMenuItem>
@@ -262,6 +322,13 @@ export function Toolbar() {
         accept=".json,.logsim.json"
         className="hidden"
         onChange={handleFileChange}
+      />
+      <input
+        ref={episodeFileInputRef}
+        type="file"
+        accept=".json,.episode.json"
+        className="hidden"
+        onChange={handleEpisodeFileChange}
       />
     </div>
   )

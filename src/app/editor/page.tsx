@@ -8,6 +8,7 @@ import { SimulationControls } from '@/components/panels/SimulationControls'
 import { Toolbar } from '@/components/toolbar/Toolbar'
 import { BulkGenerateModal } from '@/components/panels/BulkGenerateModal'
 import { DestinationManagerModal } from '@/components/panels/DestinationManagerModal'
+import { EpisodeMode } from '@/components/episodes/EpisodeMode'
 import { useUIStore } from '@/store/useUIStore'
 import { useScenarioStore } from '@/store/useScenarioStore'
 import { useSimulationStore } from '@/store/useSimulationStore'
@@ -57,7 +58,7 @@ function KeyboardShortcutsDialog() {
 export type PanelMode = 'collapsed' | 'quarter' | 'custom'
 
 export default function EditorPage() {
-  const { logPanelOpen, logPanelWidth, setLogPanelOpen, setLogPanelWidth } = useUIStore()
+  const { logPanelOpen, logPanelWidth, setLogPanelOpen, setLogPanelWidth, mode } = useUIStore()
   const { loadScenario } = useScenarioStore()
   const { logBuffer } = useSimulationStore()
   const { destinations, setStatus, recordSent } = useDestinationsStore()
@@ -224,17 +225,15 @@ export default function EditorPage() {
         {/* Toolbar */}
         <Toolbar />
 
-        {/* Simulation controls */}
-        <SimulationControls />
+        {/* Simulation controls (hidden in episodes mode — episode has its own run controls) */}
+        {mode === 'design' && <SimulationControls />}
 
         {/* Main area */}
         <div className="flex flex-1 overflow-hidden">
-          {/* Palette */}
-          <Palette />
+          {mode === 'design' && <Palette />}
 
-          {/* Canvas */}
           <div className="flex-1 relative overflow-hidden">
-            <Canvas />
+            {mode === 'design' ? <Canvas /> : <EpisodeMode />}
           </div>
 
           <div
