@@ -17,6 +17,8 @@ export interface MultiSelectOption {
   count?: number
   /** Optional visual marker (small colored dot). */
   dotClassName?: string
+  /** Native tooltip shown on hover (e.g. full value when label is truncated). */
+  title?: string
 }
 
 export function MultiSelectMenu({
@@ -27,6 +29,7 @@ export function MultiSelectMenu({
   triggerClassName,
   renderTriggerText,
   allValueLabel = 'All',
+  headerHint,
 }: {
   label: string
   options: MultiSelectOption[]
@@ -35,6 +38,8 @@ export function MultiSelectMenu({
   triggerClassName?: string
   renderTriggerText?: (selected: string[], options: MultiSelectOption[]) => React.ReactNode
   allValueLabel?: string
+  /** Optional secondary text rendered under the label (e.g. shared prefix). */
+  headerHint?: React.ReactNode
 }) {
   const allSelected = selected.length === options.length && options.length > 0
   const noneSelected = selected.length === 0
@@ -74,15 +79,25 @@ export function MultiSelectMenu({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-h-[320px] w-[260px] overflow-y-auto">
-        <DropdownMenuLabel className="flex items-center justify-between py-1 text-[10px] uppercase tracking-wide text-gray-500">
-          <span>{label}</span>
-          <button
-            type="button"
-            onClick={() => onChange(allSelected ? [] : options.map(o => o.value))}
-            className="rounded px-1.5 py-0.5 text-[10px] font-medium text-blue-600 hover:bg-blue-50"
-          >
-            {allSelected ? 'Clear' : 'All'}
-          </button>
+        <DropdownMenuLabel className="py-1">
+          <div className="flex items-center justify-between text-[10px] uppercase tracking-wide text-gray-500">
+            <span>{label}</span>
+            <button
+              type="button"
+              onClick={() => onChange(allSelected ? [] : options.map(o => o.value))}
+              className="rounded px-1.5 py-0.5 text-[10px] font-medium text-blue-600 hover:bg-blue-50"
+            >
+              {allSelected ? 'Clear' : 'All'}
+            </button>
+          </div>
+          {headerHint && (
+            <div
+              className="mt-0.5 truncate font-mono text-[10px] font-normal normal-case tracking-normal text-gray-400"
+              title={typeof headerHint === 'string' ? headerHint : undefined}
+            >
+              {headerHint}
+            </div>
+          )}
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         {options.length === 0 && (
@@ -96,7 +111,7 @@ export function MultiSelectMenu({
             onSelect={(e) => e.preventDefault()}
             className="py-1 pr-2 text-xs"
           >
-            <span className="flex min-w-0 flex-1 items-center gap-2">
+            <span className="flex min-w-0 flex-1 items-center gap-2" title={opt.title}>
               {opt.dotClassName && (
                 <span className={cn('h-2 w-2 shrink-0 rounded-full', opt.dotClassName)} />
               )}

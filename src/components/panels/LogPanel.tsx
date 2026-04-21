@@ -67,8 +67,21 @@ function extractStatusClass(raw: string): string | null {
   return `${Math.floor(code / 100)}xx`
 }
 
-const COLLAPSED_ROW_HEIGHT = 44
-const EXPANDED_ROW_HEIGHT = 168
+// Longest '.'-delimited prefix shared by every input. Returns '' when only
+// one input or no segment-aligned prefix exists.
+function commonDottedPrefix(strs: string[]): string {
+  if (strs.length <= 1) return ''
+  let p = strs[0]
+  for (let i = 1; i < strs.length; i++) {
+    while (p && strs[i].indexOf(p) !== 0) p = p.slice(0, -1)
+    if (!p) return ''
+  }
+  const lastDot = p.lastIndexOf('.')
+  return lastDot >= 0 ? p.slice(0, lastDot + 1) : ''
+}
+
+const COLLAPSED_ROW_HEIGHT = 52
+const EXPANDED_ROW_HEIGHT = 176
 
 function highlightKeyword(text: string, keyword: string): React.ReactNode {
   if (!keyword) return text
@@ -104,9 +117,9 @@ const LogRow = React.memo(function LogRow({ entry, keyword, expanded, onToggle }
   return (
     <div
       className={cn(
-        'h-full cursor-pointer overflow-hidden border-l-2 border-transparent px-2.5 py-1.5 hover:bg-gray-50',
+        'box-border flex h-full cursor-pointer flex-col overflow-hidden border-b border-gray-100 border-l-2 border-l-transparent px-2.5 py-1.5 hover:bg-gray-50',
         LEVEL_BG[entry.level],
-        expanded && 'border-blue-400 bg-blue-50',
+        expanded && 'border-l-blue-400 bg-blue-50',
       )}
       onClick={onToggle}
     >
@@ -271,13 +284,13 @@ export function LogPanel({ onCollapse }: LogPanelProps) {
     getItemKey: (index) => displayedLogs[index]?.id ?? index,
   })
 
-  // Force the virtualizer to re-read its estimate whenever the inputs that
-  // change row heights change. Without this, expanding a row leaves the
-  // virtualizer using the old collapsed estimate for that index.
+  // Force the virtualizer to re-read its estimate only when the expanded row
+  // changes. Fixed-height rows don't need remeasure on every log append —
+  // doing so caused layout thrash and visible row overlap under high churn.
   useEffect(() => {
     rowVirtualizer.measure()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expandedId, displayedLogs])
+  }, [expandedId])
 
   // Auto-scroll on new logs when in Live mode. Use scrollTop on the parent;
   // it's immune to the virtualizer's internal bookkeeping being mid-update.
@@ -340,13 +353,19 @@ export function LogPanel({ onCollapse }: LogPanelProps) {
   }, [displayedLogs, setDestStatus, recordSent])
 
   // --- Facet options ---
+  const sourcePrefix = useMemo(() => commonDottedPrefix(allSources), [allSources])
+
   const sourceFacetOptions = useMemo(() => {
-    return allSources.map(channel => ({
-      value: channel,
-      label: channel,
-      count: facets.source[channel] ?? 0,
-    }))
-  }, [allSources, facets])
+    return allSources.map(channel => {
+      const stripped = sourcePrefix ? channel.slice(sourcePrefix.length) : channel
+      return {
+        value: channel,
+        label: stripped || channel,
+        count: facets.source[channel] ?? 0,
+        title: channel,
+      }
+    })
+  }, [allSources, sourcePrefix, facets])
 
   const methodOptions = useMemo(() => {
     const keys = Object.keys(facets.method).sort()
@@ -486,6 +505,7 @@ export function LogPanel({ onCollapse }: LogPanelProps) {
             options={sourceFacetOptions}
             selected={filter.sources}
             onChange={setSources}
+            headerHint={sourcePrefix ? `${sourcePrefix}…` : undefined}
             renderTriggerText={(sel, opts) =>
               sel.length === 0
                 ? 'All sources'
@@ -585,7 +605,7 @@ export function LogPanel({ onCollapse }: LogPanelProps) {
               if (!entry) return null
               return (
                 <div
-                  key={virtualRow.key}
+                  key={`${virtualRow.key}-${virtualRow.index}`}
                   style={{
                     position: 'absolute',
                     top: 0,
@@ -593,6 +613,7 @@ export function LogPanel({ onCollapse }: LogPanelProps) {
                     width: '100%',
                     height: virtualRow.size,
                     transform: `translateY(${virtualRow.start}px)`,
+                    contain: 'strict',
                   }}
                 >
                   <LogRow

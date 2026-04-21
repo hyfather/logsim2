@@ -9,6 +9,11 @@ const nextConfig = {
     // scope for the serverless cutover.
     ignoreDuringBuilds: true,
   },
+  async rewrites() {
+    return [{ source: '/api/:path*', destination: 'http://localhost:8787/api/:path*' }]
+  }
 }
+
+
 
 export default nextConfig

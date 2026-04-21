@@ -101,25 +101,19 @@ export function LogHistogram({
   const perBucket = span / BUCKET_COUNT
 
   return (
-    <div className="shrink-0 border-b border-gray-200 bg-gray-50 px-2 pb-1 pt-2">
-      <div className="mb-1 flex items-center justify-between text-[9px] uppercase tracking-wide text-gray-400">
-        <span>{formatTime(minMs)}</span>
-        <span className="font-medium text-gray-500">
-          {buckets.length} buckets · {formatSpan(perBucket)}/bar · {logs.length} events
-        </span>
-        <span>{formatTime(maxMs)}</span>
-      </div>
+    <div className="shrink-0 border-b border-gray-200 bg-white px-3 pb-1.5 pt-2">
       <div
-        className="flex h-12 items-end gap-px"
+        className="flex h-14 items-end gap-px"
         role="img"
         aria-label="Log distribution over time"
       >
         {buckets.map((bucket, i) => {
-          const heightPct = bucket.total === 0 ? 2 : Math.max(4, (bucket.total / maxBucket) * 100)
+          const heightPct = bucket.total === 0 ? 2 : Math.max(6, (bucket.total / maxBucket) * 100)
           const inSelection =
             selectedRange &&
             bucket.startMs < selectedRange[1] &&
             bucket.endMs > selectedRange[0]
+          const dimmed = selectedRange && !inSelection
           return (
             <button
               key={i}
@@ -128,9 +122,9 @@ export function LogHistogram({
               title={`${formatTime(bucket.startMs)} – ${formatTime(bucket.endMs)}\n${bucket.total} events\n` +
                 LEVELS_IN_ORDER.filter(l => bucket.counts[l] > 0).map(l => `${l}: ${bucket.counts[l]}`).join('\n')}
               className={cn(
-                'group relative flex h-full flex-1 flex-col-reverse overflow-hidden rounded-sm transition-all',
-                inSelection ? 'ring-1 ring-blue-400' : 'opacity-90 hover:opacity-100',
-                !selectedRange ? '' : inSelection ? '' : 'opacity-40',
+                'group relative flex h-full flex-1 flex-col-reverse overflow-hidden transition-opacity',
+                inSelection && 'outline outline-1 outline-blue-500',
+                dimmed ? 'opacity-30 hover:opacity-60' : 'opacity-100 hover:brightness-110',
               )}
               style={{ height: `${heightPct}%` }}
             >
@@ -149,6 +143,13 @@ export function LogHistogram({
             </button>
           )
         })}
+      </div>
+      <div className="mt-1 flex items-center justify-between font-mono text-[9px] tabular-nums text-gray-400">
+        <span>{formatTime(minMs)}</span>
+        <span className="uppercase tracking-wider text-gray-500">
+          {buckets.length} buckets · {formatSpan(perBucket)}/bar · {logs.length} events
+        </span>
+        <span>{formatTime(maxMs)}</span>
       </div>
       {selectedRange && (
         <button
