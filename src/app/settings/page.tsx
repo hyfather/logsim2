@@ -1,5 +1,5 @@
 'use client'
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { Suspense, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { ArrowLeft, Plus, Trash2, Zap, Server, ChevronRight } from 'lucide-react'
@@ -428,7 +428,7 @@ function EmptyDetail({ onNew }: { onNew: () => void }) {
 
 // ── Page ─────────────────────────────────────────────────────────────────────
 
-export default function SettingsPage() {
+function SettingsPageInner() {
   const router = useRouter()
   const searchParams = useSearchParams()
 
@@ -554,5 +554,13 @@ export default function SettingsPage() {
         </main>
       </div>
     </div>
+  )
+}
+
+export default function SettingsPage() {
+  return (
+    <Suspense fallback={<div className="flex h-screen w-screen items-center justify-center text-xs text-gray-400">Loading…</div>}>
+      <SettingsPageInner />
+    </Suspense>
   )
 }

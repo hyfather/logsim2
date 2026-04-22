@@ -14,7 +14,7 @@ import { useSimulationStore } from '@/store/useSimulationStore'
 import { useDestinationsStore } from '@/store/useDestinationsStore'
 import { forwardToHec } from '@/lib/criblForwarder'
 import type { CriblHecDestination } from '@/types/destinations'
-import { ChevronLeft } from 'lucide-react'
+import { PanelLeftOpen, PanelRightOpen } from 'lucide-react'
 import { deserializeScenario } from '@/lib/serialization'
 import { asFlowEdgeData, asFlowNodeData } from '@/lib/flow-data'
 import { cn } from '@/lib/utils'
@@ -62,7 +62,7 @@ export type PanelMode = 'collapsed' | 'quarter' | 'custom'
 export default function EditorPageClient() {
   useUrlSync()
   useSegmentCanvasBridge()
-  const { logPanelOpen, logPanelWidth, setLogPanelOpen, setLogPanelWidth, mode } = useUIStore()
+  const { logPanelOpen, logPanelWidth, setLogPanelOpen, setLogPanelWidth, mode, canvasOpen, setCanvasOpen } = useUIStore()
   const canvasEditSegmentId = useEpisodeStore(s => s.canvasEditSegmentId)
   const setCanvasEditSegment = useEpisodeStore(s => s.setCanvasEditSegment)
   const episode = useEpisodeStore(s => s.episode)
@@ -248,39 +248,62 @@ export default function EditorPageClient() {
 
         {/* Main area */}
         <div className="flex flex-1 overflow-hidden">
-          {mode === 'design' && <Palette />}
-
-          <div className="flex-1 relative overflow-hidden flex flex-col">
-            {mode === 'design' && editingSegment && (
-              <div className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-xs text-amber-900">
-                <span className="rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider">
-                  Editing segment
-                </span>
-                <span className="font-medium">{editingSegment.name}</span>
-                <span className="text-[10px] text-amber-700">— canvas edits auto-save to this segment</span>
-                <div className="ml-auto flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-6 gap-1 px-2 text-[11px]"
-                    onClick={() => { setCanvasEditSegment(null); useUIStore.getState().setMode('episodes') }}
-                  >
-                    Done
-                  </Button>
+          <div
+            className={cn(
+              'relative overflow-hidden flex flex-col transition-[width] duration-150',
+              canvasOpen ? 'flex-1' : 'w-10 shrink-0 border-r border-gray-200 bg-gray-50',
+            )}
+          >
+            {!canvasOpen ? (
+              <div className="flex h-full flex-col items-center gap-3 pt-2">
+                <button
+                  title="Expand canvas"
+                  onClick={() => setCanvasOpen(true)}
+                  className="rounded p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800"
+                >
+                  <PanelLeftOpen className="h-4 w-4" />
+                </button>
+                <div className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 [writing-mode:vertical-rl]">
+                  Canvas
                 </div>
               </div>
+            ) : (
+              <>
+                {mode === 'design' && editingSegment && (
+                  <div className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-xs text-amber-900">
+                    <span className="rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider">
+                      Editing segment
+                    </span>
+                    <span className="font-medium">{editingSegment.name}</span>
+                    <span className="text-[10px] text-amber-700">— canvas edits auto-save to this segment</span>
+                    <div className="ml-auto flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-6 gap-1 px-2 text-[11px]"
+                        onClick={() => { setCanvasEditSegment(null); useUIStore.getState().setMode('episodes') }}
+                      >
+                        Done
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                <div className="flex-1 relative overflow-hidden">
+                  {mode === 'design' ? <Canvas /> : <EpisodeMode />}
+                  {mode === 'design' && <Palette />}
+                </div>
+              </>
             )}
-            <div className="flex-1 relative overflow-hidden">
-              {mode === 'design' ? <Canvas /> : <EpisodeMode />}
-            </div>
           </div>
 
           <div
             className={cn(
               'relative border-l border-gray-200 bg-white transition-[width] duration-150',
-              logPanelOpen ? 'shrink-0' : 'w-10 shrink-0',
+              logPanelOpen
+                ? (canvasOpen ? 'shrink-0' : 'flex-1')
+                : 'w-10 shrink-0',
             )}
-            style={logPanelOpen ? { width: logPanelWidth } : undefined}
+            style={logPanelOpen && canvasOpen ? { width: logPanelWidth } : undefined}
           >
             {logPanelOpen && (
               <div
@@ -290,16 +313,16 @@ export default function EditorPageClient() {
             )}
 
             {!logPanelOpen && (
-              <div className="flex h-full flex-col items-center pt-2">
+              <div className="flex h-full flex-col items-center gap-3 pt-2">
                 <button
                   title="Open log panel"
                   onClick={() => handleSetWidth(0.25)}
-                  className="rounded p-2 text-gray-300 transition-colors hover:bg-gray-100 hover:text-gray-600"
+                  className="rounded p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800"
                 >
-                  <ChevronLeft className="h-4 w-4" />
+                  <PanelRightOpen className="h-4 w-4" />
                 </button>
-                <div className="mt-auto mb-4 text-[9px] font-medium tracking-widest text-gray-300 [writing-mode:vertical-rl]">
-                  LOGS
+                <div className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 [writing-mode:vertical-rl]">
+                  Logs
                 </div>
               </div>
             )}

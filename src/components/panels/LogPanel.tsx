@@ -17,7 +17,8 @@ import {
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
-import { ChevronRight, Download, Send, Trash2, Loader2, Check, AlertCircle } from 'lucide-react'
+import { PanelRightClose, PanelLeftClose, Download, Send, Trash2, Loader2, Check, AlertCircle } from 'lucide-react'
+import { useUIStore } from '@/store/useUIStore'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { LogHistogram } from '@/components/panels/LogHistogram'
 import { MultiSelectMenu } from '@/components/panels/MultiSelectMenu'
@@ -170,6 +171,20 @@ export function LogPanel({ onCollapse }: LogPanelProps) {
   const destErrors = useDestinationsStore(s => s.errors)
   const setDestStatus = useDestinationsStore(s => s.setStatus)
   const recordSent = useDestinationsStore(s => s.recordSent)
+  const canvasOpen = useUIStore(s => s.canvasOpen)
+  const setCanvasOpen = useUIStore(s => s.setCanvasOpen)
+  const logPanelWidth = useUIStore(s => s.logPanelWidth)
+  // Panel occupies the full remaining viewport when canvas is collapsed;
+  // otherwise it's the user-set width. Switch to an inline row layout once
+  // there's room (~720px) to lay all filters + action button side by side.
+  const [viewportWidth, setViewportWidth] = useState(typeof window === 'undefined' ? 1024 : window.innerWidth)
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+  const effectiveWidth = canvasOpen ? logPanelWidth : viewportWidth
+  const isWide = effectiveWidth >= 720
 
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const scrollParentRef = useRef<HTMLDivElement>(null)
@@ -387,84 +402,42 @@ export function LogPanel({ onCollapse }: LogPanelProps) {
     <div className="relative flex h-full flex-col overflow-hidden bg-white">
       {/* ── Header ───────────────────────────────────────────── */}
       <div className="shrink-0 border-b border-gray-200 bg-gray-50 px-3 py-2">
+        {/* Title bar */}
         <div className="flex items-center gap-2">
+          {canvasOpen && (
+            <button
+              title="Collapse canvas"
+              onClick={() => setCanvasOpen(false)}
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900"
+            >
+              <PanelLeftClose className="h-3.5 w-3.5" />
+            </button>
+          )}
           <span className="text-xs font-semibold text-gray-800">Logs</span>
           <Badge variant="outline" className="px-1.5 text-[9px]">
             {displayedLogs.length} / {logBuffer.length}
           </Badge>
 
           <div className="ml-auto flex items-center gap-0.5">
-            {/* Forward menu */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="mr-1 h-7 gap-1.5 border-gray-200 px-2.5 text-[11px] font-medium text-gray-700 hover:bg-gray-100 hover:text-gray-900"
-                  title={destinations.length === 0 ? 'No destinations configured' : 'Forward visible logs'}
-                >
-                  <Send className="h-3 w-3 text-blue-600" />
-                  Forward logs
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-64">
-                <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-gray-500">
-                  Forward {displayedLogs.length} logs to
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {destinations.length === 0 && (
-                  <div className="px-2 py-3 text-[11px] text-gray-400">
-                    No destinations configured.
-                    <br />
-                    Add one in Settings.
-                  </div>
+            <button
+              onClick={() => setAutoScroll(!autoScroll)}
+              title={autoScroll ? 'Tailing — click to pause' : 'Paused — click to resume tailing'}
+              className={cn(
+                'inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[11px] font-medium transition-colors',
+                autoScroll
+                  ? 'bg-green-50 text-green-700 hover:bg-green-100'
+                  : 'text-gray-500 hover:bg-gray-100 hover:text-gray-900',
+              )}
+            >
+              <span
+                className={cn(
+                  'h-1.5 w-1.5 rounded-full',
+                  autoScroll ? 'bg-green-500 animate-pulse' : 'bg-gray-300',
                 )}
-                {destinations.map(dest => {
-                  const status = destStatuses[dest.id] ?? 'idle'
-                  const error = destErrors[dest.id]
-                  const sentCount = recentSent[dest.id]
-                  const isSending = status === 'sending'
-                  const hasError = status === 'error' && !!error
-                  const hasJustSent = sentCount !== undefined
-                  return (
-                    <DropdownMenuItem
-                      key={dest.id}
-                      onSelect={(e) => {
-                        e.preventDefault()
-                        if (!isSending) handleForward(dest)
-                      }}
-                      className="flex-col items-start gap-0.5 text-xs"
-                      disabled={isSending}
-                    >
-                      <span className="flex w-full items-center justify-between gap-2">
-                        <span className="truncate">{dest.name || dest.type}</span>
-                        <span className="shrink-0 text-[10px] uppercase text-gray-400">{dest.type}</span>
-                      </span>
-                      {isSending && (
-                        <span className="flex items-center gap-1 text-[10px] text-blue-600">
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                          Sending {displayedLogs.length}…
-                        </span>
-                      )}
-                      {!isSending && hasJustSent && (
-                        <span className="flex items-center gap-1 text-[10px] text-green-600">
-                          <Check className="h-3 w-3" />
-                          Sent {sentCount}
-                        </span>
-                      )}
-                      {!isSending && !hasJustSent && hasError && (
-                        <span className="flex items-start gap-1 text-[10px] text-red-600">
-                          <AlertCircle className="mt-[1px] h-3 w-3 shrink-0" />
-                          <span className="break-words">{error}</span>
-                        </span>
-                      )}
-                    </DropdownMenuItem>
-                  )
-                })}
-              </DropdownMenuContent>
-            </DropdownMenu>
+              />
+              Tail
+            </button>
 
-            {/* Download menu */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button
@@ -503,101 +476,154 @@ export function LogPanel({ onCollapse }: LogPanelProps) {
               onClick={onCollapse}
               className="inline-flex h-7 w-7 items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
             >
-              <ChevronRight className="h-3.5 w-3.5" />
+              <PanelRightClose className="h-3.5 w-3.5" />
             </button>
           </div>
         </div>
 
-        {/* Filter row */}
-        <div className="mt-2 grid grid-cols-2 gap-1.5">
-          <MultiSelectMenu
-            label="Sources"
-            options={sourceFacetOptions}
-            selected={filter.sources}
-            onChange={setSources}
-            headerHint={sourcePrefix ? `${sourcePrefix}…` : undefined}
-            renderTriggerText={(sel, opts) =>
-              sel.length === 0
-                ? 'All sources'
-                : sel.length === 1
-                  ? (opts.find(o => o.value === sel[0])?.label ?? sel[0]) as React.ReactNode
-                  : `${sel.length} sources`
-            }
-          />
-          <MultiSelectMenu
-            label="Levels"
-            options={levelOptions}
-            selected={filter.levels}
-            onChange={setLevels}
-            renderTriggerText={(sel) =>
-              sel.length === ALL_LEVELS.length
-                ? 'All levels'
-                : sel.length === 0
-                  ? 'No levels'
-                  : sel.map(l => l.slice(0, 1)).join(' · ')
-            }
-          />
-        </div>
+        {/* Filter + action cluster —
+            narrow panel: stacked column; wide panel: single inline row so it doesn't sprawl */}
+        <div className={cn('mt-2 flex gap-1.5', isWide ? 'flex-row flex-wrap items-center' : 'flex-col')}>
+          <div className={cn('grid grid-cols-2 gap-1.5', isWide && 'contents')}>
+            <MultiSelectMenu
+              label="Sources"
+              options={sourceFacetOptions}
+              selected={filter.sources}
+              onChange={setSources}
+              triggerClassName={isWide ? 'w-44' : undefined}
+              headerHint={sourcePrefix ? `${sourcePrefix}…` : undefined}
+              renderTriggerText={(sel, opts) =>
+                sel.length === 0
+                  ? 'All sources'
+                  : sel.length === 1
+                    ? (opts.find(o => o.value === sel[0])?.label ?? sel[0]) as React.ReactNode
+                    : `${sel.length} sources`
+              }
+            />
+            <MultiSelectMenu
+              label="Levels"
+              options={levelOptions}
+              selected={filter.levels}
+              onChange={setLevels}
+              triggerClassName={isWide ? 'w-32' : undefined}
+              renderTriggerText={(sel) =>
+                sel.length === ALL_LEVELS.length
+                  ? 'All levels'
+                  : sel.length === 0
+                    ? 'No levels'
+                    : sel.map(l => l.slice(0, 1)).join(' · ')
+              }
+            />
+          </div>
 
-        {/* Search + Live */}
-        <div className="mt-1.5 flex items-center gap-1.5">
+          {(methodOptions.length > 0 || statusClassOptions.length > 0) && (
+            <div className={cn('grid grid-cols-2 gap-1.5', isWide && 'contents')}>
+              {methodOptions.length > 0 && (
+                <MultiSelectMenu
+                  label="Methods"
+                  options={methodOptions}
+                  selected={methodFilter}
+                  onChange={setMethodFilter}
+                  triggerClassName={isWide ? 'w-32' : undefined}
+                  renderTriggerText={(sel) =>
+                    sel.length === 0 ? 'Any method' : sel.length === 1 ? sel[0] : `${sel.length} methods`
+                  }
+                />
+              )}
+              {statusClassOptions.length > 0 && (
+                <MultiSelectMenu
+                  label="Status"
+                  options={statusClassOptions}
+                  selected={statusClassFilter}
+                  onChange={setStatusClassFilter}
+                  triggerClassName={isWide ? 'w-32' : undefined}
+                  renderTriggerText={(sel) =>
+                    sel.length === 0 ? 'Any status' : sel.length === 1 ? sel[0] : `${sel.length} statuses`
+                  }
+                />
+              )}
+            </div>
+          )}
+
           <Input
             value={filter.keyword}
             onChange={e => setFilter({ keyword: e.target.value })}
             placeholder="Search logs…"
-            className="h-7 flex-1 min-w-0 text-xs"
+            className={cn('h-7 text-xs', isWide ? 'flex-1 min-w-[180px] max-w-md' : 'w-full')}
           />
-          <Button
-            variant="outline"
-            size="sm"
-            className={cn(
-              'h-7 shrink-0 gap-1.5 border-gray-200 px-2.5 text-[11px] font-medium',
-              autoScroll
-                ? 'bg-green-50 text-green-700 hover:bg-green-100 hover:text-green-800'
-                : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900',
-            )}
-            onClick={() => setAutoScroll(!autoScroll)}
-            title={autoScroll ? 'Tailing — click to pause' : 'Paused — click to resume tailing'}
-          >
-            <span
-              className={cn(
-                'h-1.5 w-1.5 rounded-full',
-                autoScroll ? 'bg-green-500 animate-pulse' : 'bg-gray-300',
-              )}
-            />
-            Tail
-          </Button>
-        </div>
 
-        {/* Extra facets: only appear if the logs have them */}
-        {(methodOptions.length > 0 || statusClassOptions.length > 0) && (
-          <div className="mt-1.5 flex flex-wrap gap-1.5">
-            {methodOptions.length > 0 && (
-              <MultiSelectMenu
-                label="Methods"
-                options={methodOptions}
-                selected={methodFilter}
-                onChange={setMethodFilter}
-                triggerClassName="flex-1 min-w-0"
-                renderTriggerText={(sel) =>
-                  sel.length === 0 ? 'Any method' : sel.length === 1 ? sel[0] : `${sel.length} methods`
-                }
-              />
-            )}
-            {statusClassOptions.length > 0 && (
-              <MultiSelectMenu
-                label="Status"
-                options={statusClassOptions}
-                selected={statusClassFilter}
-                onChange={setStatusClassFilter}
-                triggerClassName="flex-1 min-w-0"
-                renderTriggerText={(sel) =>
-                  sel.length === 0 ? 'Any status' : sel.length === 1 ? sel[0] : `${sel.length} statuses`
-                }
-              />
-            )}
-          </div>
-        )}
+          {/* Primary action: forward */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="sm"
+                className={cn(
+                  'gap-1.5 bg-blue-600 text-xs font-medium text-white shadow-sm hover:bg-blue-700',
+                  isWide ? 'h-7 w-auto px-3' : 'mt-0.5 h-8 w-full',
+                )}
+                title={destinations.length === 0 ? 'No destinations configured' : 'Forward visible logs'}
+              >
+                <Send className="h-3.5 w-3.5" />
+                Forward {displayedLogs.length} log{displayedLogs.length === 1 ? '' : 's'}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-64">
+              <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-gray-500">
+                Forward {displayedLogs.length} logs to
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {destinations.length === 0 && (
+                <div className="px-2 py-3 text-[11px] text-gray-400">
+                  No destinations configured.
+                  <br />
+                  Add one in Settings.
+                </div>
+              )}
+              {destinations.map(dest => {
+                const status = destStatuses[dest.id] ?? 'idle'
+                const error = destErrors[dest.id]
+                const sentCount = recentSent[dest.id]
+                const isSending = status === 'sending'
+                const hasError = status === 'error' && !!error
+                const hasJustSent = sentCount !== undefined
+                return (
+                  <DropdownMenuItem
+                    key={dest.id}
+                    onSelect={(e) => {
+                      e.preventDefault()
+                      if (!isSending) handleForward(dest)
+                    }}
+                    className="flex-col items-start gap-0.5 text-xs"
+                    disabled={isSending}
+                  >
+                    <span className="flex w-full items-center justify-between gap-2">
+                      <span className="truncate">{dest.name || dest.type}</span>
+                      <span className="shrink-0 text-[10px] uppercase text-gray-400">{dest.type}</span>
+                    </span>
+                    {isSending && (
+                      <span className="flex items-center gap-1 text-[10px] text-blue-600">
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                        Sending {displayedLogs.length}…
+                      </span>
+                    )}
+                    {!isSending && hasJustSent && (
+                      <span className="flex items-center gap-1 text-[10px] text-green-600">
+                        <Check className="h-3 w-3" />
+                        Sent {sentCount}
+                      </span>
+                    )}
+                    {!isSending && !hasJustSent && hasError && (
+                      <span className="flex items-start gap-1 text-[10px] text-red-600">
+                        <AlertCircle className="mt-[1px] h-3 w-3 shrink-0" />
+                        <span className="break-words">{error}</span>
+                      </span>
+                    )}
+                  </DropdownMenuItem>
+                )
+              })}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
       {/* ── Histogram ────────────────────────────────────────── */}

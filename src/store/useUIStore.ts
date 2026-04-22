@@ -19,6 +19,7 @@ interface UIState {
   configPanelAnchor: { x: number; y: number } | null
   logPanelWidth: number
   logPanelOpen: boolean
+  canvasOpen: boolean
   isDraggingFromPalette: boolean
   paletteNodeType: string | null
   showBulkGenerateModal: boolean
@@ -34,6 +35,7 @@ interface UIState {
   setConfigPanelAnchor: (anchor: { x: number; y: number } | null) => void
   setLogPanelWidth: (width: number) => void
   setLogPanelOpen: (open: boolean) => void
+  setCanvasOpen: (open: boolean) => void
   setDraggingFromPalette: (isDragging: boolean, nodeType?: string) => void
   setShowBulkGenerateModal: (show: boolean) => void
   setShowKeyboardShortcuts: (show: boolean) => void
@@ -50,6 +52,7 @@ export const useUIStore = create<UIState>()((set) => ({
   configPanelAnchor: null,
   logPanelWidth: 420,
   logPanelOpen: true,
+  canvasOpen: true,
   isDraggingFromPalette: false,
   paletteNodeType: null,
   showBulkGenerateModal: false,
@@ -74,6 +77,7 @@ export const useUIStore = create<UIState>()((set) => ({
   setConfigPanelAnchor: (anchor) => set({ configPanelAnchor: anchor }),
   setLogPanelWidth: (width) => set({ logPanelWidth: width }),
   setLogPanelOpen: (open) => set({ logPanelOpen: open }),
+  setCanvasOpen: (open) => set({ canvasOpen: open }),
   setDraggingFromPalette: (isDragging, nodeType) =>
     set({ isDraggingFromPalette: isDragging, paletteNodeType: nodeType || null }),
   setShowBulkGenerateModal: (show) => set({ showBulkGenerateModal: show }),
