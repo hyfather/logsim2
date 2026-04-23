@@ -1,16 +1,15 @@
 'use client'
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Play, Square, Pencil, GitFork, RotateCcw, LayoutDashboard, Link as LinkIcon, Check } from 'lucide-react'
+import { Play, Square, Pencil, GitFork, RotateCcw, LayoutDashboard, Link as LinkIcon, Check, Maximize2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useEpisodeStore } from '@/store/useEpisodeStore'
 import { useSimulationStore } from '@/store/useSimulationStore'
 import { useDestinationsStore } from '@/store/useDestinationsStore'
-import { useUIStore } from '@/store/useUIStore'
-import { useScenarioStore } from '@/store/useScenarioStore'
 import { EpisodeTimeline } from './EpisodeTimeline'
 import { SegmentEditorModal } from './SegmentEditorModal'
 import { SegmentCanvasPreview } from './SegmentCanvasPreview'
+import { SegmentCanvasModal } from './SegmentCanvasModal'
 import { runEpisode } from '@/lib/episodeRunner'
 
 export function EpisodeMode() {
@@ -25,17 +24,11 @@ export function EpisodeMode() {
     setRunningSegment,
     setRunProgress,
     resetRun,
-    setCanvasEditSegment,
-    updateSegmentCanvas,
   } = useEpisodeStore()
   const { addLogs, clearLogs, setTickCount, setSimulatedTime, setStatus } = useSimulationStore()
   const { destinations, setStatus: setDestStatus, recordSent } = useDestinationsStore()
-  const setMode = useUIStore(s => s.setMode)
-  const loadScenario = useScenarioStore(s => s.loadScenario)
-  const scenarioNodes = useScenarioStore(s => s.nodes)
-  const scenarioEdges = useScenarioStore(s => s.edges)
-  const scenarioMeta = useScenarioStore(s => s.metadata)
   const stopRef = useRef(false)
+  const [canvasModalSegmentId, setCanvasModalSegmentId] = useState<string | null>(null)
 
   const [isEditingTitle, setIsEditingTitle] = useState(false)
   const [draftTitle, setDraftTitle] = useState(episode.name)
@@ -116,22 +109,8 @@ export function EpisodeMode() {
   }, [clearLogs, resetRun, setSimulatedTime, setStatus, setTickCount])
 
   const openInCanvas = useCallback((segmentId: string) => {
-    const seg = episode.segments.find(s => s.id === segmentId)
-    if (!seg) return
-    // Seed the segment's canvas snapshot from the current scenario if it doesn't have one
-    // yet — so the user has a starting state to edit.
-    const snapshot = seg.canvas ?? {
-      nodes: scenarioNodes,
-      edges: scenarioEdges,
-      metadata: { ...scenarioMeta, name: seg.name },
-    }
-    if (!seg.canvas) {
-      updateSegmentCanvas(seg.id, snapshot)
-    }
-    loadScenario(snapshot.nodes, snapshot.edges, snapshot.metadata)
-    setCanvasEditSegment(seg.id)
-    setMode('design')
-  }, [episode.segments, loadScenario, scenarioEdges, scenarioMeta, scenarioNodes, setCanvasEditSegment, setMode, updateSegmentCanvas])
+    setCanvasModalSegmentId(segmentId)
+  }, [])
 
   const copyLink = useCallback(async () => {
     try {
@@ -264,13 +243,25 @@ export function EpisodeMode() {
               <div className="col-span-3 flex flex-col overflow-hidden rounded-md border border-slate-200 bg-white">
                 <div className="flex items-center justify-between border-b border-slate-100 px-3 py-1.5">
                   <span className="text-[10px] uppercase tracking-wider text-slate-500">Canvas</span>
-                  <span className="text-[10px] text-slate-400">
-                    {selected.canvas ? 'read-only · click Edit in Canvas to modify' : 'no canvas yet'}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-slate-400">
+                      {selected.canvas ? 'read-only · maximize to edit' : 'no canvas yet'}
+                    </span>
+                    {selected.canvas && selected.canvas.nodes.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => openInCanvas(selected.id)}
+                        title="Maximize canvas for editing"
+                        className="inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] text-slate-600 hover:bg-slate-50"
+                      >
+                        <Maximize2 className="size-3" /> Maximize
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div className="flex-1 overflow-hidden">
                   {selected.canvas && selected.canvas.nodes.length > 0 ? (
-                    <SegmentCanvasPreview key={selected.id} snapshot={selected.canvas} />
+                    <SegmentCanvasPreview key={selected.id + ':' + selected.canvas.nodes.length} snapshot={selected.canvas} />
                   ) : (
                     <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-xs text-slate-400">
                       <LayoutDashboard className="size-6 text-slate-300" />
@@ -308,6 +299,10 @@ export function EpisodeMode() {
       </div>
 
       <SegmentEditorModal />
+      <SegmentCanvasModal
+        segmentId={canvasModalSegmentId}
+        onClose={() => setCanvasModalSegmentId(null)}
+      />
     </div>
   )
 }
