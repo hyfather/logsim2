@@ -2,7 +2,7 @@
 import React, { Suspense, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useSearchParams, useRouter } from 'next/navigation'
-import { ArrowLeft, Plus, Trash2, Zap, Server, ChevronRight, ChevronLeft } from 'lucide-react'
+import { ArrowLeft, Plus, Trash2, Zap, Server, ChevronRight, ChevronLeft, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -13,6 +13,14 @@ import { useDestinationsStore } from '@/store/useDestinationsStore'
 import { testHecConnection } from '@/lib/criblForwarder'
 import { DESTINATION_TYPE_META } from '@/types/destinations'
 import type { CriblHecDestination, DestinationConfig, DestinationType } from '@/types/destinations'
+import { AiKeysPanel } from './AiKeysPanel'
+
+type Category = 'destinations' | 'ai-keys'
+
+const CATEGORIES: { id: Category; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+  { id: 'destinations', label: 'Log destinations', icon: Server },
+  { id: 'ai-keys',      label: 'AI keys',          icon: Sparkles },
+]
 
 type TestState = 'idle' | 'testing' | 'ok' | 'error'
 
@@ -440,6 +448,12 @@ function SettingsPageInner() {
   } = useDestinationsStore()
 
   const initialId = searchParams.get('destination')
+  const initialCategory = (searchParams.get('category') as Category | null) ?? null
+
+  const [category, setCategory] = useState<Category>(() => {
+    if (initialCategory === 'ai-keys' || initialCategory === 'destinations') return initialCategory
+    return 'destinations'
+  })
 
   const [selection, setSelection] = useState<SelectionState>(() => {
     if (initialId && initialId === 'new') return { kind: 'new', type: 'cribl-hec' }
@@ -502,81 +516,142 @@ function SettingsPageInner() {
         <h1 className="truncate text-sm font-semibold text-gray-900">Settings</h1>
       </header>
 
+      {/* Mobile category tabs */}
+      <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-gray-200 bg-white px-3 py-2 md:hidden">
+        {CATEGORIES.map(cat => {
+          const Icon = cat.icon
+          const active = category === cat.id
+          return (
+            <button
+              key={cat.id}
+              onClick={() => { setCategory(cat.id); clearSelection() }}
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-medium transition-colors',
+                active
+                  ? 'border-blue-200 bg-blue-50 text-blue-900'
+                  : 'border-gray-200 text-gray-600 hover:bg-gray-50',
+              )}
+            >
+              <Icon className="h-3 w-3" />
+              {cat.label}
+            </button>
+          )
+        })}
+      </div>
+
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
         {/* Category rail — desktop only */}
         <aside className="hidden w-52 shrink-0 flex-col border-r border-gray-200 bg-white md:flex">
-          <nav className="p-2">
-            <div className="rounded-md bg-blue-50 px-3 py-2 text-xs font-medium text-blue-900">
-              Log destinations
-            </div>
+          <nav className="space-y-1 p-2">
+            {CATEGORIES.map(cat => {
+              const Icon = cat.icon
+              const active = category === cat.id
+              return (
+                <button
+                  key={cat.id}
+                  onClick={() => setCategory(cat.id)}
+                  className={cn(
+                    'flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs font-medium transition-colors',
+                    active
+                      ? 'bg-blue-50 text-blue-900'
+                      : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900',
+                  )}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  {cat.label}
+                </button>
+              )
+            })}
           </nav>
         </aside>
 
         {/* Content */}
         <main className="flex flex-1 overflow-hidden">
-          {/* Destinations list — full width on mobile when nothing is selected; sidebar otherwise */}
-          <div
-            className={cn(
-              'shrink-0 overflow-y-auto border-r border-gray-200 bg-white p-3',
-              'md:flex md:w-64',
-              hasSelection ? 'hidden md:flex' : 'flex w-full md:w-64',
-            )}
-          >
-            <DestinationsList
-              destinations={destinations}
-              selection={selection}
-              onSelect={(id) => setSelection({ kind: 'edit', id })}
-              onNew={handleNew}
-            />
-          </div>
-
-          {/* Detail */}
-          <div
-            className={cn(
-              'flex-1 overflow-y-auto',
-              hasSelection ? 'flex flex-col' : 'hidden md:flex md:flex-col',
-            )}
-          >
-            {hasSelection && (
-              <div className="flex items-center gap-2 border-b border-gray-200 bg-white px-3 py-2 md:hidden">
-                <button
-                  onClick={clearSelection}
-                  className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-gray-600 hover:bg-gray-100"
-                >
-                  <ChevronLeft className="h-3.5 w-3.5" />
-                  Destinations
-                </button>
+          {category === 'destinations' && (
+            <>
+              {/* Destinations list — full width on mobile when nothing is selected; sidebar otherwise */}
+              <div
+                className={cn(
+                  'shrink-0 overflow-y-auto border-r border-gray-200 bg-white p-3',
+                  'md:flex md:w-64',
+                  hasSelection ? 'hidden md:flex' : 'flex w-full md:w-64',
+                )}
+              >
+                <DestinationsList
+                  destinations={destinations}
+                  selection={selection}
+                  onSelect={(id) => setSelection({ kind: 'edit', id })}
+                  onNew={handleNew}
+                />
               </div>
-            )}
-            <div className="mx-auto w-full max-w-2xl flex-1 p-4 sm:p-6">
-              {selection.kind === 'none' && <EmptyDetail onNew={handleNew} />}
 
-              {selection.kind === 'new' && (
-                <CriblHecForm
-                  initial={{}}
-                  isEdit={false}
-                  onCancel={() => {
-                    if (router.back) router.back()
-                    setSelection({ kind: 'none' })
-                  }}
-                  onSave={handleSaveNew}
-                />
-              )}
+              {/* Detail */}
+              <div
+                className={cn(
+                  'flex-1 overflow-y-auto',
+                  hasSelection ? 'flex flex-col' : 'hidden md:flex md:flex-col',
+                )}
+              >
+                {hasSelection && (
+                  <div className="flex items-center gap-2 border-b border-gray-200 bg-white px-3 py-2 md:hidden">
+                    <button
+                      onClick={clearSelection}
+                      className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-gray-600 hover:bg-gray-100"
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                      Destinations
+                    </button>
+                  </div>
+                )}
+                <div className="mx-auto w-full max-w-2xl flex-1 p-4 sm:p-6">
+                  {selection.kind === 'none' && <EmptyDetail onNew={handleNew} />}
 
-              {selection.kind === 'edit' && selected && (
-                <CriblHecForm
-                  key={selected.id}
-                  initial={selected}
-                  isEdit={true}
-                  destId={selected.id}
-                  onCancel={() => setSelection({ kind: 'none' })}
-                  onSave={handleSaveEdit(selected.id)}
-                  onDelete={handleDelete(selected.id)}
-                />
-              )}
+                  {selection.kind === 'new' && (
+                    <CriblHecForm
+                      initial={{}}
+                      isEdit={false}
+                      onCancel={() => {
+                        if (router.back) router.back()
+                        setSelection({ kind: 'none' })
+                      }}
+                      onSave={handleSaveNew}
+                    />
+                  )}
+
+                  {selection.kind === 'edit' && selected && (
+                    <CriblHecForm
+                      key={selected.id}
+                      initial={selected}
+                      isEdit={true}
+                      destId={selected.id}
+                      onCancel={() => setSelection({ kind: 'none' })}
+                      onSave={handleSaveEdit(selected.id)}
+                      onDelete={handleDelete(selected.id)}
+                    />
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+
+          {category === 'ai-keys' && (
+            <div className="flex-1 overflow-y-auto">
+              <div className="mx-auto w-full max-w-2xl p-4 sm:p-6">
+                <div className="mb-4">
+                  <h2 className="flex items-center gap-2 text-base font-semibold text-gray-900">
+                    <Sparkles className="h-4 w-4 text-violet-500" />
+                    AI keys
+                  </h2>
+                  <p className="mt-1 text-[11px] text-gray-500">
+                    Configure provider API keys to enable AI-assisted features such as
+                    natural-language scenario generation in the canvas.
+                  </p>
+                </div>
+                <AiKeysPanel />
+              </div>
             </div>
-          </div>
+          )}
         </main>
       </div>
     </div>
