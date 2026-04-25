@@ -36,16 +36,16 @@ export function EpisodeTimeline({ onOpenInCanvas }: { onOpenInCanvas?: (segmentI
   )
 
   return (
-    <div className="flex flex-col gap-2 border-b border-slate-200 bg-gradient-to-b from-slate-50 to-white px-4 py-3">
-      <div className="flex items-center gap-2">
-        <Film className="size-3.5 text-slate-500" />
+    <div className="flex flex-col gap-2 border-b border-slate-200 bg-gradient-to-b from-slate-50 to-white px-3 py-3 sm:px-4">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <Film className="size-3.5 shrink-0 text-slate-500" />
         <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-600">
           Episode Timeline
         </span>
         <span className="text-[10px] text-slate-400">
           {segCount} segment{segCount !== 1 ? 's' : ''} · {totalTicks} ticks (~{Math.round(totalTicks / 60)}m)
         </span>
-        <div className="ml-auto">
+        <div className="ml-auto shrink-0">
           <Button
             variant="outline"
             size="sm"

@@ -15,6 +15,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { getNodeAddress } from '@/lib/network'
+import { useIsMobile } from '@/hooks/useMediaQuery'
+import { cn } from '@/lib/utils'
 
 function groupBySection(fields: ConfigField[]): Record<string, ConfigField[]> {
   const groups: Record<string, ConfigField[]> = {}
@@ -128,6 +130,7 @@ export function NodeInspector({ nodeData }: { nodeData: ScenarioNode }) {
   const [labelDraft, setLabelDraft] = useState(nodeData.label)
   const [mounted, setMounted] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
+  const isMobile = useIsMobile()
   const allNodes = nodes.map(node => node.data)
   const viewportWidth = typeof window === 'undefined' ? 1280 : window.innerWidth
   const viewportHeight = typeof window === 'undefined' ? 900 : window.innerHeight
@@ -209,11 +212,19 @@ export function NodeInspector({ nodeData }: { nodeData: ScenarioNode }) {
 
   if (!mounted || typeof document === 'undefined') return null
 
+  const desktopStyle = { left, top, maxHeight: panelMaxHeight }
+  const mobileStyle = { maxHeight: '85dvh' }
+
   return createPortal(
     <div
       ref={panelRef}
-      className="nodrag nopan fixed z-[1000] flex w-72 flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl"
-      style={{ left, top, maxHeight: panelMaxHeight }}
+      className={cn(
+        'nodrag nopan fixed z-[1000] flex flex-col overflow-hidden border border-gray-200 bg-white shadow-2xl',
+        isMobile
+          ? 'inset-x-0 bottom-0 rounded-t-xl'
+          : 'w-72 rounded-xl',
+      )}
+      style={isMobile ? mobileStyle : desktopStyle}
       onClick={e => e.stopPropagation()}
       onDoubleClick={e => e.stopPropagation()}
     >

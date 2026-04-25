@@ -225,14 +225,14 @@ export function Toolbar() {
   }, [logBuffer])
 
   return (
-    <div className="flex items-center gap-0.5 px-2 py-1 border-b border-gray-200 bg-gray-50">
-      {/* App title */}
-      <div className="flex items-center gap-1.5 mr-3">
+    <div className="flex items-center gap-0.5 overflow-x-auto whitespace-nowrap border-b border-gray-200 bg-gray-50 px-2 py-1">
+      {/* App title — hidden on phones to save space */}
+      <div className="mr-3 hidden items-center gap-1.5 sm:flex">
         <span className="text-sm font-bold text-gray-800">LogSim</span>
       </div>
 
       {/* Mode toggle */}
-      <div className="mr-3 flex overflow-hidden rounded-md border border-slate-200">
+      <div className="mr-3 flex shrink-0 overflow-hidden rounded-md border border-slate-200">
         <button
           onClick={() => setMode('design')}
           className={`px-2 py-0.5 text-[11px] font-medium transition-colors ${
@@ -254,7 +254,7 @@ export function Toolbar() {
       {/* File menu */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs">File</Button>
+          <Button variant="ghost" size="sm" className="h-6 shrink-0 px-2 text-xs">File</Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent className="text-xs">
           <DropdownMenuItem onClick={handleNew} className="text-xs cursor-pointer">📄 New Scenario</DropdownMenuItem>
@@ -308,7 +308,7 @@ export function Toolbar() {
       {/* Insert menu */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs">Insert</Button>
+          <Button variant="ghost" size="sm" className="h-6 shrink-0 px-2 text-xs">Insert</Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent className="text-xs">
           <InsertMenuItem type="vpc" label="VPC" icon="🌐" />
@@ -327,7 +327,7 @@ export function Toolbar() {
       {/* Run menu */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs">Run</Button>
+          <Button variant="ghost" size="sm" className="h-6 shrink-0 px-2 text-xs">Run</Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent className="text-xs">
           <DropdownMenuItem
@@ -342,7 +342,7 @@ export function Toolbar() {
       {/* Configure menu */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs">Configure</Button>
+          <Button variant="ghost" size="sm" className="h-6 shrink-0 px-2 text-xs">Configure</Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent className="text-xs">
           <DropdownMenuItem
@@ -369,7 +369,7 @@ export function Toolbar() {
       {/* Help menu */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs">Help</Button>
+          <Button variant="ghost" size="sm" className="h-6 shrink-0 px-2 text-xs">Help</Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent className="text-xs">
           <DropdownMenuItem onClick={() => setShowKeyboardShortcuts(true)} className="text-xs cursor-pointer">

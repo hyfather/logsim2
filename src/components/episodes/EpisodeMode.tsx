@@ -133,7 +133,7 @@ export function EpisodeMode() {
   return (
     <div className="flex h-full flex-col overflow-hidden bg-slate-50">
       {/* Episode header with run controls */}
-      <div className="flex items-center gap-2 border-b border-gray-200 bg-white px-4 py-2">
+      <div className="flex flex-wrap items-center gap-2 border-b border-gray-200 bg-white px-3 py-2 sm:px-4">
         {isEditingTitle ? (
           <Input
             value={draftTitle}
@@ -144,49 +144,51 @@ export function EpisodeMode() {
               if (e.key === 'Escape') { setDraftTitle(episode.name); setIsEditingTitle(false) }
             }}
             autoFocus
-            className="h-8 w-[300px] text-lg font-semibold"
+            className="h-8 w-full max-w-[300px] text-base font-semibold sm:text-lg"
           />
         ) : (
           <button
             onClick={() => setIsEditingTitle(true)}
-            className="rounded-md px-2 py-1 text-lg font-semibold text-slate-900 hover:bg-slate-100"
+            className="max-w-full truncate rounded-md px-2 py-1 text-base font-semibold text-slate-900 hover:bg-slate-100 sm:text-lg"
           >
             {episode.name}
           </button>
         )}
 
         <div className="text-[10px] text-slate-400">
-          {episode.segments.length} segments · {totalTicks} ticks total
+          {episode.segments.length} seg · {totalTicks} ticks
         </div>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-2">
           <Button
             variant="outline"
             size="sm"
-            className="h-8 gap-1 px-2 text-xs"
+            className="h-8 shrink-0 gap-1 px-2 text-xs"
             onClick={copyLink}
             title="Copy link to this view (preserves episode + segment)"
           >
             {copied ? <Check className="size-3.5 text-emerald-600" /> : <LinkIcon className="size-3.5" />}
-            {copied ? 'Copied' : 'Copy Link'}
+            <span className="hidden sm:inline">{copied ? 'Copied' : 'Copy Link'}</span>
           </Button>
           <Button
             variant={runStatus === 'running' ? 'destructive' : 'outline'}
             size="sm"
-            className="h-8 gap-1 px-3 text-xs"
+            className="h-8 shrink-0 gap-1 px-3 text-xs"
             onClick={handleRun}
           >
             {runStatus === 'running' ? <Square className="size-3.5" /> : <Play className="size-3.5" />}
-            {runStatus === 'running' ? 'Stop Episode' : 'Run Episode'}
+            <span className="hidden sm:inline">{runStatus === 'running' ? 'Stop Episode' : 'Run Episode'}</span>
+            <span className="sm:hidden">{runStatus === 'running' ? 'Stop' : 'Run'}</span>
           </Button>
           <Button
             variant="outline"
             size="sm"
-            className="h-8 gap-1 px-3 text-xs"
+            className="h-8 shrink-0 gap-1 px-3 text-xs"
             onClick={handleReset}
             disabled={runStatus === 'running'}
           >
-            <RotateCcw className="size-3.5" /> Reset
+            <RotateCcw className="size-3.5" />
+            <span className="hidden sm:inline">Reset</span>
           </Button>
         </div>
       </div>
@@ -197,18 +199,18 @@ export function EpisodeMode() {
       {/* Selected segment preview */}
       <div className="flex flex-1 overflow-hidden">
         {selected ? (
-          <div className="flex flex-1 flex-col overflow-hidden p-6">
-            <div className="flex items-start justify-between gap-3">
-              <div>
+          <div className="flex flex-1 flex-col overflow-y-auto p-4 sm:overflow-hidden sm:p-6">
+            <div className="flex flex-col items-start justify-between gap-3 sm:flex-row">
+              <div className="min-w-0">
                 <div className="text-[10px] uppercase tracking-[0.18em] text-slate-400">Selected Segment</div>
-                <h2 className="text-xl font-semibold text-slate-900">{selected.name}</h2>
+                <h2 className="break-words text-lg font-semibold text-slate-900 sm:text-xl">{selected.name}</h2>
                 <p className="mt-1 text-xs text-slate-500">
                   Runs for <span className="font-mono">{selected.ticks}</span> ticks
                   (~{Math.floor(selected.ticks / 60)}m {selected.ticks % 60}s).
                   {selected.parentId && ' Forked from the previous segment.'}
                 </p>
               </div>
-              <div className="flex shrink-0 gap-2">
+              <div className="flex w-full shrink-0 flex-wrap gap-2 sm:w-auto">
                 <Button
                   variant="default"
                   size="sm"
@@ -216,7 +218,9 @@ export function EpisodeMode() {
                   onClick={() => openInCanvas(selected.id)}
                   title="Edit this segment visually on the canvas"
                 >
-                  <LayoutDashboard className="size-3.5" /> Edit in Canvas
+                  <LayoutDashboard className="size-3.5" />
+                  <span className="hidden sm:inline">Edit in Canvas</span>
+                  <span className="sm:hidden">Canvas</span>
                 </Button>
                 <Button
                   variant="outline"
@@ -224,7 +228,9 @@ export function EpisodeMode() {
                   className="h-8 gap-1 px-3 text-xs"
                   onClick={() => setEditingSegment(selected.id)}
                 >
-                  <Pencil className="size-3.5" /> Edit YAML
+                  <Pencil className="size-3.5" />
+                  <span className="hidden sm:inline">Edit YAML</span>
+                  <span className="sm:hidden">YAML</span>
                 </Button>
                 <Button
                   variant="outline"
@@ -238,9 +244,9 @@ export function EpisodeMode() {
               </div>
             </div>
 
-            <div className="mt-4 grid flex-1 grid-cols-5 gap-3 overflow-hidden">
-              {/* Canvas preview (2/5) or placeholder */}
-              <div className="col-span-3 flex flex-col overflow-hidden rounded-md border border-slate-200 bg-white">
+            <div className="mt-4 grid flex-1 grid-cols-1 gap-3 sm:grid-cols-5 sm:overflow-hidden">
+              {/* Canvas preview — full width on mobile, 3/5 on desktop */}
+              <div className="flex min-h-[260px] flex-col overflow-hidden rounded-md border border-slate-200 bg-white sm:col-span-3 sm:min-h-0">
                 <div className="flex items-center justify-between border-b border-slate-100 px-3 py-1.5">
                   <span className="text-[10px] uppercase tracking-wider text-slate-500">Canvas</span>
                   <div className="flex items-center gap-2">
@@ -279,8 +285,8 @@ export function EpisodeMode() {
                 </div>
               </div>
 
-              {/* YAML preview (2/5) */}
-              <div className="col-span-2 flex flex-col overflow-hidden rounded-md border border-slate-200 bg-white">
+              {/* YAML preview — full width on mobile, 2/5 on desktop */}
+              <div className="flex min-h-[200px] flex-col overflow-hidden rounded-md border border-slate-200 bg-white sm:col-span-2 sm:min-h-0">
                 <div className="flex items-center justify-between border-b border-slate-100 px-3 py-1.5">
                   <span className="text-[10px] uppercase tracking-wider text-slate-500">scenario.yaml</span>
                   <span className="text-[10px] text-slate-400">double-click timeline to edit</span>

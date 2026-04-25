@@ -78,7 +78,7 @@ export function NodeAnchors({
             <button
               type="button"
               className={cn(
-                'nodrag nopan absolute z-20 flex h-5.5 w-5.5 items-center justify-center rounded-full border bg-white text-[13px] font-semibold leading-none shadow-[0_10px_24px_-18px_rgba(15,23,42,0.75)] transition-all',
+                'nodrag nopan absolute z-20 flex h-7 w-7 items-center justify-center rounded-full border bg-white text-base font-semibold leading-none shadow-[0_10px_24px_-18px_rgba(15,23,42,0.75)] transition-all sm:h-5.5 sm:w-5.5 sm:text-[13px]',
                 anchor.buttonClass,
                 selected || pendingConnection
                   ? 'opacity-100 scale-100'
@@ -102,6 +102,11 @@ export function NodeAnchors({
                   : 'Create connection'
               }
               onClick={e => {
+                e.stopPropagation()
+                handleAnchorClick(anchor.id)
+              }}
+              onTouchEnd={e => {
+                e.preventDefault()
                 e.stopPropagation()
                 handleAnchorClick(anchor.id)
               }}
