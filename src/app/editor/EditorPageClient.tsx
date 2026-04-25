@@ -22,6 +22,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Button } from '@/components/ui/button'
 import { useUrlSync } from '@/hooks/useUrlSync'
 import { useSegmentCanvasBridge } from '@/hooks/useSegmentCanvasBridge'
+import { useIsMobile } from '@/hooks/useMediaQuery'
 import { useEpisodeStore } from '@/store/useEpisodeStore'
 
 function KeyboardShortcutsDialog() {
@@ -62,6 +63,7 @@ export type PanelMode = 'collapsed' | 'quarter' | 'custom'
 export default function EditorPageClient() {
   useUrlSync()
   useSegmentCanvasBridge()
+  const isMobile = useIsMobile()
   const { logPanelOpen, logPanelWidth, setLogPanelOpen, setLogPanelWidth, mode, canvasOpen, setCanvasOpen } = useUIStore()
   const canvasEditSegmentId = useEpisodeStore(s => s.canvasEditSegmentId)
   const setCanvasEditSegment = useEpisodeStore(s => s.setCanvasEditSegment)
@@ -227,19 +229,39 @@ export default function EditorPageClient() {
     setPanelMode('collapsed')
   }, [setLogPanelOpen])
 
-  // Auto-expand to 25% when new logs arrive while panel is collapsed
+  // Mobile: panes are mutually exclusive — opening one collapses the other.
+  // (On desktop both can be visible side-by-side as a split pane.)
   useEffect(() => {
+    if (!isMobile) return
+    if (logPanelOpen && canvasOpen) {
+      // Default to keeping canvas visible; user can toggle to logs.
+      setLogPanelOpen(false)
+      setPanelMode('collapsed')
+    }
+  }, [isMobile, logPanelOpen, canvasOpen, setLogPanelOpen])
+
+  // Auto-expand to 25% when new logs arrive while panel is collapsed.
+  // On mobile we don't auto-cover the canvas; the user opens logs explicitly.
+  useEffect(() => {
+    if (isMobile) {
+      prevLogCountRef.current = logBuffer.length
+      return
+    }
     if (!logPanelOpenRef.current && logBuffer.length > prevLogCountRef.current) {
       setLogPanelWidth(Math.round(window.innerWidth * 0.25))
       setLogPanelOpen(true)
       setPanelMode('quarter')
     }
     prevLogCountRef.current = logBuffer.length
-  }, [logBuffer.length, setLogPanelWidth, setLogPanelOpen])
+  }, [logBuffer.length, isMobile, setLogPanelWidth, setLogPanelOpen])
+
+  // On mobile, treat the log panel as a full-width overlay by setting its
+  // effective width to 100% of the viewport (the existing flex-1 path handles this).
+  const useFullWidthLogPanel = isMobile
 
   return (
     <ReactFlowProvider>
-      <div className="h-screen w-screen flex flex-col overflow-hidden bg-white">
+      <div className="flex h-[100dvh] w-full flex-col overflow-hidden bg-white">
         {/* Toolbar */}
         <Toolbar />
 
@@ -303,11 +325,11 @@ export default function EditorPageClient() {
                 ? (canvasOpen ? 'shrink-0' : 'flex-1')
                 : 'w-10 shrink-0',
             )}
-            style={logPanelOpen && canvasOpen ? { width: logPanelWidth } : undefined}
+            style={logPanelOpen && canvasOpen && !useFullWidthLogPanel ? { width: logPanelWidth } : undefined}
           >
-            {logPanelOpen && (
+            {logPanelOpen && !useFullWidthLogPanel && (
               <div
-                className="absolute left-0 top-0 z-20 h-full w-1 -translate-x-1/2 cursor-col-resize bg-transparent hover:bg-blue-200"
+                className="absolute left-0 top-0 z-20 hidden h-full w-1 -translate-x-1/2 cursor-col-resize bg-transparent hover:bg-blue-200 md:block"
                 onMouseDown={handleResizeStart}
               />
             )}

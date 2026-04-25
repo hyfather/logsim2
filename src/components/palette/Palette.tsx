@@ -1,6 +1,7 @@
 'use client'
-import React, { useCallback, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { useReactFlow } from '@xyflow/react'
+import { useIsMobile } from '@/hooks/useMediaQuery'
 import { useScenarioStore } from '@/store/useScenarioStore'
 import type { NodeType, ServiceType } from '@/types/nodes'
 import { cn } from '@/lib/utils'
@@ -72,7 +73,12 @@ function PaletteItemCard({ item, onAdd }: { item: PaletteItem; onAdd: () => void
 }
 
 export function Palette() {
+  const isMobile = useIsMobile()
+  // Default the palette to closed on mobile so it doesn't cover the canvas.
   const [open, setOpen] = useState(true)
+  useEffect(() => {
+    if (isMobile) setOpen(false)
+  }, [isMobile])
   const { screenToFlowPosition } = useReactFlow()
   const { addNode, nodes } = useScenarioStore()
 
@@ -112,7 +118,7 @@ export function Palette() {
   }
 
   return (
-    <div className="absolute left-3 top-3 bottom-3 z-10 w-44 flex flex-col rounded-lg border border-gray-200 bg-white/95 shadow-md backdrop-blur-sm overflow-hidden">
+    <div className="absolute left-3 top-3 bottom-3 z-10 flex w-40 flex-col overflow-hidden rounded-lg border border-gray-200 bg-white/95 shadow-md backdrop-blur-sm sm:w-44">
       <div className="px-2.5 py-2 border-b border-gray-200 flex items-center justify-between shrink-0">
         <h2 className="text-xs font-bold text-gray-500 uppercase tracking-wider">Add Node</h2>
         <button
