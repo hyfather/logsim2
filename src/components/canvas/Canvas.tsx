@@ -209,11 +209,14 @@ export function Canvas() {
       >
         <Background variant={BackgroundVariant.Dots} gap={20} size={1.2} color="#d9e1ec" />
         <Controls className="!bottom-4 !left-4 !rounded-2xl !border !border-white/70 !bg-white/[0.85] !shadow-[0_18px_40px_-24px_rgba(15,23,42,0.5)] !backdrop-blur" />
-        <Panel position="top-center">
-          <div className="rounded-full border border-white/80 bg-white/[0.82] px-3 py-1.5 text-xs text-slate-500 shadow-[0_18px_40px_-28px_rgba(15,23,42,0.45)] backdrop-blur">
-            Drag nodes from palette • Click a border +, then hover another + to preview the arrow • Click to connect
-          </div>
-        </Panel>
+        {nodes.length === 0 && (
+          <Panel position="top-center">
+            <div className="mx-3 max-w-[calc(100vw-1.5rem)] rounded-full border border-white/80 bg-white/[0.82] px-3 py-1.5 text-center text-xs text-slate-500 shadow-[0_18px_40px_-28px_rgba(15,23,42,0.45)] backdrop-blur">
+              <span className="hidden sm:inline">Drag nodes from palette • Click a border +, then hover another + to preview the arrow • Click to connect</span>
+              <span className="sm:hidden">Tap a node, then tap + handles to connect</span>
+            </div>
+          </Panel>
+        )}
       </ReactFlow>
     </div>
   )

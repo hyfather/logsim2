@@ -222,23 +222,36 @@ export default function EditorPageClient() {
     setLogPanelWidth(Math.round(window.innerWidth * fraction))
     setLogPanelOpen(true)
     setPanelMode(fraction === 0.25 ? 'quarter' : 'custom')
-  }, [setLogPanelWidth, setLogPanelOpen])
+    // Mobile: panes are mutually exclusive. Opening logs collapses the canvas.
+    if (window.matchMedia('(max-width: 767px)').matches) {
+      setCanvasOpen(false)
+    }
+  }, [setLogPanelWidth, setLogPanelOpen, setCanvasOpen])
 
   const handleCollapse = useCallback(() => {
     setLogPanelOpen(false)
     setPanelMode('collapsed')
   }, [setLogPanelOpen])
 
-  // Mobile: panes are mutually exclusive — opening one collapses the other.
-  // (On desktop both can be visible side-by-side as a split pane.)
-  useEffect(() => {
-    if (!isMobile) return
-    if (logPanelOpen && canvasOpen) {
-      // Default to keeping canvas visible; user can toggle to logs.
+  const handleOpenCanvas = useCallback(() => {
+    setCanvasOpen(true)
+    if (window.matchMedia('(max-width: 767px)').matches) {
       setLogPanelOpen(false)
       setPanelMode('collapsed')
     }
-  }, [isMobile, logPanelOpen, canvasOpen, setLogPanelOpen])
+  }, [setCanvasOpen, setLogPanelOpen])
+
+  // First-load reconciliation: defaults open both panes; on mobile we keep
+  // canvas (logs are accessible from the collapsed rail).
+  useEffect(() => {
+    if (!isMobile) return
+    if (logPanelOpen && canvasOpen) {
+      setLogPanelOpen(false)
+      setPanelMode('collapsed')
+    }
+    // Run once per breakpoint change to mobile, not on every open/close.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMobile])
 
   // Auto-expand to 25% when new logs arrive while panel is collapsed.
   // On mobile we don't auto-cover the canvas; the user opens logs explicitly.
@@ -280,7 +293,7 @@ export default function EditorPageClient() {
               <div className="flex h-full flex-col items-center gap-3 pt-2">
                 <button
                   title="Expand canvas"
-                  onClick={() => setCanvasOpen(true)}
+                  onClick={handleOpenCanvas}
                   className="rounded p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800"
                 >
                   <PanelLeftOpen className="h-4 w-4" />
