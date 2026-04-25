@@ -1,5 +1,5 @@
 'use client'
-import React, { useCallback, useMemo, useRef } from 'react'
+import React, { useCallback, useMemo, useRef, useState } from 'react'
 import {
   ReactFlow,
   Background,
@@ -12,6 +12,7 @@ import {
   type OnReconnect,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
+import { Sparkles } from 'lucide-react'
 import { useScenarioStore } from '@/store/useScenarioStore'
 import { useUIStore } from '@/store/useUIStore'
 import { VpcNode } from '@/components/nodes/VpcNode'
@@ -20,6 +21,7 @@ import { VirtualServerNode } from '@/components/nodes/VirtualServerNode'
 import { ServiceNode } from '@/components/nodes/ServiceNode'
 import { ConnectionEdge } from '@/components/edges/ConnectionEdge'
 import { PendingConnectionEdge } from '@/components/edges/PendingConnectionEdge'
+import { DescribeScenarioPanel } from '@/components/canvas/DescribeScenarioPanel'
 import type { Connection } from '@/types/connections'
 import type { NodeType, ServiceType } from '@/types/nodes'
 import { getDefaultConfig, getDefaultLabel } from '@/registry/nodeRegistry'
@@ -46,6 +48,7 @@ export function Canvas() {
   const { selectNode, selectEdge, pendingConnection, hoveredConnectionTarget, clearPendingConnection } = useUIStore()
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition } = useReactFlow()
+  const [describeOpen, setDescribeOpen] = useState(false)
 
   const renderedEdges = useMemo(() => {
     if (
@@ -214,7 +217,21 @@ export function Canvas() {
             Drag nodes from palette • Click a border +, then hover another + to preview the arrow • Click to connect
           </div>
         </Panel>
+        {!describeOpen && (
+          <Panel position="top-right">
+            <button
+              onClick={() => setDescribeOpen(true)}
+              type="button"
+              title="Describe a scenario in natural language"
+              className="inline-flex items-center gap-1.5 rounded-full border border-violet-200 bg-white/95 px-3 py-1.5 text-xs font-medium text-violet-700 shadow-[0_18px_40px_-28px_rgba(15,23,42,0.45)] backdrop-blur transition-colors hover:bg-violet-50"
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              Describe scenario
+            </button>
+          </Panel>
+        )}
       </ReactFlow>
+      <DescribeScenarioPanel open={describeOpen} onClose={() => setDescribeOpen(false)} />
     </div>
   )
 }
