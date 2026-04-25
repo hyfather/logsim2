@@ -73,7 +73,7 @@ function DestinationsDropdown() {
         </Button>
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="start" className="w-72">
+      <DropdownMenuContent align="start" className="w-[min(calc(100vw-1.5rem),18rem)]">
         <DropdownMenuLabel className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
           Log Destinations
         </DropdownMenuLabel>
@@ -391,8 +391,8 @@ export function SimulationControls() {
   const formatTime = (value: Date) => value.toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z')
 
   return (
-    <div className="flex items-center gap-2 border-b border-gray-200 bg-white px-3 py-2">
-      <div className="mr-2 min-w-0">
+    <div className="flex flex-wrap items-center gap-2 border-b border-gray-200 bg-white px-3 py-2">
+      <div className="mr-2 min-w-0 max-w-full">
         {isEditingTitle ? (
           <Input
             ref={titleInputRef}
@@ -401,13 +401,13 @@ export function SimulationControls() {
             onBlur={(event) => commitScenarioName(event.target.value)}
             onKeyDown={handleScenarioNameKeyDown}
             aria-label="Scenario name"
-            className="h-8 w-[220px] border-slate-300 bg-white px-2 text-xl font-semibold text-slate-900 shadow-none focus-visible:ring-2 focus-visible:ring-blue-500"
+            className="h-8 w-full max-w-[220px] border-slate-300 bg-white px-2 text-base font-semibold text-slate-900 shadow-none focus-visible:ring-2 focus-visible:ring-blue-500 sm:text-xl"
           />
         ) : (
           <button
             type="button"
             onClick={() => setIsEditingTitle(true)}
-            className="max-w-[220px] truncate rounded-md px-2 py-1 text-left text-xl font-semibold text-slate-900 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+            className="max-w-[220px] truncate rounded-md px-2 py-1 text-left text-base font-semibold text-slate-900 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 sm:text-xl"
             title="Rename scenario"
           >
             {metadata.name}
@@ -418,7 +418,7 @@ export function SimulationControls() {
       <Button
         variant="outline"
         size="sm"
-        className="h-8 px-3 text-xs"
+        className="h-8 shrink-0 px-3 text-xs"
         onClick={handleStep}
         disabled={status === 'running'}
         title="Step one tick (key: 1)"
@@ -430,7 +430,7 @@ export function SimulationControls() {
       <Button
         variant={activePlaybackMode === 'play' ? 'destructive' : 'outline'}
         size="sm"
-        className="h-8 px-3 text-xs"
+        className="h-8 shrink-0 px-3 text-xs"
         onClick={handlePlayToggle}
         title={activePlaybackMode === 'play' ? 'Stop simulation (key: 2)' : 'Play simulation (key: 2)'}
       >
@@ -441,7 +441,7 @@ export function SimulationControls() {
       <Button
         variant="outline"
         size="sm"
-        className="h-8 px-3 text-xs"
+        className="h-8 shrink-0 px-3 text-xs"
         onClick={handleReset}
         disabled={status !== 'running' && tickCount === 0}
         title="Reset simulation to tick 0"
@@ -450,7 +450,7 @@ export function SimulationControls() {
         Reset
       </Button>
 
-      <div className="flex items-center">
+      <div className="flex shrink-0 items-center">
         <Button
           variant={activePlaybackMode === 'fast-forward' ? 'destructive' : 'outline'}
           size="sm"
@@ -491,7 +491,7 @@ export function SimulationControls() {
 
       <DestinationsDropdown />
 
-      <div className="ml-auto flex items-center gap-3">
+      <div className="ml-auto flex shrink-0 items-center gap-3">
         <div
           className={cn(
             'rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em]',
@@ -503,7 +503,7 @@ export function SimulationControls() {
           {status === 'running' ? 'Running' : 'Ready'}
         </div>
 
-        <div className="text-right">
+        <div className="hidden text-right sm:block">
           <div className="text-[10px] text-gray-400">Tick: {tickCount}</div>
           <div className="font-mono text-[9px] text-gray-400">{formatTime(simulatedTime)}</div>
         </div>

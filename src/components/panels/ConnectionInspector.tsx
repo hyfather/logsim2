@@ -15,6 +15,8 @@ import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import type { Connection } from '@/types/connections'
+import { useIsMobile } from '@/hooks/useMediaQuery'
+import { cn } from '@/lib/utils'
 
 function FieldRenderer({
   field,
@@ -81,6 +83,7 @@ export function ConnectionInspector({ connection }: { connection: Connection }) 
   const { setConfigPanelOpen, selectEdge, configPanelAnchor, setConfigPanelAnchor } = useUIStore()
   const [mounted, setMounted] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
+  const isMobile = useIsMobile()
 
   const sourceLabel = useMemo(
     () => nodes.find(node => node.id === connection.sourceId)?.data.label || connection.sourceId,
@@ -134,8 +137,13 @@ export function ConnectionInspector({ connection }: { connection: Connection }) 
   return createPortal(
     <div
       ref={panelRef}
-      className="nodrag nopan fixed z-[1100] flex w-72 flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl"
-      style={{ left, top, maxHeight: panelMaxHeight }}
+      className={cn(
+        'nodrag nopan fixed z-[1100] flex flex-col overflow-hidden border border-gray-200 bg-white shadow-2xl',
+        isMobile
+          ? 'inset-x-0 bottom-0 rounded-t-xl'
+          : 'w-72 rounded-xl',
+      )}
+      style={isMobile ? { maxHeight: '85dvh' } : { left, top, maxHeight: panelMaxHeight }}
       onClick={e => e.stopPropagation()}
       onDoubleClick={e => e.stopPropagation()}
     >

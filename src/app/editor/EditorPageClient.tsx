@@ -22,6 +22,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Button } from '@/components/ui/button'
 import { useUrlSync } from '@/hooks/useUrlSync'
 import { useSegmentCanvasBridge } from '@/hooks/useSegmentCanvasBridge'
+import { useIsMobile } from '@/hooks/useMediaQuery'
 import { useEpisodeStore } from '@/store/useEpisodeStore'
 
 function KeyboardShortcutsDialog() {
@@ -62,6 +63,7 @@ export type PanelMode = 'collapsed' | 'quarter' | 'custom'
 export default function EditorPageClient() {
   useUrlSync()
   useSegmentCanvasBridge()
+  const isMobile = useIsMobile()
   const { logPanelOpen, logPanelWidth, setLogPanelOpen, setLogPanelWidth, mode, canvasOpen, setCanvasOpen } = useUIStore()
   const canvasEditSegmentId = useEpisodeStore(s => s.canvasEditSegmentId)
   const setCanvasEditSegment = useEpisodeStore(s => s.setCanvasEditSegment)
@@ -220,26 +222,59 @@ export default function EditorPageClient() {
     setLogPanelWidth(Math.round(window.innerWidth * fraction))
     setLogPanelOpen(true)
     setPanelMode(fraction === 0.25 ? 'quarter' : 'custom')
-  }, [setLogPanelWidth, setLogPanelOpen])
+    // Mobile: panes are mutually exclusive. Opening logs collapses the canvas.
+    if (window.matchMedia('(max-width: 767px)').matches) {
+      setCanvasOpen(false)
+    }
+  }, [setLogPanelWidth, setLogPanelOpen, setCanvasOpen])
 
   const handleCollapse = useCallback(() => {
     setLogPanelOpen(false)
     setPanelMode('collapsed')
   }, [setLogPanelOpen])
 
-  // Auto-expand to 25% when new logs arrive while panel is collapsed
+  const handleOpenCanvas = useCallback(() => {
+    setCanvasOpen(true)
+    if (window.matchMedia('(max-width: 767px)').matches) {
+      setLogPanelOpen(false)
+      setPanelMode('collapsed')
+    }
+  }, [setCanvasOpen, setLogPanelOpen])
+
+  // First-load reconciliation: defaults open both panes; on mobile we keep
+  // canvas (logs are accessible from the collapsed rail).
   useEffect(() => {
+    if (!isMobile) return
+    if (logPanelOpen && canvasOpen) {
+      setLogPanelOpen(false)
+      setPanelMode('collapsed')
+    }
+    // Run once per breakpoint change to mobile, not on every open/close.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMobile])
+
+  // Auto-expand to 25% when new logs arrive while panel is collapsed.
+  // On mobile we don't auto-cover the canvas; the user opens logs explicitly.
+  useEffect(() => {
+    if (isMobile) {
+      prevLogCountRef.current = logBuffer.length
+      return
+    }
     if (!logPanelOpenRef.current && logBuffer.length > prevLogCountRef.current) {
       setLogPanelWidth(Math.round(window.innerWidth * 0.25))
       setLogPanelOpen(true)
       setPanelMode('quarter')
     }
     prevLogCountRef.current = logBuffer.length
-  }, [logBuffer.length, setLogPanelWidth, setLogPanelOpen])
+  }, [logBuffer.length, isMobile, setLogPanelWidth, setLogPanelOpen])
+
+  // On mobile, treat the log panel as a full-width overlay by setting its
+  // effective width to 100% of the viewport (the existing flex-1 path handles this).
+  const useFullWidthLogPanel = isMobile
 
   return (
     <ReactFlowProvider>
-      <div className="h-screen w-screen flex flex-col overflow-hidden bg-white">
+      <div className="flex h-[100dvh] w-full flex-col overflow-hidden bg-white">
         {/* Toolbar */}
         <Toolbar />
 
@@ -258,7 +293,7 @@ export default function EditorPageClient() {
               <div className="flex h-full flex-col items-center gap-3 pt-2">
                 <button
                   title="Expand canvas"
-                  onClick={() => setCanvasOpen(true)}
+                  onClick={handleOpenCanvas}
                   className="rounded p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800"
                 >
                   <PanelLeftOpen className="h-4 w-4" />
@@ -303,11 +338,11 @@ export default function EditorPageClient() {
                 ? (canvasOpen ? 'shrink-0' : 'flex-1')
                 : 'w-10 shrink-0',
             )}
-            style={logPanelOpen && canvasOpen ? { width: logPanelWidth } : undefined}
+            style={logPanelOpen && canvasOpen && !useFullWidthLogPanel ? { width: logPanelWidth } : undefined}
           >
-            {logPanelOpen && (
+            {logPanelOpen && !useFullWidthLogPanel && (
               <div
-                className="absolute left-0 top-0 z-20 h-full w-1 -translate-x-1/2 cursor-col-resize bg-transparent hover:bg-blue-200"
+                className="absolute left-0 top-0 z-20 hidden h-full w-1 -translate-x-1/2 cursor-col-resize bg-transparent hover:bg-blue-200 md:block"
                 onMouseDown={handleResizeStart}
               />
             )}
