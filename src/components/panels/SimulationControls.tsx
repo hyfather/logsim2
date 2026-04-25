@@ -21,6 +21,7 @@ import { useDestinationsStore } from '@/store/useDestinationsStore'
 import { DESTINATION_TYPE_META } from '@/types/destinations'
 import { cn } from '@/lib/utils'
 import { generate, pickCriblPayload } from '@/lib/backendClient'
+import { canvasToScenarioYaml } from '@/lib/canvasToScenarioYaml'
 
 const FAST_FORWARD_SPEEDS = [2, 4, 8, 16]
 
@@ -177,16 +178,16 @@ export function SimulationControls() {
   const abortRef = useRef<AbortController | null>(null)
   const simCursorRef = useRef<number>(Date.now())
   const seedRef = useRef<number>(0)
-  const scenarioYamlRef = useRef<string>('')
   const destinationsRef = useRef(destinations)
   useEffect(() => { destinationsRef.current = destinations }, [destinations])
 
-  const ensureScenarioYaml = useCallback(async (): Promise<string> => {
-    if (scenarioYamlRef.current) return scenarioYamlRef.current
-    const res = await fetch('/scenarios/web-service.yaml', { cache: 'force-cache' })
-    if (!res.ok) throw new Error(`load scenario: HTTP ${res.status}`)
-    scenarioYamlRef.current = await res.text()
-    return scenarioYamlRef.current
+  // Always serialize the *current* canvas — never use a stale snapshot.
+  const buildScenarioYaml = useCallback((): string => {
+    return canvasToScenarioYaml(
+      useScenarioStore.getState().nodes,
+      useScenarioStore.getState().edges,
+      useScenarioStore.getState().metadata,
+    )
   }, [])
 
   const stopBackend = useCallback(() => {
@@ -197,7 +198,7 @@ export function SimulationControls() {
 
   const pollOnce = useCallback(async (opts: { windowTicks: number; tickIntervalMs: number; intervalMs: number }) => {
     try {
-      const yaml = await ensureScenarioYaml()
+      const yaml = buildScenarioYaml()
       const cribl = pickCriblPayload(destinationsRef.current)
       const enabledCribl = destinationsRef.current.find(d => d.enabled && d.type === 'cribl-hec')
       if (cribl && enabledCribl) setDestStatus(enabledCribl.id, 'sending')
@@ -234,7 +235,7 @@ export function SimulationControls() {
         }
       }
     }
-  }, [addLogs, ensureScenarioYaml, recordSent, setSimulatedTime, setStatus, setTickCount])
+  }, [addLogs, buildScenarioYaml, recordSent, setSimulatedTime, setStatus, setTickCount])
   const [draftScenarioName, setDraftScenarioName] = useState(metadata.name)
   const [isEditingTitle, setIsEditingTitle] = useState(false)
   const [activePlaybackMode, setActivePlaybackMode] = useState<ActivePlaybackMode>(null)
@@ -249,10 +250,6 @@ export function SimulationControls() {
     titleInputRef.current?.select()
   }, [isEditingTitle])
 
-  // Reference still held so `nodes`/`edges` aren't treated as unused imports
-  // by lint; editor state is not yet wired into backend requests (we send the
-  // bundled web-service.yaml for now). Full editor → YAML round-trip is a
-  // follow-up task.
   void nodes; void edges; void setActiveConnections; void setWorker
 
   const stopPlayback = useCallback(() => {
@@ -301,7 +298,7 @@ export function SimulationControls() {
   const handleStep = useCallback(async () => {
     if (status === 'running') return
     try {
-      const yaml = await ensureScenarioYaml()
+      const yaml = buildScenarioYaml()
       const cribl = pickCriblPayload(destinationsRef.current)
       const enabledCribl = destinationsRef.current.find(d => d.enabled && d.type === 'cribl-hec')
       if (enabledCribl) setDestStatus(enabledCribl.id, 'sending')
@@ -326,7 +323,7 @@ export function SimulationControls() {
       console.error('step failed:', err)
     }
     setActivePlaybackMode(null)
-  }, [addLogs, ensureScenarioYaml, recordSent, setSimulatedTime, setStatus, setTickCount, status])
+  }, [addLogs, buildScenarioYaml, recordSent, setSimulatedTime, setStatus, setTickCount, status])
 
   const handleReset = useCallback(() => {
     stopBackend()
