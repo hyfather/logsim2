@@ -122,4 +122,10 @@ export interface ScenarioNode {
   label: string
   /** Optional IP for service nodes (virtual servers use `config.privateIp`). */
   privateIp?: string
+  /**
+   * When `serviceType === 'custom'`, references a user-created custom node type
+   * in `useCustomNodeTypesStore`. The full spec is also embedded in `config.customType`
+   * so log generation is self-contained and does not require a store lookup.
+   */
+  customTypeId?: string
 }

@@ -118,7 +118,7 @@ async function completeOpenAI(config: AIProviderConfig, req: AICompletionRequest
     body: JSON.stringify({
       model,
       messages: req.messages.map(m => ({ role: m.role, content: m.content })),
-      max_tokens: req.maxTokens ?? 4096,
+      max_completion_tokens: req.maxTokens ?? 4096,
       ...(req.jsonMode ? { response_format: { type: 'json_object' } } : {}),
     }),
   })

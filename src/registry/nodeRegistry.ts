@@ -1,4 +1,5 @@
 import type { NodeType, ServiceType, ConfigField, ScenarioNode } from '@/types/nodes'
+import type { CustomNodeType } from '@/types/customNodeType'
 import {
   defaultVpcConfig,
   defaultSubnetConfig,
@@ -133,6 +134,12 @@ export const nginxConfigSchema: ConfigField[] = [
   { key: 'errorRate', label: 'Error Rate', type: 'slider', min: 0, max: 1, step: 0.01, defaultValue: 0, section: 'Errors' },
 ]
 
+export const customServiceConfigSchema: ConfigField[] = [
+  { key: 'port', label: 'Port', type: 'number', defaultValue: 8080, min: 1, max: 65535, section: 'Service' },
+  { key: 'trafficRate', label: 'Events / sec', type: 'slider', min: 0, max: 1000, step: 1, defaultValue: 10, section: 'Traffic' },
+  { key: 'errorRate', label: 'Error Rate', type: 'slider', min: 0, max: 1, step: 0.01, defaultValue: 0.02, section: 'Errors' },
+]
+
 export const connectionConfigSchema: ConfigField[] = [
   { key: 'protocol', label: 'Protocol', type: 'select', options: [
     { value: 'tcp', label: 'TCP' }, { value: 'udp', label: 'UDP' },
@@ -214,11 +221,39 @@ export const nodeRegistry: Record<string, NodeRegistryEntry> = {
   },
   'service:custom': {
     type: 'service', serviceType: 'custom', category: 'service', displayName: 'Custom Service', icon: '⚙️',
-    configSchema: [],
+    configSchema: customServiceConfigSchema,
     defaults: defaultCustomServiceConfig as unknown as Record<string, unknown>,
     isContainer: false, allowedParents: ['virtual_server', 'subnet'], allowedChildren: [],
     color: '#16a34a', borderStyle: 'solid',
   },
+}
+
+/**
+ * Build a palette-friendly registry entry from a user-created CustomNodeType.
+ * The custom type's full spec is embedded in `node.config.customType` when the
+ * node is dropped onto the canvas, so the engine generator is self-contained.
+ */
+export function buildCustomTypeRegistryEntry(customType: CustomNodeType): NodeRegistryEntry {
+  return {
+    type: 'service',
+    serviceType: 'custom',
+    category: 'service',
+    displayName: customType.name,
+    icon: customType.icon || '⚙️',
+    configSchema: customServiceConfigSchema,
+    defaults: {
+      name: customType.name,
+      port: customType.defaultPort ?? 8080,
+      trafficRate: customType.defaultRate,
+      errorRate: customType.defaultErrorRate,
+      customType: structuredClone(customType),
+    },
+    isContainer: false,
+    allowedParents: ['virtual_server', 'subnet'],
+    allowedChildren: [],
+    color: '#16a34a',
+    borderStyle: 'solid',
+  }
 }
 
 export function getRegistryKey(type: NodeType, serviceType?: ServiceType): string {

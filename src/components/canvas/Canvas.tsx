@@ -26,6 +26,7 @@ import type { Connection } from '@/types/connections'
 import type { NodeType, ServiceType } from '@/types/nodes'
 import { getDefaultConfig, getDefaultLabel } from '@/registry/nodeRegistry'
 import { DEFAULT_NODE_SIZES } from '@/lib/defaults'
+import { useCustomNodeTypesStore } from '@/store/useCustomNodeTypesStore'
 
 const nodeTypes = {
   vpc: VpcNode,
@@ -99,7 +100,11 @@ export function Canvas() {
       const typeData = event.dataTransfer.getData('application/logsim-node')
       if (!typeData) return
 
-      const { type, serviceType } = JSON.parse(typeData) as { type: NodeType; serviceType?: ServiceType }
+      const { type, serviceType, customTypeId } = JSON.parse(typeData) as {
+        type: NodeType
+        serviceType?: ServiceType
+        customTypeId?: string
+      }
 
       const position = screenToFlowPosition({
         x: event.clientX,
@@ -125,17 +130,42 @@ export function Canvas() {
 
       const size = DEFAULT_NODE_SIZES[type] || { width: 200, height: 80 }
 
+      let config = getDefaultConfig(type, serviceType)
+      let emoji: string | undefined
+      let label = getDefaultLabel(type, nodes.map(n => n.data), serviceType)
+
+      if (customTypeId) {
+        const customType = useCustomNodeTypesStore.getState().getById(customTypeId)
+        if (customType) {
+          config = {
+            ...config,
+            name: customType.name,
+            port: customType.defaultPort ?? 8080,
+            trafficRate: customType.defaultRate,
+            errorRate: customType.defaultErrorRate,
+            customType: structuredClone(customType),
+          }
+          emoji = customType.icon
+          const existingOfType = nodes.filter(
+            n => n.data.type === 'service' && n.data.customTypeId === customType.id,
+          ).length
+          label = `${customType.name}-${existingOfType + 1}`
+        }
+      }
+
       addNode({
         type,
         serviceType,
+        customTypeId,
         position: {
           x: position.x - size.width / 2,
           y: position.y - size.height / 2,
         },
         size,
         parentId,
-        label: getDefaultLabel(type, nodes.map(n => n.data), serviceType),
-        config: getDefaultConfig(type, serviceType),
+        label,
+        config,
+        emoji,
         provider: type === 'vpc' ? 'aws' : null,
       })
     },
