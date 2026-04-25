@@ -10,8 +10,8 @@ export function SubnetNode({ id, data, selected }: NodeProps<ScenarioFlowNode>) 
       id={id}
       data={data}
       selected={selected}
-      borderColor="#374151"
-      borderStyle="dashed"
+      borderColor="#cbd5e1"
+      borderStyle="solid"
       isContainer
       minWidth={200}
       minHeight={140}

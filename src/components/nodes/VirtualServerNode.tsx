@@ -10,7 +10,7 @@ export function VirtualServerNode({ id, data, selected }: NodeProps<ScenarioFlow
       id={id}
       data={data}
       selected={selected}
-      borderColor="#dc2626"
+      borderColor="#fca5a5"
       borderStyle="solid"
       isContainer
       minWidth={160}

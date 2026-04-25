@@ -93,14 +93,14 @@ export function BaseNode({
     setConfigPanelOpen(true)
   }, [configPanelOpen, id, selectNode, selectedNodeId, setConfigPanelAnchor, setConfigPanelOpen])
 
-  const borderStyleStr = borderStyle === 'dashed' ? '2px dashed' : '2px solid'
+  const borderStyleStr = borderStyle === 'dashed' ? '1.5px dashed' : '1.5px solid'
 
   return (
     <div
       className={cn(
-        'group/node relative overflow-visible rounded-[22px] transition-shadow',
-        selected ? 'shadow-[0_24px_50px_-24px_rgba(37,99,235,0.35)]' : 'shadow-[0_20px_45px_-32px_rgba(15,23,42,0.45)]',
-        isContainer ? 'bg-white/[0.42] backdrop-blur-[1px]' : 'bg-[linear-gradient(135deg,rgba(255,255,255,0.98),rgba(248,250,252,0.96))]',
+        'group/node relative overflow-visible rounded-md transition-shadow',
+        selected ? 'shadow-[0_18px_40px_-24px_rgba(37,99,235,0.3)]' : 'shadow-[0_14px_32px_-28px_rgba(15,23,42,0.35)]',
+        isContainer ? 'bg-white/[0.55]' : 'bg-white',
       )}
       style={{
         border: `${borderStyleStr} ${selected ? '#3b82f6' : borderColor}`,
@@ -118,23 +118,23 @@ export function BaseNode({
         minHeight={minHeight}
         onResizeEnd={handleResizeEnd}
       />
-      <button
-        type="button"
-        className="nodrag nopan absolute right-2.5 top-2.5 z-10 rounded-full border border-white/80 bg-white/[0.92] p-1.5 text-slate-500 shadow-[0_10px_24px_-16px_rgba(15,23,42,0.65)] backdrop-blur transition-all hover:border-slate-200 hover:text-slate-700"
-        onClick={handleSettingsClick}
-        title="Edit node settings"
-      >
-        <Settings className="h-3.5 w-3.5" />
-      </button>
 
       <div
-        className="absolute left-3 top-2.5 right-12 z-10 flex items-center gap-1"
+        className={cn(
+          'absolute inset-x-0 top-0 z-10 flex h-8 items-center gap-2 rounded-t-[4px] border-b border-slate-200/70 bg-white/95 px-2',
+          isContainer ? 'backdrop-blur-sm' : '',
+        )}
         onDoubleClick={handleDoubleClick}
       >
+        <NodeEmojiButton
+          nodeId={id}
+          emoji={emoji}
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-center text-[15px] leading-none hover:bg-slate-100"
+        />
         {isEditing ? (
           <input
             autoFocus
-            className="w-40 rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm font-semibold text-slate-800 shadow-sm"
+            className="min-w-0 flex-1 rounded-sm border border-slate-300 bg-white px-1.5 py-0.5 text-[13px] font-semibold text-slate-800 shadow-sm"
             value={editLabel}
             onChange={e => setEditLabel(e.target.value)}
             onKeyDown={handleLabelKeyDown}
@@ -142,25 +142,23 @@ export function BaseNode({
             onClick={e => e.stopPropagation()}
           />
         ) : (
-          <span className="max-w-full truncate text-[13px] font-semibold tracking-[-0.01em] text-slate-900">
+          <span className="min-w-0 flex-1 truncate text-[13px] font-semibold tracking-[-0.01em] text-slate-900">
             {data.label}
           </span>
         )}
-      </div>
-
-      <NodeEmojiButton
-        nodeId={id}
-        emoji={emoji}
-        className="absolute left-3 top-[34px] z-10 flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200/80 bg-white text-center text-[22px] leading-none shadow-[0_14px_28px_-22px_rgba(15,23,42,0.72)]"
-      />
-
-      <div className="absolute bottom-2.5 left-3 right-3 z-10">
-        <span className="block max-w-[220px] truncate font-mono text-[11px] text-slate-600">
-          {address}
-        </span>
-        <span className="block max-w-[220px] truncate font-mono text-[10px] text-slate-400">
-          {data.channel}
-        </span>
+        {address && (
+          <span className="shrink-0 truncate rounded-sm bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-600">
+            {address}
+          </span>
+        )}
+        <button
+          type="button"
+          className="nodrag nopan flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+          onClick={handleSettingsClick}
+          title="Edit node settings"
+        >
+          <Settings className="h-3.5 w-3.5" />
+        </button>
       </div>
 
       {children}

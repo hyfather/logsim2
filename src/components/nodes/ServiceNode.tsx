@@ -83,67 +83,71 @@ export function ServiceNode({ id, data, selected }: NodeProps<ScenarioFlowNode>)
   return (
     <div
       className={cn(
-        'group/node relative flex min-h-[72px] min-w-[200px] cursor-pointer overflow-visible rounded-[18px] border-2 bg-[linear-gradient(135deg,rgba(255,255,255,0.99),rgba(240,253,244,0.92))] px-2.5 py-2 transition-all',
+        'group/node relative flex min-h-[64px] min-w-[220px] cursor-pointer flex-col overflow-visible rounded-md bg-white transition-all',
         selected
-          ? 'shadow-[0_30px_60px_-28px_rgba(37,99,235,0.35)]'
-          : 'shadow-[0_24px_52px_-36px_rgba(15,23,42,0.5)] hover:shadow-[0_30px_60px_-34px_rgba(15,23,42,0.55)]',
+          ? 'shadow-[0_18px_40px_-24px_rgba(37,99,235,0.3)]'
+          : 'shadow-[0_14px_32px_-28px_rgba(15,23,42,0.3)] hover:shadow-[0_18px_38px_-26px_rgba(15,23,42,0.4)]',
       )}
-      style={{ borderColor: selected ? '#3b82f6' : '#16a34a' }}
+      style={{
+        border: `1.5px solid ${selected ? '#3b82f6' : '#86efac'}`,
+      }}
       title={hoverText}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
     >
       <TileResizeControls
         selected={selected}
-        minWidth={200}
-        minHeight={72}
+        minWidth={220}
+        minHeight={64}
         onResizeEnd={handleResizeEnd}
       />
-      <button
-        type="button"
-        className="nodrag nopan absolute right-2.5 top-2.5 z-10 rounded-full border border-white/80 bg-white/[0.92] p-1.5 text-slate-500 shadow-[0_10px_24px_-16px_rgba(15,23,42,0.65)] backdrop-blur transition-all hover:border-slate-200 hover:text-slate-700"
-        onClick={handleSettingsClick}
-        title="Edit node settings"
-      >
-        <Settings className="h-3.5 w-3.5" />
-      </button>
-      <div className="flex w-full items-center gap-2 pr-7">
+
+      {/* Title bar */}
+      <div className="flex h-8 items-center gap-2 rounded-t-[4px] border-b border-slate-200/70 bg-white px-2">
         <NodeEmojiButton
           nodeId={id}
           emoji={emoji}
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200/80 bg-white text-center text-lg leading-none shadow-[0_10px_22px_-18px_rgba(15,23,42,0.72)]"
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-center text-[15px] leading-none hover:bg-slate-100"
         />
-        <div className="min-w-0 flex-1">
-          {isEditing ? (
-            <input
-              autoFocus
-              className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1 text-base font-semibold text-slate-900 shadow-sm"
-              value={editLabel}
-              onChange={e => setEditLabel(e.target.value)}
-              onKeyDown={handleLabelKeyDown}
-              onBlur={handleLabelBlur}
-              onClick={e => e.stopPropagation()}
-            />
-          ) : (
-            <div className="flex items-center gap-1.5">
-              <div className="truncate text-[13px] font-semibold leading-tight tracking-[-0.015em] text-slate-950">
-                {node.label}
-              </div>
-              {node.serviceType && (
-                <div className="shrink-0 rounded-full bg-slate-900/[0.06] px-1.5 py-0.5 text-[8.5px] font-semibold uppercase tracking-[0.1em] text-slate-500">
-                  {node.serviceType}
-                </div>
-              )}
-            </div>
-          )}
-          <div className="mt-0.5 truncate font-mono text-[10.5px] text-slate-600">{address}</div>
-          <div className="truncate font-mono text-[9.5px] text-slate-400">{node.channel}</div>
-        </div>
+        {isEditing ? (
+          <input
+            autoFocus
+            className="min-w-0 flex-1 rounded-sm border border-slate-300 bg-white px-1.5 py-0.5 text-[13px] font-semibold text-slate-900 shadow-sm"
+            value={editLabel}
+            onChange={e => setEditLabel(e.target.value)}
+            onKeyDown={handleLabelKeyDown}
+            onBlur={handleLabelBlur}
+            onClick={e => e.stopPropagation()}
+          />
+        ) : (
+          <span className="min-w-0 flex-1 truncate text-[13px] font-semibold tracking-[-0.015em] text-slate-950">
+            {node.label}
+          </span>
+        )}
+        {node.serviceType && (
+          <span className="shrink-0 rounded-sm bg-slate-900/[0.06] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+            {node.serviceType}
+          </span>
+        )}
+        <button
+          type="button"
+          className="nodrag nopan flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+          onClick={handleSettingsClick}
+          title="Edit node settings"
+        >
+          <Settings className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      {/* Body */}
+      <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5 px-2.5 py-1.5">
+        <div className="truncate font-mono text-[11px] text-slate-700">{address}</div>
+        <div className="truncate font-mono text-[10px] text-slate-400">{node.channel}</div>
       </div>
 
       {selectedNodeId === id && configPanelOpen && <NodeInspector nodeData={node} />}
 
-      <NodeAnchors nodeId={id} selected={selected} accentColor={selected ? '#3b82f6' : '#16a34a'} />
+      <NodeAnchors nodeId={id} selected={selected} accentColor={selected ? '#3b82f6' : '#22c55e'} />
     </div>
   )
 }

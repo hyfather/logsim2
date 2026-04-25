@@ -63,7 +63,7 @@ function InlinePanel({ connection, onClose }: { connection: Connection; onClose:
   return (
     <div
       ref={panelRef}
-      className="nodrag nopan absolute left-1/2 top-[calc(100%+6px)] z-50 w-52 -translate-x-1/2 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl"
+      className="nodrag nopan absolute left-1/2 top-[calc(100%+6px)] z-50 w-52 -translate-x-1/2 overflow-hidden rounded-md border border-gray-200 bg-white shadow-xl"
       onClick={e => e.stopPropagation()}
       onDoubleClick={e => e.stopPropagation()}
       onMouseDown={e => e.stopPropagation()}
@@ -273,24 +273,25 @@ export function ConnectionEdge({
             position: 'absolute',
             transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
             pointerEvents: 'all',
+            zIndex: 1100,
           }}
           className="nopan"
         >
           {/* Floating toolbar */}
           <div className={cn(
-            'flex items-center rounded-full border shadow-sm transition-all',
+            'flex items-center rounded-md border shadow-sm transition-all',
             selected
-              ? 'border-blue-200 bg-blue-50 shadow-[0_2px_8px_rgba(37,99,235,0.15)]'
+              ? 'border-blue-300 bg-blue-50 shadow-[0_2px_8px_rgba(37,99,235,0.18)]'
               : hasWarning
-              ? 'border-yellow-200 bg-yellow-50'
+              ? 'border-yellow-300 bg-yellow-50'
               : isActive
-              ? 'border-cyan-200 bg-cyan-50'
-              : 'border-slate-200 bg-white',
+              ? 'border-cyan-300 bg-cyan-50'
+              : 'border-slate-300 bg-white',
           )}>
             <button
               type="button"
               className={cn(
-                'flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold transition-colors',
+                'flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-semibold transition-colors',
                 selected ? 'text-blue-700 hover:bg-blue-100' : hasWarning ? 'text-yellow-700' : isActive ? 'text-cyan-800' : 'text-slate-600 hover:bg-slate-50',
               )}
               onClick={handleBadgeClick}

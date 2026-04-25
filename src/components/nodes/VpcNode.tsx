@@ -10,7 +10,7 @@ export function VpcNode({ id, data, selected }: NodeProps<ScenarioFlowNode>) {
       id={id}
       data={data}
       selected={selected}
-      borderColor="#000000"
+      borderColor="#94a3b8"
       borderStyle="solid"
       isContainer
       minWidth={320}
