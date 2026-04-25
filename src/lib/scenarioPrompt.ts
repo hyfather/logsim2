@@ -1,7 +1,7 @@
 'use client'
 import type { AIProviderConfig } from '@/types/aiKeys'
 import type { ScenarioNode, NodeType, ServiceType, NodeConfig, Provider } from '@/types/nodes'
-import type { Connection, Protocol } from '@/types/connections'
+import type { Connection, Protocol, AnchorHandleId } from '@/types/connections'
 import type { ScenarioFlowNode, ConnectionFlowEdge } from '@/types/flow'
 import { complete } from '@/lib/aiClient'
 import { generateId } from '@/lib/id'
@@ -14,18 +14,17 @@ import { getDefaultNodeEmoji } from '@/lib/nodeAppearance'
 const VALID_NODE_TYPES: NodeType[] = ['vpc', 'subnet', 'virtual_server', 'service']
 const VALID_SERVICE_TYPES: ServiceType[] = ['nodejs', 'golang', 'postgres', 'mysql', 'redis', 'nginx', 'custom']
 const VALID_PROTOCOLS: Protocol[] = ['tcp', 'udp', 'icmp', 'http', 'https', 'grpc']
+const VALID_PATTERNS = ['steady', 'bursty', 'diurnal', 'incident'] as const
+type TrafficPattern = typeof VALID_PATTERNS[number]
 
 // ── Schema we ask the model to produce ────────────────────────────────────────
 
 interface ProposedNode {
-  /** Stable identifier used to reference this node in `parent` and edges. */
   id: string
   type: NodeType
   serviceType?: ServiceType
   label?: string
-  /** Either an `id` from the same response, or null/undefined for top-level. */
   parent?: string | null
-  /** Free-form notes that become a hint in the node's config (optional). */
   notes?: string
 }
 
@@ -35,66 +34,206 @@ interface ProposedEdge {
   protocol?: Protocol
   port?: number
   trafficRate?: number
-  trafficPattern?: 'steady' | 'bursty' | 'diurnal' | 'incident'
+  trafficPattern?: TrafficPattern
   errorRate?: number
 }
 
 interface ProposedScenario {
   name?: string
   description?: string
+  reasoning?: string
   nodes: ProposedNode[]
   edges?: ProposedEdge[]
 }
 
 // ── Prompt ────────────────────────────────────────────────────────────────────
 
-const SYSTEM_PROMPT = `You translate natural-language descriptions of cloud architectures into a strict JSON scenario for the LogSim canvas editor.
+const SYSTEM_PROMPT = `You translate a natural-language description of cloud architecture into a strict JSON scenario for the LogSim canvas editor.
 
-LogSim models a layered topology:
-  - "vpc" containers hold "subnet" containers
-  - "subnet" containers hold "virtual_server" containers and/or "service" leaves
-  - "virtual_server" containers hold "service" leaves
-  - "service" nodes also have a "serviceType": one of nodejs | golang | postgres | mysql | redis | nginx | custom
+LogSim is an **observability and security simulation environment**. Scenarios you generate become live systems that emit realistic infrastructure logs, network flows, traffic patterns, and (optionally) attack signals so engineers can practice detection, response, and analysis. Your goal is to produce a scenario that is **realistic enough to generate interesting telemetry** — not the bare minimum the user literally typed.
 
-Edges connect any two nodes (typically service-to-service or service-to-database) and represent traffic between them.
+═══════════════════════════════════════════════════════════════════════════
+TOPOLOGY MODEL (strict)
+═══════════════════════════════════════════════════════════════════════════
 
-Respond with ONE JSON object and nothing else. No prose, no markdown fences. Schema:
+  vpc            → top-level network boundary
+    └ subnet     → network segment (must be inside a vpc)
+        ├ service          ← default placement for processes/daemons
+        └ virtual_server   ← OPT-IN host (EC2/VM)
+            └ service       ← only when user explicitly mentioned hosts
+
+Service types (pick one when type="service"):
+  nodejs | golang | postgres | mysql | redis | nginx | custom
+
+Edges connect two nodes. Almost always service ↔ service. They represent traffic.
+
+═══════════════════════════════════════════════════════════════════════════
+RESPONSE FORMAT — return ONE JSON object, no prose, no markdown fences.
+═══════════════════════════════════════════════════════════════════════════
+
 {
-  "name": "Short scenario name",
-  "description": "One-sentence summary",
+  "name": "Short scenario name (≤60 chars)",
+  "description": "One-sentence summary of intent and traffic flow.",
+  "reasoning": "1-3 short sentences: which infra you implied, why N edges, why public/private split, etc.",
   "nodes": [
     {
-      "id": "vpc-prod",          // unique within this response
-      "type": "vpc",             // one of: vpc | subnet | virtual_server | service
-      "serviceType": "postgres",  // ONLY when type="service". one of: nodejs | golang | postgres | mysql | redis | nginx | custom
-      "label": "prod-vpc",        // short human label
-      "parent": null,             // id of the parent container, or null for top-level
-      "notes": "optional"
+      "id": "stable-id-unique-in-this-response",
+      "type": "vpc" | "subnet" | "virtual_server" | "service",
+      "serviceType": "nodejs|golang|postgres|mysql|redis|nginx|custom",  // ONLY when type="service"
+      "label": "kebab-case role label (e.g. api-gateway, user-db, edge-lb)",
+      "parent": "<id of parent container>",                               // null only for vpc
+      "notes": "free-form purpose, e.g. 'fronts external HTTPS' or 'stores user records'"
     }
   ],
   "edges": [
     {
-      "source": "svc-api",       // node id
-      "target": "svc-db",        // node id
-      "protocol": "tcp",         // tcp | udp | icmp | http | https | grpc
-      "port": 5432,               // 1..65535
-      "trafficRate": 50,          // requests per second; 1..1000
-      "trafficPattern": "steady", // steady | bursty | diurnal | incident
-      "errorRate": 0.01           // 0..1
+      "source": "<node id>",
+      "target": "<node id>",
+      "protocol": "tcp|udp|icmp|http|https|grpc",
+      "port": 1..65535,
+      "trafficRate": 1..1000,                          // requests/sec — pick realistically per role
+      "trafficPattern": "steady|bursty|diurnal|incident",
+      "errorRate": 0..0.2                               // typically 0.001–0.03
     }
   ]
 }
 
-Rules:
-  - Always include at least one VPC. Place subnets inside the VPC, not at top level.
-  - Use realistic labels (e.g. "api-gateway", "user-db", "cache").
-  - Choose sensible default ports (postgres:5432, mysql:3306, redis:6379, nginx:80, services:8080).
-  - Keep the topology compact: 1 VPC, 1-3 subnets, 2-8 services unless the user asks for more.
-  - Every node id must be unique. Every "parent", "source", "target" must reference an id present in "nodes".
-  - Output ONLY the JSON object. Do not wrap it in code fences.`
+═══════════════════════════════════════════════════════════════════════════
+RULES
+═══════════════════════════════════════════════════════════════════════════
+
+1. STRUCTURE
+   • Always include at least one VPC. Subnets always have a VPC parent.
+   • Default placement: \`service\` directly inside \`subnet\`. NO virtual_server in between.
+   • Add \`virtual_server\` ONLY when the user explicitly says: EC2, VM, virtual machine, host, instance, hardware, machine, "running on a server".
+   • Multiple environments mentioned (prod + staging) → multiple VPCs.
+
+2. CARDINALITY (CRITICAL — most common mistake)
+   • "two go app servers" → create exactly 2 service nodes.
+   • If N services all "hit" / "talk to" / "connect to" / "use" the same target → emit N separate edges (one per source). NEVER collapse to one edge.
+   • Load balancer in front of N services → 1 edge clients→LB plus N edges LB→service-i.
+
+3. IMPLIED INFRASTRUCTURE — fill in what an experienced engineer would add
+   • 2+ same-role app services, OR mention of "production" / "load" / "users hit" → add an \`nginx\` service in front as the load balancer/reverse proxy. Place it in a public subnet.
+   • External traffic implied (public API, web app, "users", "internet") → split topology into \`public-subnet\` (ingress like nginx) and \`app-subnet\` / \`data-subnet\` (private). Apps and DBs in private subnets.
+   • A database or cache in a public subnet is wrong. Always private.
+   • Do NOT invent services unrelated to what the user described — only fill obvious gaps.
+
+4. CANONICAL PORTS & PROTOCOLS (use these unless overridden)
+     postgres   5432  tcp           mysql      3306  tcp
+     redis      6379  tcp           nginx HTTP   80  http
+     nginx TLS   443  https         nodejs     3000  http
+     golang     8080  http          internal RPC 50051 grpc
+   Use \`http\`/\`https\` for L7 service↔service traffic; \`tcp\` for DB/cache.
+
+5. TRAFFIC REALISM — every edge MUST set all five edge fields. Pick numbers that make telemetry interesting:
+     clients → ingress (nginx):   trafficRate 50–200,  pattern "diurnal" or "bursty",  errorRate 0.005–0.02
+     ingress → app:                trafficRate 50–150,  pattern "steady",               errorRate 0.002–0.01
+     app → primary DB:             trafficRate 20–80,   pattern "steady",               errorRate 0.0005–0.005
+     app → cache:                  trafficRate 100–400, pattern "steady",               errorRate 0.0001–0.001
+     app → app (internal RPC):     trafficRate 30–120,  pattern "steady",               errorRate 0.001–0.005
+   • If user mentions "burst"/"spike" → use "bursty" on the relevant edge.
+   • If user mentions "incident"/"outage"/"5xx storm" → use "incident" pattern AND bump errorRate to 0.05–0.2 ONLY on the affected edge(s).
+   • If user mentions diurnal traffic / business-hours → "diurnal" on the ingress edge.
+
+6. NAMING CONVENTIONS
+   • Labels are kebab-case role names: \`api-gateway\`, \`user-db\`, \`session-cache\`, \`edge-lb\`, \`payments-api\`. NOT \`vm-1\` / \`server01\`.
+   • VPC label includes environment if the user mentioned one: \`prod-vpc\`, \`staging-vpc\`, \`dev-vpc\`.
+   • Subnet label describes the tier: \`public-subnet\`, \`app-subnet\`, \`data-subnet\`. (NOT just \`subnet-1\`.)
+   • IDs (the \`id\` field) can be short and stable, like \`vpc\`, \`pubnet\`, \`api1\`, \`db\`. They never appear in the UI.
+
+7. NOTES
+   For services with non-obvious purpose, fill \`notes\` with one short sentence about what the service does. Future log generators read this for realism.
+
+8. SIZE
+   Keep it focused. Prefer 1 VPC, 1–3 subnets, 2–10 services unless the user explicitly asks for more.
+
+═══════════════════════════════════════════════════════════════════════════
+WORKED EXAMPLES — STUDY THESE BEFORE GENERATING
+═══════════════════════════════════════════════════════════════════════════
+
+────────────────────────────────────────────────────────────────────────
+INPUT: "A production VPC with two Go app servers hitting a MySQL"
+
+OUTPUT:
+{
+  "name": "Prod Go API on MySQL",
+  "description": "Two Go API instances behind an Nginx load balancer, both writing to a primary MySQL.",
+  "reasoning": "User said 'production' and '2 app servers' → added Nginx LB in a public subnet and split private app/data subnets. Two edges from LB→APIs and two edges from APIs→DB to preserve cardinality.",
+  "nodes": [
+    { "id": "vpc",      "type": "vpc",     "label": "prod-vpc",       "parent": null },
+    { "id": "pubnet",   "type": "subnet",  "label": "public-subnet",  "parent": "vpc" },
+    { "id": "appnet",   "type": "subnet",  "label": "app-subnet",     "parent": "vpc" },
+    { "id": "datanet",  "type": "subnet",  "label": "data-subnet",    "parent": "vpc" },
+    { "id": "lb",       "type": "service", "serviceType": "nginx",  "label": "edge-lb",  "parent": "pubnet",  "notes": "Fronts external HTTPS, load-balances to Go APIs." },
+    { "id": "api1",     "type": "service", "serviceType": "golang", "label": "api-1",    "parent": "appnet",  "notes": "Stateless Go API." },
+    { "id": "api2",     "type": "service", "serviceType": "golang", "label": "api-2",    "parent": "appnet",  "notes": "Stateless Go API." },
+    { "id": "db",       "type": "service", "serviceType": "mysql",  "label": "user-db",  "parent": "datanet", "notes": "Primary user data store." }
+  ],
+  "edges": [
+    { "source": "lb",   "target": "api1", "protocol": "http", "port": 8080, "trafficRate": 80, "trafficPattern": "steady",  "errorRate": 0.005 },
+    { "source": "lb",   "target": "api2", "protocol": "http", "port": 8080, "trafficRate": 80, "trafficPattern": "steady",  "errorRate": 0.005 },
+    { "source": "api1", "target": "db",   "protocol": "tcp",  "port": 3306, "trafficRate": 40, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "api2", "target": "db",   "protocol": "tcp",  "port": 3306, "trafficRate": 40, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ]
+}
+
+────────────────────────────────────────────────────────────────────────
+INPUT: "One Node.js API connected to Postgres and Redis"
+
+OUTPUT:
+{
+  "name": "Single API + Postgres + Redis",
+  "description": "One Node.js API talking to Postgres for persistence and Redis for cache.",
+  "reasoning": "No production / external traffic mentioned → no LB, single subnet, services placed directly in subnet (no virtual_server wrapper).",
+  "nodes": [
+    { "id": "vpc", "type": "vpc",    "label": "dev-vpc",    "parent": null },
+    { "id": "net", "type": "subnet", "label": "app-subnet", "parent": "vpc" },
+    { "id": "api", "type": "service", "serviceType": "nodejs",   "label": "api",            "parent": "net" },
+    { "id": "pg",  "type": "service", "serviceType": "postgres", "label": "app-db",         "parent": "net", "notes": "Primary relational store." },
+    { "id": "rd",  "type": "service", "serviceType": "redis",    "label": "session-cache",  "parent": "net", "notes": "Hot-key session cache." }
+  ],
+  "edges": [
+    { "source": "api", "target": "pg", "protocol": "tcp", "port": 5432, "trafficRate": 30,  "trafficPattern": "steady", "errorRate": 0.001 },
+    { "source": "api", "target": "rd", "protocol": "tcp", "port": 6379, "trafficRate": 200, "trafficPattern": "steady", "errorRate": 0.0005 }
+  ]
+}
+
+────────────────────────────────────────────────────────────────────────
+INPUT: "Three EC2 instances each running a Node service, all talking to a Postgres on its own EC2"
+
+OUTPUT (note: user said "EC2" → wrap services in virtual_servers):
+{
+  "name": "Node fleet on EC2 + Postgres",
+  "description": "Three Node.js services on EC2 instances all reading/writing to a Postgres on a dedicated EC2.",
+  "reasoning": "User explicitly said EC2 → used virtual_server wrappers. No LB because user did not mention production or external traffic.",
+  "nodes": [
+    { "id": "vpc",   "type": "vpc",     "label": "vpc",        "parent": null },
+    { "id": "net",   "type": "subnet",  "label": "app-subnet", "parent": "vpc" },
+    { "id": "ec2-1", "type": "virtual_server", "label": "node-host-1", "parent": "net" },
+    { "id": "ec2-2", "type": "virtual_server", "label": "node-host-2", "parent": "net" },
+    { "id": "ec2-3", "type": "virtual_server", "label": "node-host-3", "parent": "net" },
+    { "id": "ec2-db","type": "virtual_server", "label": "db-host",     "parent": "net" },
+    { "id": "svc1",  "type": "service", "serviceType": "nodejs",   "label": "node-1", "parent": "ec2-1" },
+    { "id": "svc2",  "type": "service", "serviceType": "nodejs",   "label": "node-2", "parent": "ec2-2" },
+    { "id": "svc3",  "type": "service", "serviceType": "nodejs",   "label": "node-3", "parent": "ec2-3" },
+    { "id": "pg",    "type": "service", "serviceType": "postgres", "label": "app-db", "parent": "ec2-db" }
+  ],
+  "edges": [
+    { "source": "svc1", "target": "pg", "protocol": "tcp", "port": 5432, "trafficRate": 30, "trafficPattern": "steady", "errorRate": 0.001 },
+    { "source": "svc2", "target": "pg", "protocol": "tcp", "port": 5432, "trafficRate": 30, "trafficPattern": "steady", "errorRate": 0.001 },
+    { "source": "svc3", "target": "pg", "protocol": "tcp", "port": 5432, "trafficRate": 30, "trafficPattern": "steady", "errorRate": 0.001 }
+  ]
+}
+
+═══════════════════════════════════════════════════════════════════════════
+Output the JSON object only. No prose, no markdown fences, no commentary.`
 
 function buildUserPrompt(description: string): string {
-  return `Describe the following architecture as a LogSim scenario JSON, following the system schema exactly:\n\n${description.trim()}`
+  return `Convert the following architecture description into a LogSim scenario JSON, following the system schema and rules exactly. Apply the cardinality and implied-infrastructure rules. Fill every required edge field.
+
+Description:
+${description.trim()}`
 }
 
 // ── Generation ───────────────────────────────────────────────────────────────
@@ -104,6 +243,7 @@ export interface GenerateScenarioResult {
   flowEdges: ConnectionFlowEdge[]
   name?: string
   description?: string
+  reasoning?: string
 }
 
 export async function generateScenarioFromDescription(
@@ -116,23 +256,22 @@ export async function generateScenarioFromDescription(
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: buildUserPrompt(description) },
     ],
-    maxTokens: 2048,
+    maxTokens: 4096,
     jsonMode: true,
     signal: options.signal,
   })
 
   const proposed = parseProposedScenario(completion.text)
-  return materializeScenario(proposed)
+  const cleaned = postProcessProposedScenario(proposed, description)
+  return materializeScenario(cleaned)
 }
 
 // ── Parser ───────────────────────────────────────────────────────────────────
 
 function extractJsonBlock(raw: string): string {
   const trimmed = raw.trim()
-  // Strip ```json ... ``` fences if the model returned them despite instructions.
   const fenceMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
   if (fenceMatch) return fenceMatch[1].trim()
-  // Otherwise pull the first {...} balanced span.
   const start = trimmed.indexOf('{')
   const end = trimmed.lastIndexOf('}')
   if (start === -1 || end === -1 || end <= start) return trimmed
@@ -204,8 +343,8 @@ function parseProposedScenario(raw: string): ProposedScenario {
         protocol,
         port: typeof edge.port === 'number' ? edge.port : undefined,
         trafficRate: typeof edge.trafficRate === 'number' ? edge.trafficRate : undefined,
-        trafficPattern: ['steady', 'bursty', 'diurnal', 'incident'].includes(edge.trafficPattern as string)
-          ? (edge.trafficPattern as ProposedEdge['trafficPattern'])
+        trafficPattern: VALID_PATTERNS.includes(edge.trafficPattern as TrafficPattern)
+          ? (edge.trafficPattern as TrafficPattern)
           : undefined,
         errorRate: typeof edge.errorRate === 'number' ? edge.errorRate : undefined,
       })
@@ -215,15 +354,69 @@ function parseProposedScenario(raw: string): ProposedScenario {
   return {
     name: typeof obj.name === 'string' ? obj.name : undefined,
     description: typeof obj.description === 'string' ? obj.description : undefined,
+    reasoning: typeof obj.reasoning === 'string' ? obj.reasoning : undefined,
     nodes,
     edges,
   }
 }
 
+// ── Post-process: lift services out of unwanted virtual_servers ──────────────
+
+const HOST_TRIGGER_RE = /\b(ec2|vm|virtual\s*machine|instance|host|hardware|bare[\s-]?metal|machine|server\s+(box|hardware))\b/i
+
+function postProcessProposedScenario(scenario: ProposedScenario, userDescription: string): ProposedScenario {
+  const userMentionedHosts = HOST_TRIGGER_RE.test(userDescription)
+  if (userMentionedHosts) return scenario // model is allowed to use virtual_servers freely
+
+  // Build child index
+  const childrenByParent = new Map<string, ProposedNode[]>()
+  for (const n of scenario.nodes) {
+    if (n.parent) {
+      const arr = childrenByParent.get(n.parent) ?? []
+      arr.push(n)
+      childrenByParent.set(n.parent, arr)
+    }
+  }
+
+  // Find virtual_servers we want to drop. We drop a VS only if ALL its children are services
+  // (otherwise structure is more complex and we leave it alone).
+  const idsToDrop = new Set<string>()
+  for (const n of scenario.nodes) {
+    if (n.type !== 'virtual_server') continue
+    const kids = childrenByParent.get(n.id) ?? []
+    if (kids.length === 0) {
+      idsToDrop.add(n.id)
+      continue
+    }
+    if (kids.every(k => k.type === 'service')) {
+      idsToDrop.add(n.id)
+    }
+  }
+  if (idsToDrop.size === 0) return scenario
+
+  // Build map: dropped VS id → its parent (the subnet)
+  const reparent = new Map<string, string | null>()
+  for (const droppedId of idsToDrop) {
+    const vs = scenario.nodes.find(n => n.id === droppedId)
+    reparent.set(droppedId, vs?.parent ?? null)
+  }
+
+  const newNodes: ProposedNode[] = []
+  for (const n of scenario.nodes) {
+    if (idsToDrop.has(n.id)) continue
+    if (n.parent && reparent.has(n.parent)) {
+      newNodes.push({ ...n, parent: reparent.get(n.parent) ?? null })
+    } else {
+      newNodes.push(n)
+    }
+  }
+
+  return { ...scenario, nodes: newNodes }
+}
+
 // ── Materializer (proposed → ScenarioFlowNode/ConnectionFlowEdge) ────────────
 
 interface MaterializedNode extends ScenarioNode {
-  /** Original id used by the LLM, kept so we can resolve edges by it. */
   __aiId?: string
 }
 
@@ -233,11 +426,9 @@ const VS_GAP = 24
 const SERVICE_GAP = 16
 
 function materializeScenario(proposed: ProposedScenario): GenerateScenarioResult {
-  // Map from AI id → real generated id.
   const idMap = new Map<string, string>()
   for (const n of proposed.nodes) idMap.set(n.id, generateId())
 
-  // Build a parent → children index for layout.
   const childrenByParent = new Map<string | null, ProposedNode[]>()
   for (const n of proposed.nodes) {
     const pid = n.parent && idMap.has(n.parent) ? n.parent : null
@@ -246,8 +437,6 @@ function materializeScenario(proposed: ProposedScenario): GenerateScenarioResult
     childrenByParent.set(pid, arr)
   }
 
-  // Compute size + position recursively. Returns pixel size of the laid-out node.
-  // Positions are RELATIVE to the parent (React Flow handles nested coords).
   interface Layout {
     aiId: string
     width: number
@@ -273,10 +462,6 @@ function materializeScenario(proposed: ProposedScenario): GenerateScenarioResult
       return { aiId, width: size.width, height: size.height, x: 0, y: 0, children: [] }
     }
 
-    // Layout strategy:
-    //  - vpc      → tile its subnets in a horizontal row (wraps every 2)
-    //  - subnet   → stack virtual_servers/services vertically
-    //  - vserver  → tile services horizontally
     let cursorX = PADDING
     let cursorY = PADDING + 28 // header strip
     let rowHeight = 0
@@ -284,7 +469,6 @@ function materializeScenario(proposed: ProposedScenario): GenerateScenarioResult
     const gap = node.type === 'vpc' ? SUBNET_GAP : node.type === 'subnet' ? VS_GAP : SERVICE_GAP
 
     if (node.type === 'subnet') {
-      // vertical stack
       for (const c of childLayouts) {
         c.x = PADDING
         c.y = cursorY
@@ -296,7 +480,6 @@ function materializeScenario(proposed: ProposedScenario): GenerateScenarioResult
       return { aiId, width, height, x: 0, y: 0, children: childLayouts }
     }
 
-    // vpc + virtual_server: horizontal row that wraps every WRAP children
     const WRAP = node.type === 'vpc' ? 2 : 3
     let inRow = 0
     for (const c of childLayouts) {
@@ -330,7 +513,6 @@ function materializeScenario(proposed: ProposedScenario): GenerateScenarioResult
     topLayouts.push(l)
   }
 
-  // Build the actual ScenarioNode list using the layout.
   const scenarioNodes: MaterializedNode[] = []
   function emit(layout: Layout, parentId: string | null) {
     const proposedNode = proposed.nodes.find(n => n.id === layout.aiId)!
@@ -361,6 +543,10 @@ function materializeScenario(proposed: ProposedScenario): GenerateScenarioResult
 
   const withChannels = recomputeAllChannels(scenarioNodes)
 
+  // Build a world-coordinate rect for every node so we can pick edge anchors
+  // that don't punch through other nodes.
+  const worldRect = computeWorldRects(withChannels)
+
   // Build flow nodes
   const flowNodes: ScenarioFlowNode[] = withChannels.map(node => {
     const base: ScenarioFlowNode = {
@@ -377,18 +563,27 @@ function materializeScenario(proposed: ProposedScenario): GenerateScenarioResult
     return base
   })
 
-  // Build flow edges
+  // Build flow edges with computed anchors
   const proposedEdges = proposed.edges ?? []
   const flowEdges: ConnectionFlowEdge[] = []
   for (const pe of proposedEdges) {
     const sourceId = idMap.get(pe.source)
     const targetId = idMap.get(pe.target)
     if (!sourceId || !targetId) continue
+    if (sourceId === targetId) continue
+
+    const sRect = worldRect.get(sourceId)
+    const tRect = worldRect.get(targetId)
+    const { sourceHandle, targetHandle } = sRect && tRect
+      ? pickAnchors(sRect, tRect)
+      : { sourceHandle: 'right' as AnchorHandleId, targetHandle: 'left' as AnchorHandleId }
 
     const conn: Connection = {
       id: generateId(),
       sourceId,
       targetId,
+      sourceHandle,
+      targetHandle,
       protocol: pe.protocol ?? 'tcp',
       port: typeof pe.port === 'number' ? Math.max(1, Math.min(65535, Math.round(pe.port))) : 80,
       trafficPattern: pe.trafficPattern ?? 'steady',
@@ -400,6 +595,8 @@ function materializeScenario(proposed: ProposedScenario): GenerateScenarioResult
       id: conn.id,
       source: conn.sourceId,
       target: conn.targetId,
+      sourceHandle,
+      targetHandle,
       type: 'connectionEdge',
       data: asFlowEdgeData(conn),
       label: conn.protocol.toUpperCase(),
@@ -413,5 +610,64 @@ function materializeScenario(proposed: ProposedScenario): GenerateScenarioResult
     flowEdges,
     name: proposed.name,
     description: proposed.description,
+    reasoning: proposed.reasoning,
   }
+}
+
+// ── Anchor computation ──────────────────────────────────────────────────────
+
+interface WorldRect { x: number; y: number; width: number; height: number }
+
+function computeWorldRects(nodes: ScenarioNode[]): Map<string, WorldRect> {
+  const byId = new Map(nodes.map(n => [n.id, n]))
+  const cache = new Map<string, WorldRect>()
+  function world(id: string): WorldRect {
+    const cached = cache.get(id)
+    if (cached) return cached
+    const n = byId.get(id)
+    if (!n) {
+      const empty = { x: 0, y: 0, width: 0, height: 0 }
+      cache.set(id, empty)
+      return empty
+    }
+    const w = n.size?.width ?? DEFAULT_NODE_SIZES[n.type].width
+    const h = n.size?.height ?? DEFAULT_NODE_SIZES[n.type].height
+    if (!n.parentId) {
+      const r = { x: n.position.x, y: n.position.y, width: w, height: h }
+      cache.set(id, r)
+      return r
+    }
+    const parent = world(n.parentId)
+    const r = { x: parent.x + n.position.x, y: parent.y + n.position.y, width: w, height: h }
+    cache.set(id, r)
+    return r
+  }
+  for (const n of nodes) world(n.id)
+  return cache
+}
+
+/**
+ * Pick source/target handles for an edge based on the relative geometry of the
+ * two world rects. Goal: avoid drawing a straight line through a sibling node
+ * by using the side of each rect that faces the other rect.
+ */
+function pickAnchors(s: WorldRect, t: WorldRect): { sourceHandle: AnchorHandleId; targetHandle: AnchorHandleId } {
+  const sCx = s.x + s.width / 2
+  const sCy = s.y + s.height / 2
+  const tCx = t.x + t.width / 2
+  const tCy = t.y + t.height / 2
+  const dx = tCx - sCx
+  const dy = tCy - sCy
+
+  // Use a small bias so near-equal dx/dy still picks a deterministic axis.
+  if (Math.abs(dy) > Math.abs(dx) * 1.05) {
+    // Vertical relationship.
+    return dy > 0
+      ? { sourceHandle: 'bottom', targetHandle: 'top' }
+      : { sourceHandle: 'top', targetHandle: 'bottom' }
+  }
+  // Horizontal relationship.
+  return dx > 0
+    ? { sourceHandle: 'right', targetHandle: 'left' }
+    : { sourceHandle: 'left', targetHandle: 'right' }
 }
