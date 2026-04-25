@@ -59,6 +59,26 @@ function toFlowNode(node: ScenarioNode): FlowNode {
   }
 }
 
+// React Flow requires parent nodes to appear before their children in the array,
+// otherwise dragging a parent doesn't propagate to children's handle bounds and
+// edges visually disconnect.
+function sortNodesByHierarchy(nodes: FlowNode[]): FlowNode[] {
+  const byId = new Map(nodes.map(n => [n.id, n]))
+  const seen = new Set<string>()
+  const out: FlowNode[] = []
+  const visit = (node: FlowNode) => {
+    if (seen.has(node.id)) return
+    const parentId = node.parentId
+    if (parentId && byId.has(parentId)) {
+      visit(byId.get(parentId)!)
+    }
+    seen.add(node.id)
+    out.push(node)
+  }
+  nodes.forEach(visit)
+  return out
+}
+
 function toFlowEdge(conn: Connection): FlowEdge {
   return {
     id: conn.id,
@@ -153,7 +173,7 @@ export const useScenarioStore = create<ScenarioState>()(
       scNode.channel = computeChannel(scNode, [...allScNodes, scNode])
 
       const flowNode = toFlowNode(scNode)
-      set(state => ({ nodes: [...state.nodes, flowNode] }))
+      set(state => ({ nodes: sortNodesByHierarchy([...state.nodes, flowNode]) }))
 
       return id
     },
@@ -251,11 +271,11 @@ export const useScenarioStore = create<ScenarioState>()(
         const sc = recomputed.find(s => s.id === n.id) ?? n.data
         return { ...n, data: asFlowNodeData(sc) }
       })
-      set({ nodes: finalNodes })
+      set({ nodes: sortNodesByHierarchy(finalNodes) })
     },
 
     loadScenario: (nodes, edges, metadata) => {
-      set({ nodes, edges, metadata })
+      set({ nodes: sortNodesByHierarchy(nodes), edges, metadata })
     },
 
     organizeLayout: () => {
