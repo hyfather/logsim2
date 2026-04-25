@@ -12,7 +12,7 @@ import {
   type OnReconnect,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { Sparkles } from 'lucide-react'
+import { Sparkles, LayoutGrid } from 'lucide-react'
 import { useScenarioStore } from '@/store/useScenarioStore'
 import { useUIStore } from '@/store/useUIStore'
 import { VpcNode } from '@/components/nodes/VpcNode'
@@ -43,12 +43,21 @@ export function Canvas() {
   const {
     nodes, edges,
     onNodesChange, onEdgesChange, onConnect,
-    addNode, updateEdge,
+    addNode, updateEdge, organizeLayout,
   } = useScenarioStore()
   const { selectNode, selectEdge, pendingConnection, hoveredConnectionTarget, clearPendingConnection } = useUIStore()
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
-  const { screenToFlowPosition } = useReactFlow()
+  const { screenToFlowPosition, fitView } = useReactFlow()
   const [describeOpen, setDescribeOpen] = useState(false)
+
+  const handleOrganize = useCallback(() => {
+    organizeLayout()
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        fitView({ padding: 0.2, duration: 400, maxZoom: 1 })
+      })
+    })
+  }, [organizeLayout, fitView])
 
   const renderedEdges = useMemo(() => {
     if (
@@ -222,15 +231,28 @@ export function Canvas() {
         )}
         {!describeOpen && (
           <Panel position="top-right">
-            <button
-              onClick={() => setDescribeOpen(true)}
-              type="button"
-              title="Describe a scenario in natural language"
-              className="inline-flex items-center gap-1.5 rounded-full border border-violet-200 bg-white/95 px-3 py-1.5 text-xs font-medium text-violet-700 shadow-[0_18px_40px_-28px_rgba(15,23,42,0.45)] backdrop-blur transition-colors hover:bg-violet-50"
-            >
-              <Sparkles className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Describe scenario</span>
-            </button>
+            <div className="flex items-center gap-2">
+              {nodes.length > 0 && (
+                <button
+                  onClick={handleOrganize}
+                  type="button"
+                  title="Re-arrange nodes by traffic tier (preserves all connections)"
+                  className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white/95 px-3 py-1.5 text-xs font-medium text-slate-700 shadow-[0_18px_40px_-28px_rgba(15,23,42,0.45)] backdrop-blur transition-colors hover:bg-slate-50"
+                >
+                  <LayoutGrid className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">Organize</span>
+                </button>
+              )}
+              <button
+                onClick={() => setDescribeOpen(true)}
+                type="button"
+                title="Describe a scenario in natural language"
+                className="inline-flex items-center gap-1.5 rounded-full border border-violet-200 bg-white/95 px-3 py-1.5 text-xs font-medium text-violet-700 shadow-[0_18px_40px_-28px_rgba(15,23,42,0.45)] backdrop-blur transition-colors hover:bg-violet-50"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Describe scenario</span>
+              </button>
+            </div>
           </Panel>
         )}
       </ReactFlow>

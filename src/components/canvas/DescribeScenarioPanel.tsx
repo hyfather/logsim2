@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Sparkles, X, Loader2, AlertCircle, ExternalLink, ShieldCheck } from 'lucide-react'
+import { useReactFlow } from '@xyflow/react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
@@ -45,6 +46,8 @@ export function DescribeScenarioPanel({ open, onClose }: DescribeScenarioPanelPr
   const defaultKey = keys.find(k => k.isDefault) ?? keys[0]
   const loadScenario = useScenarioStore(s => s.loadScenario)
   const setMetadata = useScenarioStore(s => s.setMetadata)
+  const organizeLayout = useScenarioStore(s => s.organizeLayout)
+  const { fitView } = useReactFlow()
 
   const [description, setDescription] = useState('')
   const [providerOverride, setProviderOverride] = useState<AIProvider | null>(null)
@@ -102,6 +105,14 @@ export function DescribeScenarioPanel({ open, onClose }: DescribeScenarioPanelPr
         updatedAt: new Date().toISOString(),
       })
       setMetadata({ name: result.name?.trim() || 'AI scenario' })
+      // Re-run the canvas layout pass so service tiers and edge anchors are
+      // computed from the live store state, then fit-view to center the result.
+      organizeLayout()
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          fitView({ padding: 0.2, duration: 400, maxZoom: 1 })
+        })
+      })
       setSuccess(
         `Generated ${result.flowNodes.length} node${result.flowNodes.length === 1 ? '' : 's'}` +
           ` and ${result.flowEdges.length} connection${result.flowEdges.length === 1 ? '' : 's'}.`,

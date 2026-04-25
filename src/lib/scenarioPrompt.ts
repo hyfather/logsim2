@@ -437,6 +437,11 @@ function materializeScenario(proposed: ProposedScenario): GenerateScenarioResult
     childrenByParent.set(pid, arr)
   }
 
+  // Sort sibling subnets within each VPC by topological tier so traffic flows
+  // left-to-right (sources → sinks). This makes 3-tier (public → app → data)
+  // lay out as a single horizontal row matching how the user reads the diagram.
+  sortSubnetsByTier(proposed, childrenByParent)
+
   interface Layout {
     aiId: string
     width: number
@@ -480,7 +485,10 @@ function materializeScenario(proposed: ProposedScenario): GenerateScenarioResult
       return { aiId, width, height, x: 0, y: 0, children: childLayouts }
     }
 
-    const WRAP = node.type === 'vpc' ? 2 : 3
+    // Allow up to 4 subnets in a single row before wrapping, so the canonical
+    // public→app→data row stays visually horizontal. virtual_servers still
+    // wrap aggressively (3 per row) since they nest deeper.
+    const WRAP = node.type === 'vpc' ? Math.max(2, Math.min(4, childLayouts.length)) : 3
     let inRow = 0
     for (const c of childLayouts) {
       if (inRow >= WRAP) {
@@ -518,7 +526,9 @@ function materializeScenario(proposed: ProposedScenario): GenerateScenarioResult
     const proposedNode = proposed.nodes.find(n => n.id === layout.aiId)!
     const realId = idMap.get(layout.aiId)!
     const baseLabel = proposedNode.label?.trim() || (proposedNode.serviceType ?? proposedNode.type)
-    const config = getDefaultConfig(proposedNode.type, proposedNode.serviceType)
+    // Deep-clone the registry default so per-node mutations (CIDR assignment,
+    // future config edits) don't bleed across nodes that share a default.
+    const config = structuredClone(getDefaultConfig(proposedNode.type, proposedNode.serviceType))
     const provider: Provider = proposedNode.type === 'vpc' ? 'aws' : null
 
     scenarioNodes.push({
@@ -540,6 +550,10 @@ function materializeScenario(proposed: ProposedScenario): GenerateScenarioResult
     }
   }
   for (const l of topLayouts) emit(l, null)
+
+  // Give each subnet a unique CIDR so derived per-service IPs don't collide,
+  // and label public-facing subnets accordingly. Multiple VPCs get their own /16.
+  assignNetworkAddresses(scenarioNodes)
 
   const withChannels = recomputeAllChannels(scenarioNodes)
 
@@ -565,7 +579,12 @@ function materializeScenario(proposed: ProposedScenario): GenerateScenarioResult
 
   // Build flow edges with computed anchors
   const proposedEdges = proposed.edges ?? []
-  const flowEdges: ConnectionFlowEdge[] = []
+  interface EdgeBuild {
+    conn: Connection
+    sRect: WorldRect
+    tRect: WorldRect
+  }
+  const builds: EdgeBuild[] = []
   for (const pe of proposedEdges) {
     const sourceId = idMap.get(pe.source)
     const targetId = idMap.get(pe.target)
@@ -574,9 +593,9 @@ function materializeScenario(proposed: ProposedScenario): GenerateScenarioResult
 
     const sRect = worldRect.get(sourceId)
     const tRect = worldRect.get(targetId)
-    const { sourceHandle, targetHandle } = sRect && tRect
-      ? pickAnchors(sRect, tRect)
-      : { sourceHandle: 'right' as AnchorHandleId, targetHandle: 'left' as AnchorHandleId }
+    if (!sRect || !tRect) continue
+
+    const { sourceHandle, targetHandle } = pickAnchors(sRect, tRect)
 
     const conn: Connection = {
       id: generateId(),
@@ -591,19 +610,24 @@ function materializeScenario(proposed: ProposedScenario): GenerateScenarioResult
       errorRate: typeof pe.errorRate === 'number' ? Math.max(0, Math.min(1, pe.errorRate)) : 0,
       config: {},
     }
-    flowEdges.push({
-      id: conn.id,
-      source: conn.sourceId,
-      target: conn.targetId,
-      sourceHandle,
-      targetHandle,
-      type: 'connectionEdge',
-      data: asFlowEdgeData(conn),
-      label: conn.protocol.toUpperCase(),
-      reconnectable: true,
-      zIndex: 1000,
-    })
+    builds.push({ conn, sRect, tRect })
   }
+
+  // Fan out edges that share an anchor on either end so they don't draw on top of each other.
+  fanOverlappingEdges(builds)
+
+  const flowEdges: ConnectionFlowEdge[] = builds.map(b => ({
+    id: b.conn.id,
+    source: b.conn.sourceId,
+    target: b.conn.targetId,
+    sourceHandle: b.conn.sourceHandle,
+    targetHandle: b.conn.targetHandle,
+    type: 'connectionEdge',
+    data: asFlowEdgeData(b.conn),
+    label: b.conn.protocol.toUpperCase(),
+    reconnectable: true,
+    zIndex: 1000,
+  }))
 
   return {
     flowNodes,
@@ -611,6 +635,252 @@ function materializeScenario(proposed: ProposedScenario): GenerateScenarioResult
     name: proposed.name,
     description: proposed.description,
     reasoning: proposed.reasoning,
+  }
+}
+
+// ── Subnet ordering by topological tier ─────────────────────────────────────
+
+const TIER_LABEL_HINTS: Array<{ pattern: RegExp; tier: number }> = [
+  { pattern: /\b(public|edge|ingress|dmz|external)\b/i, tier: 0 },
+  { pattern: /\b(data|db|database|storage|persistence|private)\b/i, tier: 99 },
+]
+
+/**
+ * Reorder sibling subnets within each VPC so they flow left-to-right by
+ * topological depth: subnets containing source-only services (e.g. an Nginx
+ * LB) come first, sinks (e.g. databases) come last. With sensible ordering,
+ * default smooth-step edges run cleanly between adjacent tiers instead of
+ * looping across siblings.
+ *
+ * Algorithm: compute per-service depth as the longest path from any source
+ * (no incoming edges). Per subnet, take the average service depth — falling
+ * back to label hints when a subnet has no edges incident on its services.
+ */
+function sortSubnetsByTier(
+  scenario: ProposedScenario,
+  childrenByParent: Map<string | null, ProposedNode[]>,
+): void {
+  const nodeById = new Map(scenario.nodes.map(n => [n.id, n]))
+  const edges = scenario.edges ?? []
+
+  // Build adjacency at the service level. For each edge, walk source/target
+  // up to the nearest service ancestor (handles cases where an edge points
+  // at a virtual_server wrapper).
+  const serviceIds = new Set(scenario.nodes.filter(n => n.type === 'service').map(n => n.id))
+  function ascendToService(id: string): string | null {
+    let cur: ProposedNode | undefined = nodeById.get(id)
+    while (cur) {
+      if (cur.type === 'service') return cur.id
+      cur = cur.parent ? nodeById.get(cur.parent) : undefined
+    }
+    return null
+  }
+  const inDegree = new Map<string, number>()
+  const outAdj = new Map<string, string[]>()
+  for (const id of serviceIds) {
+    inDegree.set(id, 0)
+    outAdj.set(id, [])
+  }
+  for (const e of edges) {
+    const s = ascendToService(e.source)
+    const t = ascendToService(e.target)
+    if (!s || !t || s === t) continue
+    outAdj.get(s)!.push(t)
+    inDegree.set(t, (inDegree.get(t) ?? 0) + 1)
+  }
+
+  // Kahn-style longest-path depth (acyclic assumption; on cycles we cap).
+  const depth = new Map<string, number>()
+  const queue: string[] = []
+  for (const id of serviceIds) {
+    if ((inDegree.get(id) ?? 0) === 0) {
+      depth.set(id, 0)
+      queue.push(id)
+    }
+  }
+  const remaining = new Map(inDegree)
+  let guard = serviceIds.size * 4
+  while (queue.length && guard-- > 0) {
+    const u = queue.shift()!
+    const d = depth.get(u) ?? 0
+    for (const v of outAdj.get(u) ?? []) {
+      depth.set(v, Math.max(depth.get(v) ?? 0, d + 1))
+      remaining.set(v, (remaining.get(v) ?? 0) - 1)
+      if ((remaining.get(v) ?? 0) === 0) queue.push(v)
+    }
+  }
+
+  // For each subnet, compute mean depth of contained services (recursing
+  // through virtual_server wrappers). Fall back to label hints when there
+  // are no services or no edges touch them.
+  function servicesUnder(subnetId: string): string[] {
+    const out: string[] = []
+    const stack = [...(childrenByParent.get(subnetId) ?? [])]
+    while (stack.length) {
+      const n = stack.pop()!
+      if (n.type === 'service') out.push(n.id)
+      else stack.push(...(childrenByParent.get(n.id) ?? []))
+    }
+    return out
+  }
+  function labelTier(label: string | undefined): number | null {
+    if (!label) return null
+    for (const { pattern, tier } of TIER_LABEL_HINTS) {
+      if (pattern.test(label)) return tier
+    }
+    return null
+  }
+  function subnetTier(subnet: ProposedNode): number {
+    const services = servicesUnder(subnet.id)
+    const depths = services.map(id => depth.get(id)).filter((d): d is number => typeof d === 'number')
+    if (depths.length > 0) {
+      // Bias by label too — a labelled "data-subnet" with depth 1 should still sink to the right.
+      const mean = depths.reduce((a, b) => a + b, 0) / depths.length
+      const labelHint = labelTier(subnet.label)
+      if (labelHint === 0) return mean - 0.5
+      if (labelHint === 99) return mean + 0.5
+      return mean
+    }
+    const hint = labelTier(subnet.label)
+    return hint ?? 50 // unknown subnets sit in the middle
+  }
+
+  // Sort each VPC's children: subnets first (by tier), then non-subnets.
+  for (const [parentId, kids] of childrenByParent) {
+    if (!parentId) continue
+    const parent = nodeById.get(parentId)
+    if (!parent || parent.type !== 'vpc') continue
+    kids.sort((a, b) => {
+      const aIsSubnet = a.type === 'subnet'
+      const bIsSubnet = b.type === 'subnet'
+      if (aIsSubnet && !bIsSubnet) return -1
+      if (!aIsSubnet && bIsSubnet) return 1
+      if (!aIsSubnet && !bIsSubnet) return 0
+      return subnetTier(a) - subnetTier(b)
+    })
+  }
+}
+
+// ── Network address assignment ──────────────────────────────────────────────
+
+/**
+ * Walk the materialized scenario and:
+ *   • give each VPC its own /16 (10.0.0.0/16, 10.1.0.0/16, ...)
+ *   • give each subnet within a VPC a unique /24 so derived service IPs don't collide
+ *   • mark subnets as public when their label or contained services suggest ingress
+ *
+ * Service IPs are derived live from subnet CIDR by `lib/network.ts:getNodeIp`,
+ * so updating the subnet config here cascades automatically.
+ */
+function assignNetworkAddresses(nodes: ScenarioNode[]): void {
+  const vpcs = nodes.filter(n => n.type === 'vpc')
+  vpcs.forEach((vpc, vpcIdx) => {
+    const vpcCfg = vpc.config as Record<string, unknown>
+    vpcCfg.cidr = `10.${vpcIdx}.0.0/16`
+
+    const subnets = nodes.filter(n => n.parentId === vpc.id && n.type === 'subnet')
+    subnets.forEach((subnet, subnetIdx) => {
+      const cfg = subnet.config as Record<string, unknown>
+      cfg.cidr = `10.${vpcIdx}.${subnetIdx + 1}.0/24`
+      cfg.availabilityZone = `us-east-1${String.fromCharCode(97 + (subnetIdx % 6))}`
+
+      const label = (subnet.label || '').toLowerCase()
+      const hostsIngress = nodes.some(
+        n => n.parentId === subnet.id && n.type === 'service' && n.serviceType === 'nginx',
+      )
+      cfg.isPublic = label.includes('public') || label.includes('edge') || hostsIngress
+    })
+  })
+}
+
+// ── Edge fan-out ────────────────────────────────────────────────────────────
+
+interface EdgeBuildLike {
+  conn: Connection
+  sRect: WorldRect
+  tRect: WorldRect
+}
+
+const HANDLE_AXIS: Record<AnchorHandleId, 'x' | 'y'> = {
+  left: 'x', right: 'x', top: 'y', bottom: 'y',
+}
+
+/**
+ * When N edges share a (sourceId, sourceHandle) or (targetId, targetHandle),
+ * their default smooth-step paths trace the same stem before fanning out, so
+ * they visually stack. Set `bendX`/`bendY` so each edge's elbow lands at a
+ * distinct offset along the handle's parallel axis — this lengthens/shortens
+ * the stem from that end and produces a visible fan.
+ */
+function fanOverlappingEdges(builds: EdgeBuildLike[]): void {
+  if (builds.length < 2) return
+
+  const FAN_STEP = 28 // pixels between adjacent fanned edges
+
+  type Off = { dx: number; dy: number }
+  const offsets = new Map<EdgeBuildLike, Off>()
+  for (const b of builds) offsets.set(b, { dx: 0, dy: 0 })
+
+  function groupBy(keyFn: (b: EdgeBuildLike) => string): Map<string, EdgeBuildLike[]> {
+    const m = new Map<string, EdgeBuildLike[]>()
+    for (const b of builds) {
+      const k = keyFn(b)
+      const arr = m.get(k) ?? []
+      arr.push(b)
+      m.set(k, arr)
+    }
+    return m
+  }
+
+  function applyFan(group: EdgeBuildLike[], handle: AnchorHandleId | undefined, sortKey: 'sourceY' | 'sourceX' | 'targetY' | 'targetX') {
+    if (!handle || group.length < 2) return
+    const axis = HANDLE_AXIS[handle]
+    const sortVal = (b: EdgeBuildLike): number => {
+      switch (sortKey) {
+        case 'sourceY': return b.sRect.y
+        case 'sourceX': return b.sRect.x
+        case 'targetY': return b.tRect.y
+        case 'targetX': return b.tRect.x
+      }
+    }
+    group.sort((a, b) => sortVal(a) - sortVal(b))
+    const center = (group.length - 1) / 2
+    group.forEach((e, i) => {
+      const delta = (i - center) * FAN_STEP
+      const o = offsets.get(e)!
+      if (axis === 'x') o.dx += delta
+      else o.dy += delta
+    })
+  }
+
+  // Source-side fan: edges leaving the same point of the same node.
+  const srcGroups = groupBy(b => `${b.conn.sourceId}|${b.conn.sourceHandle ?? ''}`)
+  for (const group of srcGroups.values()) {
+    if (group.length < 2) continue
+    const h = group[0].conn.sourceHandle as AnchorHandleId | undefined
+    const sortKey = h === 'right' || h === 'left' ? 'targetY' : 'targetX'
+    applyFan(group, h, sortKey)
+  }
+
+  // Target-side fan: edges arriving at the same point of the same node.
+  const tgtGroups = groupBy(b => `${b.conn.targetId}|${b.conn.targetHandle ?? ''}`)
+  for (const group of tgtGroups.values()) {
+    if (group.length < 2) continue
+    const h = group[0].conn.targetHandle as AnchorHandleId | undefined
+    const sortKey = h === 'right' || h === 'left' ? 'sourceY' : 'sourceX'
+    applyFan(group, h, sortKey)
+  }
+
+  // Translate offsets into bendX/bendY relative to the natural midpoint.
+  for (const b of builds) {
+    const o = offsets.get(b)!
+    if (o.dx === 0 && o.dy === 0) continue
+    const sCx = b.sRect.x + b.sRect.width / 2
+    const sCy = b.sRect.y + b.sRect.height / 2
+    const tCx = b.tRect.x + b.tRect.width / 2
+    const tCy = b.tRect.y + b.tRect.height / 2
+    b.conn.bendX = (sCx + tCx) / 2 + o.dx
+    b.conn.bendY = (sCy + tCy) / 2 + o.dy
   }
 }
 

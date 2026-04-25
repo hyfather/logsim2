@@ -13,6 +13,7 @@ import { DEFAULT_NODE_SIZES } from '@/lib/defaults'
 import { getDefaultConfig, getDefaultLabel } from '@/registry/nodeRegistry'
 import { asFlowEdgeData, asFlowNodeData } from '@/lib/flow-data'
 import { getDefaultNodeEmoji } from '@/lib/nodeAppearance'
+import { organizeFlow } from '@/lib/canvasLayout'
 
 export type FlowNode = ScenarioFlowNode
 export type FlowEdge = ConnectionFlowEdge
@@ -34,6 +35,7 @@ interface ScenarioState {
   renameNode: (id: string, label: string) => void
   reparentNode: (nodeId: string, newParentId: string | null) => void
   loadScenario: (nodes: FlowNode[], edges: FlowEdge[], metadata: ScenarioMetadata) => void
+  organizeLayout: () => void
   resetScenario: () => void
 }
 
@@ -254,6 +256,14 @@ export const useScenarioStore = create<ScenarioState>()(
 
     loadScenario: (nodes, edges, metadata) => {
       set({ nodes, edges, metadata })
+    },
+
+    organizeLayout: () => {
+      set(state => {
+        if (state.nodes.length === 0) return {}
+        const { nodes, edges } = organizeFlow(state.nodes, state.edges)
+        return { nodes, edges }
+      })
     },
 
     resetScenario: () => {

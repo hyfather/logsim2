@@ -83,7 +83,7 @@ export function ServiceNode({ id, data, selected }: NodeProps<ScenarioFlowNode>)
   return (
     <div
       className={cn(
-        'group/node relative flex min-h-[96px] min-w-[220px] cursor-pointer overflow-visible rounded-[22px] border-2 bg-[linear-gradient(135deg,rgba(255,255,255,0.99),rgba(240,253,244,0.92))] px-3.5 py-3 transition-all',
+        'group/node relative flex min-h-[72px] min-w-[200px] cursor-pointer overflow-visible rounded-[18px] border-2 bg-[linear-gradient(135deg,rgba(255,255,255,0.99),rgba(240,253,244,0.92))] px-2.5 py-2 transition-all',
         selected
           ? 'shadow-[0_30px_60px_-28px_rgba(37,99,235,0.35)]'
           : 'shadow-[0_24px_52px_-36px_rgba(15,23,42,0.5)] hover:shadow-[0_30px_60px_-34px_rgba(15,23,42,0.55)]',
@@ -95,8 +95,8 @@ export function ServiceNode({ id, data, selected }: NodeProps<ScenarioFlowNode>)
     >
       <TileResizeControls
         selected={selected}
-        minWidth={220}
-        minHeight={96}
+        minWidth={200}
+        minHeight={72}
         onResizeEnd={handleResizeEnd}
       />
       <button
@@ -107,11 +107,11 @@ export function ServiceNode({ id, data, selected }: NodeProps<ScenarioFlowNode>)
       >
         <Settings className="h-3.5 w-3.5" />
       </button>
-      <div className="flex w-full items-center gap-3 pr-8">
+      <div className="flex w-full items-center gap-2 pr-7">
         <NodeEmojiButton
           nodeId={id}
           emoji={emoji}
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200/80 bg-white text-center text-2xl leading-none shadow-[0_14px_28px_-22px_rgba(15,23,42,0.72)]"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200/80 bg-white text-center text-lg leading-none shadow-[0_10px_22px_-18px_rgba(15,23,42,0.72)]"
         />
         <div className="min-w-0 flex-1">
           {isEditing ? (
@@ -125,19 +125,19 @@ export function ServiceNode({ id, data, selected }: NodeProps<ScenarioFlowNode>)
               onClick={e => e.stopPropagation()}
             />
           ) : (
-            <div className="flex items-center gap-2">
-              <div className="truncate text-[16px] font-semibold leading-tight tracking-[-0.015em] text-slate-950">
+            <div className="flex items-center gap-1.5">
+              <div className="truncate text-[13px] font-semibold leading-tight tracking-[-0.015em] text-slate-950">
                 {node.label}
               </div>
               {node.serviceType && (
-                <div className="shrink-0 rounded-full bg-slate-900/[0.06] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+                <div className="shrink-0 rounded-full bg-slate-900/[0.06] px-1.5 py-0.5 text-[8.5px] font-semibold uppercase tracking-[0.1em] text-slate-500">
                   {node.serviceType}
                 </div>
               )}
             </div>
           )}
-          <div className="mt-0.5 truncate font-mono text-[12px] text-slate-600">{address}</div>
-          <div className="mt-1 truncate font-mono text-[10.5px] text-slate-400">{node.channel}</div>
+          <div className="mt-0.5 truncate font-mono text-[10.5px] text-slate-600">{address}</div>
+          <div className="truncate font-mono text-[9.5px] text-slate-400">{node.channel}</div>
         </div>
       </div>
 

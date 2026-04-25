@@ -79,8 +79,8 @@ export const defaultCustomServiceConfig: CustomServiceConfig = {
 }
 
 export const DEFAULT_NODE_SIZES = {
-  vpc: { width: 600, height: 400 },
-  subnet: { width: 400, height: 250 },
-  virtual_server: { width: 250, height: 180 },
-  service: { width: 280, height: 104 },
+  vpc: { width: 520, height: 340 },
+  subnet: { width: 340, height: 220 },
+  virtual_server: { width: 220, height: 150 },
+  service: { width: 210, height: 78 },
 }
