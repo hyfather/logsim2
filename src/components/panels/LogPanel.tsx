@@ -7,7 +7,6 @@ import type { CriblHecDestination, DestinationConfig } from '@/types/destination
 import type { LogEntry, LogLevel } from '@/types/logs'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -398,44 +397,58 @@ export function LogPanel({ onCollapse }: LogPanelProps) {
   const items = rowVirtualizer.getVirtualItems()
   const totalSize = rowVirtualizer.getTotalSize()
 
+  const infoCount = facets.level.INFO + facets.level.DEBUG
+  const warnCount = facets.level.WARN
+  const errorCount = facets.level.ERROR + facets.level.FATAL
+  const totalCount = logBuffer.length
+
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-white">
       {/* ── Header ───────────────────────────────────────────── */}
-      <div className="shrink-0 border-b border-gray-200 bg-gray-50 px-3 py-2">
+      <div className="shrink-0 border-b border-slate-200 bg-white">
         {/* Title bar */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 px-3.5 py-3">
           {canvasOpen && (
             <button
               title="Collapse canvas"
               onClick={() => setCanvasOpen(false)}
-              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900"
+              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
             >
               <PanelLeftClose className="h-3.5 w-3.5" />
             </button>
           )}
-          <span className="text-xs font-semibold text-gray-800">Logs</span>
-          <Badge variant="outline" className="px-1.5 text-[9px]">
-            {displayedLogs.length} / {logBuffer.length}
-          </Badge>
+          <span className={cn('ls-dot', autoScroll ? 'ls-dot-live' : 'ls-dot-muted')} />
+          <span className="text-[12px] font-semibold text-slate-900">Live logs</span>
+          <span className="rounded-[3px] bg-slate-100 px-1.5 py-px font-mono text-[10.5px] font-medium text-slate-500">
+            {totalCount}
+          </span>
+
+          {/* Count pills */}
+          <div className="ml-1 flex shrink-0 items-center gap-1">
+            <span className="rounded-[3px] border border-slate-200 bg-slate-100 px-1.5 py-px font-mono text-[10px] font-semibold text-slate-500">
+              {infoCount}
+            </span>
+            <span className="rounded-[3px] border border-amber-200 bg-amber-50 px-1.5 py-px font-mono text-[10px] font-semibold text-amber-700">
+              {warnCount}
+            </span>
+            <span className="rounded-[3px] border border-red-200 bg-red-50 px-1.5 py-px font-mono text-[10px] font-semibold text-red-600">
+              {errorCount}
+            </span>
+          </div>
 
           <div className="ml-auto flex items-center gap-0.5">
             <button
               onClick={() => setAutoScroll(!autoScroll)}
-              title={autoScroll ? 'Tailing — click to pause' : 'Paused — click to resume tailing'}
+              title={autoScroll ? 'Following tail — click to pause' : 'Paused — click to follow tail'}
               className={cn(
-                'inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[11px] font-medium transition-colors',
+                'inline-flex h-6 items-center gap-1.5 rounded border px-2 font-mono text-[10.5px] font-semibold uppercase tracking-[0.04em] transition-colors',
                 autoScroll
-                  ? 'bg-green-50 text-green-700 hover:bg-green-100'
-                  : 'text-gray-500 hover:bg-gray-100 hover:text-gray-900',
+                  ? 'border-green-200 bg-green-50 text-green-700'
+                  : 'border-slate-200 bg-slate-100 text-slate-500 hover:text-slate-900',
               )}
             >
-              <span
-                className={cn(
-                  'h-1.5 w-1.5 rounded-full',
-                  autoScroll ? 'bg-green-500 animate-pulse' : 'bg-gray-300',
-                )}
-              />
-              Tail
+              <span className={cn('h-1.5 w-1.5 rounded-full', autoScroll ? 'bg-green-500' : 'bg-slate-300')} />
+              Follow
             </button>
 
             <DropdownMenu>

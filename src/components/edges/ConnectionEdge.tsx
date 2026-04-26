@@ -188,11 +188,13 @@ export function ConnectionEdge({
   const isActive = Boolean(activity && activity.requestCount > 0)
   const isRunning = status === 'running'
   const runDuration = Math.max(0.32, 1.8 / Math.max(speed, 1))
-  const glowDuration = Math.max(0.45, runDuration * 1.35)
-  const shouldAnimate = isActive && isRunning
-  const strokeWidth = selected ? 2.75 : 2.35
-  const stroke = selected ? '#2563eb' : hasWarning ? '#f59e0b' : '#64748b'
-  const activeStroke = selected ? '#2563eb' : '#0f766e'
+  // Design ties the dashed flow to run state; activity boosts opacity but doesn't gate it.
+  const shouldAnimate = isRunning
+  const strokeWidth = 1.5
+  const stroke = selected ? '#3b82f6' : hasWarning ? '#f59e0b' : '#94a3b8'
+  const strokeOpacity = selected ? 1 : hasWarning ? 0.85 : 0.6
+  const activeStroke = selected ? '#2563eb' : '#3b82f6'
+  const flowOpacity = isActive ? 0.95 : 0.6
   const markerId = `connection-arrow-${id}`
   const markerWidth = Number((strokeWidth * 3.8).toFixed(2))
   const markerHeight = Number((strokeWidth * 3.1).toFixed(2))
@@ -221,36 +223,25 @@ export function ConnectionEdge({
         path={path}
         style={{
           stroke,
+          strokeOpacity,
           strokeWidth,
           cursor: 'pointer',
           strokeLinecap: 'round',
           strokeLinejoin: 'round',
-          filter: selected ? 'drop-shadow(0 6px 10px rgba(37,99,235,0.18))' : undefined,
         }}
         markerEnd={`url(#${markerId})`}
         onClick={handleEdgeClick}
       />
 
       {shouldAnimate && (
-        <>
-          <path
-            d={path} fill="none" stroke={activeStroke}
-            strokeWidth={selected ? 4.5 : 3.5} strokeLinecap="round" strokeLinejoin="round"
-            strokeDasharray="4 18"
-            className="connection-flow-path connection-flow-path--teal"
-            style={{ pointerEvents: 'none', animationDuration: `${runDuration}s`, animationIterationCount: 'infinite' }}
-          />
-          <path
-            d={path} fill="none" stroke="#93c5fd"
-            strokeWidth={selected ? 6 : 5} strokeLinecap="round" strokeLinejoin="round"
-            opacity="0.22"
-            className="connection-flow-path connection-flow-path--glow"
-            style={{ pointerEvents: 'none', animationDuration: `${glowDuration}s`, animationIterationCount: 'infinite' }}
-          />
-          <circle r="4.5" fill="#0ea5e9" opacity="0.95" style={{ pointerEvents: 'none', filter: 'drop-shadow(0 0 6px rgba(14,165,233,0.55))' }}>
-            <animateMotion dur={`${runDuration}s`} repeatCount="indefinite" rotate="auto" path={path} />
-          </circle>
-        </>
+        <path
+          d={path} fill="none" stroke={activeStroke}
+          strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"
+          strokeDasharray="4 6"
+          strokeOpacity={flowOpacity}
+          className="connection-flow-path"
+          style={{ pointerEvents: 'none', animationDuration: `${runDuration}s`, animationIterationCount: 'infinite' }}
+        />
       )}
 
       {selected && (

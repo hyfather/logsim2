@@ -4,8 +4,8 @@ import { ReactFlowProvider } from '@xyflow/react'
 import { Canvas } from '@/components/canvas/Canvas'
 import { Palette } from '@/components/palette/Palette'
 import { LogPanel } from '@/components/panels/LogPanel'
-import { SimulationControls } from '@/components/panels/SimulationControls'
-import { Toolbar } from '@/components/toolbar/Toolbar'
+import { NodeInspectorPanel } from '@/components/panels/NodeInspectorPanel'
+import { Topbar } from '@/components/toolbar/Topbar'
 import { BulkGenerateModal } from '@/components/panels/BulkGenerateModal'
 import { EpisodeMode } from '@/components/episodes/EpisodeMode'
 import { useUIStore } from '@/store/useUIStore'
@@ -64,7 +64,8 @@ export default function EditorPageClient() {
   useUrlSync()
   useSegmentCanvasBridge()
   const isMobile = useIsMobile()
-  const { logPanelOpen, logPanelWidth, setLogPanelOpen, setLogPanelWidth, mode, canvasOpen, setCanvasOpen } = useUIStore()
+  const { logPanelOpen, logPanelWidth, setLogPanelOpen, setLogPanelWidth, mode, canvasOpen, setCanvasOpen, selectedNodeId } = useUIStore()
+  const selectedNode = useScenarioStore(s => selectedNodeId ? s.nodes.find(n => n.id === selectedNodeId)?.data ?? null : null)
   const canvasEditSegmentId = useEpisodeStore(s => s.canvasEditSegmentId)
   const setCanvasEditSegment = useEpisodeStore(s => s.setCanvasEditSegment)
   const episode = useEpisodeStore(s => s.episode)
@@ -274,12 +275,8 @@ export default function EditorPageClient() {
 
   return (
     <ReactFlowProvider>
-      <div className="flex h-[100dvh] w-full flex-col overflow-hidden bg-white">
-        {/* Toolbar */}
-        <Toolbar />
-
-        {/* Simulation controls (hidden in episodes mode — episode has its own run controls) */}
-        {mode === 'design' && <SimulationControls />}
+      <div className="flex h-[100dvh] w-full flex-col overflow-hidden bg-[var(--ls-bg)]">
+        <Topbar />
 
         {/* Main area */}
         <div className="flex flex-1 overflow-hidden">
@@ -363,11 +360,13 @@ export default function EditorPageClient() {
             )}
 
             {logPanelOpen && (
-              <LogPanel
-                panelMode={panelMode}
-                onCollapse={handleCollapse}
-                onSetWidth={handleSetWidth}
-              />
+              selectedNode
+                ? <NodeInspectorPanel nodeData={selectedNode} />
+                : <LogPanel
+                    panelMode={panelMode}
+                    onCollapse={handleCollapse}
+                    onSetWidth={handleSetWidth}
+                  />
             )}
           </div>
         </div>

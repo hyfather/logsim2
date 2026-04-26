@@ -9,7 +9,6 @@ import { useScenarioStore } from '@/store/useScenarioStore'
 import { useUIStore } from '@/store/useUIStore'
 import { cn } from '@/lib/utils'
 import { getNodeAddress, getNodeHoverDetails } from '@/lib/network'
-import { NodeInspector } from '@/components/panels/NodeInspector'
 import { NodeAnchors } from '@/components/nodes/NodeAnchors'
 import { NodeEmojiButton } from '@/components/nodes/NodeEmojiButton'
 import { TileResizeControls } from '@/components/nodes/TileResizeControls'
@@ -20,7 +19,7 @@ export function ServiceNode({ id, data, selected }: NodeProps<ScenarioFlowNode>)
   const [isEditing, setIsEditing] = useState(false)
   const [editLabel, setEditLabel] = useState(node.label)
   const { nodes, renameNode, updateNode } = useScenarioStore()
-  const { selectedNodeId, selectNode, configPanelOpen, setConfigPanelOpen, setConfigPanelAnchor } = useUIStore()
+  const { selectNode, setLogPanelOpen } = useUIStore()
 
   const emoji = getNodeEmoji(node)
   const allNodes = nodes.map(candidate => candidate.data)
@@ -64,21 +63,14 @@ export function ServiceNode({ id, data, selected }: NodeProps<ScenarioFlowNode>)
   const handleClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation()
     selectNode(id)
-  }, [id, selectNode])
+    setLogPanelOpen(true)
+  }, [id, selectNode, setLogPanelOpen])
 
   const handleSettingsClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation()
-    if (selectedNodeId === id && configPanelOpen) {
-      setConfigPanelOpen(false)
-      setConfigPanelAnchor(null)
-      return
-    }
-
-    const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect()
     selectNode(id)
-    setConfigPanelAnchor({ x: rect.right + 10, y: rect.top })
-    setConfigPanelOpen(true)
-  }, [configPanelOpen, id, selectNode, selectedNodeId, setConfigPanelAnchor, setConfigPanelOpen])
+    setLogPanelOpen(true)
+  }, [id, selectNode, setLogPanelOpen])
 
   return (
     <div
@@ -103,7 +95,10 @@ export function ServiceNode({ id, data, selected }: NodeProps<ScenarioFlowNode>)
       />
 
       {/* Title bar */}
-      <div className="flex h-8 items-center gap-2 rounded-t-[4px] border-b border-slate-200/70 bg-white px-2">
+      <div
+        className="flex h-8 items-center gap-2 rounded-t-[6.5px] border-b border-slate-200 px-2"
+        style={{ background: 'linear-gradient(180deg, #f8fafc 0%, #ffffff 100%)' }}
+      >
         <NodeEmojiButton
           nodeId={id}
           emoji={emoji}
@@ -140,12 +135,10 @@ export function ServiceNode({ id, data, selected }: NodeProps<ScenarioFlowNode>)
       </div>
 
       {/* Body */}
-      <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5 px-2.5 py-1.5">
-        <div className="truncate font-mono text-[11px] text-slate-700">{address}</div>
-        <div className="truncate font-mono text-[10px] text-slate-400">{node.channel}</div>
+      <div className="flex min-w-0 flex-1 flex-col justify-center px-3 pb-3 pt-2.5">
+        <div className="truncate font-mono text-[13px] font-medium text-slate-900">{address}</div>
+        <div className="mt-1 truncate font-mono text-[11px] text-slate-500">{node.channel}</div>
       </div>
-
-      {selectedNodeId === id && configPanelOpen && <NodeInspector nodeData={node} />}
 
       <NodeAnchors nodeId={id} selected={selected} accentColor={selected ? '#3b82f6' : '#22c55e'} />
     </div>
