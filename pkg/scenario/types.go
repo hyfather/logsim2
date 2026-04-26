@@ -2,13 +2,15 @@ package scenario
 
 // Scenario is the fully parsed and validated in-memory representation.
 type Scenario struct {
-	Name        string       `yaml:"name"`
-	Description string       `yaml:"description"`
-	Nodes       []Node       `yaml:"nodes"`
-	Services    []Service    `yaml:"services"`
-	Connections []Connection `yaml:"connections"`
-	CustomTypes []CustomType `yaml:"custom_types,omitempty"`
-	Editor      *EditorMeta  `yaml:"editor,omitempty"`
+	Name           string       `yaml:"name"`
+	Description    string       `yaml:"description"`
+	Duration       int          `yaml:"duration,omitempty"`         // total ticks for the episode
+	TickIntervalMs int          `yaml:"tick_interval_ms,omitempty"` // simulated ms per tick
+	Nodes          []Node       `yaml:"nodes"`
+	Services       []Service    `yaml:"services"`
+	Connections    []Connection `yaml:"connections"`
+	CustomTypes    []CustomType `yaml:"custom_types,omitempty"`
+	Editor         *EditorMeta  `yaml:"editor,omitempty"`
 }
 
 // NodeType classifies infrastructure components.
@@ -72,6 +74,28 @@ type Service struct {
 	Description string          `yaml:"description,omitempty"`
 	Host        string          `yaml:"host"` // required: name of a virtual_server node
 	Generator   GeneratorConfig `yaml:"generator"`
+	// Timeline is an ordered list of behavior blocks that override generator
+	// behavior over [from, to) tick ranges. Blocks may overlap; later blocks
+	// in slice order win for overlapping ticks.
+	Timeline []TimelineBlock `yaml:"timeline,omitempty"`
+}
+
+// TimelineBlock declares a behavior override for one service over [From, To)
+// ticks. Pointer fields are tri-state: nil means inherit baseline, non-nil
+// means apply this value (after the State preset). State sets default
+// modifiers; explicit fields then override the state's defaults.
+type TimelineBlock struct {
+	From            int                    `yaml:"from"`
+	To              int                    `yaml:"to"`
+	State           string                 `yaml:"state,omitempty"`
+	ErrorRate       *float64               `yaml:"error_rate,omitempty"`
+	LatencyMul      *float64               `yaml:"latency_mul,omitempty"`
+	LogVolMul       *float64               `yaml:"log_vol_mul,omitempty"`
+	LogVolAbs       *float64               `yaml:"log_vol_abs,omitempty"`
+	TemplateWeights map[string]float64     `yaml:"template_weights,omitempty"`
+	Placeholders    map[string]Placeholder `yaml:"placeholders,omitempty"`
+	CustomLog       string                 `yaml:"custom_log,omitempty"`
+	Note            string                 `yaml:"note,omitempty"`
 }
 
 // GeneratorConfig is the type-specific config block inside a service.
@@ -120,7 +144,10 @@ type Placeholder struct {
 }
 
 // LogTemplate is one weighted output line within a CustomType.
+// ID is stable across positions so timeline blocks can target templates by
+// name; if absent at parse time, parser auto-assigns "tpl_<index>".
 type LogTemplate struct {
+	ID       string  `yaml:"id,omitempty"`
 	Template string  `yaml:"template"`
 	Weight   float64 `yaml:"weight,omitempty"`
 	Level    string  `yaml:"level,omitempty"`

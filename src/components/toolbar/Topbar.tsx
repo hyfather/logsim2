@@ -29,13 +29,16 @@ import { useEpisodeStore } from '@/store/useEpisodeStore'
 import { useSimulationStore } from '@/store/useSimulationStore'
 import { useDestinationsStore } from '@/store/useDestinationsStore'
 import { DESTINATION_TYPE_META } from '@/types/destinations'
-import type { Episode, EpisodeFileV1 } from '@/types/episode'
+import type { Episode, EpisodeFileV2 } from '@/types/episode'
+import { parseEpisodeFile } from '@/lib/episodeIO'
 import { serializeScenario, deserializeScenario, downloadJson } from '@/lib/serialization'
 import type { Connection } from '@/types/connections'
 import { asFlowEdgeData, asFlowNodeData } from '@/lib/flow-data'
 import { cn } from '@/lib/utils'
-import { generate, pickCriblPayload } from '@/lib/backendClient'
+import { pickCriblPayload } from '@/lib/backendClient'
 import { canvasToScenarioYaml } from '@/lib/canvasToScenarioYaml'
+import { runStream } from '@/lib/runStream'
+import { logsAt } from '@/lib/logsAt'
 
 interface ExampleEpisodeManifestEntry {
   file: string
@@ -60,8 +63,10 @@ function LogoMark() {
 
 export function Topbar() {
   const { nodes, edges, metadata, setMetadata, resetScenario, loadScenario } = useScenarioStore()
-  const { mode, setMode, setShowBulkGenerateModal, setShowKeyboardShortcuts } = useUIStore()
+  const { setShowBulkGenerateModal, setShowKeyboardShortcuts } = useUIStore()
   const { episode, setEpisode } = useEpisodeStore()
+  const setTick = useEpisodeStore(s => s.setTick)
+  const setRunStatus = useEpisodeStore(s => s.setRunStatus)
   const {
     status,
     speed,
@@ -195,18 +200,16 @@ export function Topbar() {
     try {
       const res = await fetch(`/examples/episodes/${file}`, { cache: 'no-cache' })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const data = (await res.json()) as EpisodeFileV1 | Episode
-      const ep = 'episode' in data ? data.episode : data
-      if (!ep || !Array.isArray(ep.segments)) throw new Error('Invalid episode file')
+      const data = (await res.json()) as EpisodeFileV2 | Episode
+      const ep = parseEpisodeFile(data)
       setEpisode(ep)
-      setMode('episodes')
     } catch (err) {
       alert(`Failed to load example episode: ${String(err)}`)
     }
-  }, [setEpisode, setMode])
+  }, [setEpisode])
 
   const handleEpisodeSave = useCallback(() => {
-    const payload: EpisodeFileV1 = { version: 1, episode }
+    const payload: EpisodeFileV2 = { version: 2, episode }
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -224,9 +227,8 @@ export function Topbar() {
     const reader = new FileReader()
     reader.onload = (evt) => {
       try {
-        const data = JSON.parse(evt.target?.result as string) as EpisodeFileV1 | Episode
-        const ep = 'episode' in data ? data.episode : data
-        if (!ep || !Array.isArray(ep.segments)) throw new Error('Invalid episode file')
+        const data = JSON.parse(evt.target?.result as string) as EpisodeFileV2 | Episode
+        const ep = parseEpisodeFile(data)
         setEpisode(ep)
       } catch (err) {
         alert('Failed to load episode: ' + String(err))
@@ -237,11 +239,15 @@ export function Topbar() {
   }, [setEpisode])
 
   // ── Simulation control ─────────────────────────────────────────
+  // Build the timeline-baked scenario YAML so the backend applies per-tick
+  // overrides server-side from a single request.
   const buildScenarioYaml = useCallback((): string => {
+    const ep = useEpisodeStore.getState().episode
     return canvasToScenarioYaml(
       useScenarioStore.getState().nodes,
       useScenarioStore.getState().edges,
       useScenarioStore.getState().metadata,
+      { episode: ep, tickIntervalMs: 1000 },
     )
   }, [])
 
@@ -251,119 +257,114 @@ export function Topbar() {
     abortRef.current = null
   }, [])
 
-  const pollOnce = useCallback(async (opts: { windowTicks: number; tickIntervalMs: number; intervalMs: number }) => {
-    try {
-      const yaml = buildScenarioYaml()
-      const cribl = pickCriblPayload(destinationsRef.current)
-      const enabledCribl = destinationsRef.current.find(d => d.enabled && d.type === 'cribl-hec')
-      if (cribl && enabledCribl) setDestStatus(enabledCribl.id, 'sending')
-
-      abortRef.current = new AbortController()
-      const startMs = simCursorRef.current
-      const { logs, forwarded, forwardError } = await generate({
-        scenarioYaml: yaml,
-        ticks: opts.windowTicks,
-        tickIntervalMs: opts.tickIntervalMs,
-        startTimeMs: startMs,
-        seed: seedRef.current++,
-        cribl,
-      })
-
-      simCursorRef.current = startMs + opts.windowTicks * opts.tickIntervalMs
-      addLogs(logs)
-      setTickCount(useSimulationStore.getState().tickCount + opts.windowTicks)
-      setSimulatedTime(new Date(simCursorRef.current))
-
-      if (enabledCribl) {
-        if (forwardError) setDestStatus(enabledCribl.id, 'error', forwardError)
-        else if (forwarded > 0) recordSent(enabledCribl.id, forwarded)
-      }
-    } catch (err) {
-      if ((err as Error).name === 'AbortError') return
-      console.error('backend poll failed:', err)
-    } finally {
-      if (useSimulationStore.getState().status === 'running') {
-        pollRef.current = setTimeout(() => pollOnce(opts), opts.intervalMs)
-      }
-    }
-  }, [addLogs, buildScenarioYaml, recordSent, setDestStatus, setSimulatedTime, setTickCount])
-
   const startPlayback = useCallback((nextSpeed: number) => {
     if (status === 'running') return
-    simCursorRef.current = Date.now()
+    const enabledCribl = destinationsRef.current.find(d => d.enabled && d.type === 'cribl-hec')
+    const cribl = pickCriblPayload(destinationsRef.current)
+    const yaml = buildScenarioYaml()
+    const ep = useEpisodeStore.getState().episode
+    const simStart = Date.now()
+    simCursorRef.current = simStart
     seedRef.current = Math.floor(Math.random() * 1e9)
+    clearLogs()
     setStatus('running')
-    pollOnce({
-      windowTicks: Math.max(1, Math.round(nextSpeed)),
+    setRunStatus('running')
+    if (enabledCribl) setDestStatus(enabledCribl.id, 'sending')
+
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
+
+    runStream({
+      scenarioYaml: yaml,
+      duration: ep.duration,
       tickIntervalMs: 1000,
-      intervalMs: 1000,
+      startTimeMs: simStart,
+      seed: seedRef.current,
+      rate: nextSpeed,
+      cribl,
+      signal: ctrl.signal,
+      onTick: ({ tick: t, logs }) => {
+        setTick(t + 1)
+        setTickCount(t + 1)
+        setSimulatedTime(new Date(simStart + (t + 1) * 1000))
+        if (logs.length) addLogs(logs)
+      },
+      onDone: ({ totalLogs }) => {
+        if (enabledCribl) {
+          if (totalLogs > 0) recordSent(enabledCribl.id, totalLogs)
+          else setDestStatus(enabledCribl.id, 'idle')
+        }
+        abortRef.current = null
+        setStatus('idle')
+        setRunStatus('idle')
+      },
+      onError: (err) => {
+        console.error('run stream error:', err)
+        if (enabledCribl) setDestStatus(enabledCribl.id, 'error', err.message)
+        abortRef.current = null
+        setStatus('idle')
+        setRunStatus('idle')
+      },
     })
-  }, [pollOnce, setStatus, status])
+  }, [addLogs, buildScenarioYaml, clearLogs, recordSent, setDestStatus, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, status])
 
   const stopPlayback = useCallback(() => {
     stopBackend()
     clearActiveConnections()
     setStatus('idle')
-  }, [clearActiveConnections, setStatus, stopBackend])
+    setRunStatus('stopped')
+  }, [clearActiveConnections, setRunStatus, setStatus, stopBackend])
 
   const handlePlayPause = useCallback(() => {
     if (status === 'running') stopPlayback()
-    else {
-      setSpeed(1)
-      startPlayback(1)
-    }
-  }, [setSpeed, startPlayback, status, stopPlayback])
+    else startPlayback(speed)
+  }, [speed, startPlayback, status, stopPlayback])
 
   const handleStep = useCallback(async () => {
     if (status === 'running') return
     try {
       const yaml = buildScenarioYaml()
-      const cribl = pickCriblPayload(destinationsRef.current)
-      const enabledCribl = destinationsRef.current.find(d => d.enabled && d.type === 'cribl-hec')
-      if (enabledCribl) setDestStatus(enabledCribl.id, 'sending')
       const startMs = simCursorRef.current || Date.now()
-      const { logs, forwarded, forwardError } = await generate({
+      const tickIdx = useEpisodeStore.getState().tick
+      const from = Math.max(0, Math.floor(tickIdx))
+      const to = from + 1
+      const result = await logsAt({
         scenarioYaml: yaml,
-        ticks: 1,
+        from,
+        to,
         tickIntervalMs: 1000,
         startTimeMs: startMs,
         seed: (seedRef.current ||= Math.floor(Math.random() * 1e9)) + 1,
-        cribl,
       })
       simCursorRef.current = startMs + 1000
-      addLogs(logs)
-      setTickCount(useSimulationStore.getState().tickCount + 1)
-      setSimulatedTime(new Date(simCursorRef.current))
-      if (enabledCribl) {
-        if (forwardError) setDestStatus(enabledCribl.id, 'error', forwardError)
-        else if (forwarded > 0) recordSent(enabledCribl.id, forwarded)
-      }
+      if (result.length) addLogs(result)
+      setTick(to)
+      setTickCount(to)
+      setSimulatedTime(new Date(startMs + 1000))
     } catch (err) {
       console.error('step failed:', err)
     }
-  }, [addLogs, buildScenarioYaml, recordSent, setDestStatus, setSimulatedTime, setTickCount, status])
+  }, [addLogs, buildScenarioYaml, setSimulatedTime, setTick, setTickCount, status])
 
   const handleReset = useCallback(() => {
     stopBackend()
     clearActiveConnections()
     clearLogs()
     setTickCount(0)
+    setTick(0)
     simCursorRef.current = Date.now()
     setSimulatedTime(new Date())
     setStatus('idle')
-  }, [clearActiveConnections, clearLogs, setSimulatedTime, setStatus, setTickCount, stopBackend])
+    setRunStatus('idle')
+  }, [clearActiveConnections, clearLogs, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, stopBackend])
 
   const handleSpeedSelect = useCallback((nextSpeed: number) => {
     setSpeed(nextSpeed)
     if (status === 'running') {
       stopBackend()
-      pollOnce({
-        windowTicks: Math.max(1, Math.round(nextSpeed)),
-        tickIntervalMs: 1000,
-        intervalMs: 1000,
-      })
+      startPlayback(nextSpeed)
     }
-  }, [pollOnce, setSpeed, status, stopBackend])
+  }, [setSpeed, startPlayback, status, stopBackend])
 
   useEffect(() => () => stopBackend(), [stopBackend])
 
@@ -506,24 +507,9 @@ export function Topbar() {
         </div>
       </div>
 
-      {/* CENTER: tab group */}
+      {/* CENTER: dataset shortcut */}
       <div className="flex shrink-0 items-center gap-0.5 rounded-md border border-slate-200 bg-slate-100 p-[3px]">
-        <TabButton
-          active={mode === 'design' && !isRunning}
-          onClick={() => setMode('design')}
-        >Build</TabButton>
-        <TabButton
-          active={mode === 'design' && isRunning}
-          onClick={() => { setMode('design'); if (!isRunning) startPlayback(speed) }}
-        >Run</TabButton>
-        <TabButton
-          active={mode === 'episodes'}
-          onClick={() => setMode('episodes')}
-        >Replay</TabButton>
-        <TabButton
-          asLink
-          href="/settings"
-        >Datasets</TabButton>
+        <TabButton asLink href="/settings">Datasets</TabButton>
       </div>
 
       {/* RIGHT: status + speed + controls */}

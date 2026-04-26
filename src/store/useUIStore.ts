@@ -7,10 +7,7 @@ export interface PendingConnection {
   handleId: AnchorHandleId
 }
 
-export type EditorMode = 'design' | 'episodes'
-
 interface UIState {
-  mode: EditorMode
   selectedNodeId: string | null
   selectedEdgeId: string | null
   pendingConnection: PendingConnection | null
@@ -20,11 +17,11 @@ interface UIState {
   logPanelWidth: number
   logPanelOpen: boolean
   canvasOpen: boolean
+  timelineHeight: number
   isDraggingFromPalette: boolean
   paletteNodeType: string | null
   showBulkGenerateModal: boolean
   showKeyboardShortcuts: boolean
-  setMode: (mode: EditorMode) => void
   // Actions
   selectNode: (id: string | null) => void
   selectEdge: (id: string | null) => void
@@ -36,14 +33,13 @@ interface UIState {
   setLogPanelWidth: (width: number) => void
   setLogPanelOpen: (open: boolean) => void
   setCanvasOpen: (open: boolean) => void
+  setTimelineHeight: (height: number) => void
   setDraggingFromPalette: (isDragging: boolean, nodeType?: string) => void
   setShowBulkGenerateModal: (show: boolean) => void
   setShowKeyboardShortcuts: (show: boolean) => void
 }
 
 export const useUIStore = create<UIState>()((set) => ({
-  mode: 'design',
-  setMode: (mode) => set({ mode }),
   selectedNodeId: null,
   selectedEdgeId: null,
   pendingConnection: null,
@@ -53,6 +49,7 @@ export const useUIStore = create<UIState>()((set) => ({
   logPanelWidth: 420,
   logPanelOpen: true,
   canvasOpen: true,
+  timelineHeight: 240,
   isDraggingFromPalette: false,
   paletteNodeType: null,
   showBulkGenerateModal: false,
@@ -78,6 +75,7 @@ export const useUIStore = create<UIState>()((set) => ({
   setLogPanelWidth: (width) => set({ logPanelWidth: width }),
   setLogPanelOpen: (open) => set({ logPanelOpen: open }),
   setCanvasOpen: (open) => set({ canvasOpen: open }),
+  setTimelineHeight: (height) => set({ timelineHeight: height }),
   setDraggingFromPalette: (isDragging, nodeType) =>
     set({ isDraggingFromPalette: isDragging, paletteNodeType: nodeType || null }),
   setShowBulkGenerateModal: (show) => set({ showBulkGenerateModal: show }),

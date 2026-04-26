@@ -1,13 +1,15 @@
 'use client'
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
 import { Canvas } from '@/components/canvas/Canvas'
 import { Palette } from '@/components/palette/Palette'
-import { LogPanel } from '@/components/panels/LogPanel'
 import { NodeInspectorPanel } from '@/components/panels/NodeInspectorPanel'
 import { Topbar } from '@/components/toolbar/Topbar'
 import { BulkGenerateModal } from '@/components/panels/BulkGenerateModal'
-import { EpisodeMode } from '@/components/episodes/EpisodeMode'
+import { EpisodeTimeline } from '@/components/episodes/EpisodeTimeline'
+import { BlockInspector } from '@/components/episodes/BlockInspector'
+import { ScrubbedLogs } from '@/components/episodes/ScrubbedLogs'
+import { useEpisodeStore } from '@/store/useEpisodeStore'
 import { useUIStore } from '@/store/useUIStore'
 import { useScenarioStore } from '@/store/useScenarioStore'
 import { useSimulationStore } from '@/store/useSimulationStore'
@@ -21,9 +23,7 @@ import { cn } from '@/lib/utils'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { useUrlSync } from '@/hooks/useUrlSync'
-import { useSegmentCanvasBridge } from '@/hooks/useSegmentCanvasBridge'
 import { useIsMobile } from '@/hooks/useMediaQuery'
-import { useEpisodeStore } from '@/store/useEpisodeStore'
 
 function KeyboardShortcutsDialog() {
   const { showKeyboardShortcuts, setShowKeyboardShortcuts } = useUIStore()
@@ -58,18 +58,16 @@ function KeyboardShortcutsDialog() {
   )
 }
 
-export type PanelMode = 'collapsed' | 'quarter' | 'custom'
-
 export default function EditorPageClient() {
   useUrlSync()
-  useSegmentCanvasBridge()
   const isMobile = useIsMobile()
-  const { logPanelOpen, logPanelWidth, setLogPanelOpen, setLogPanelWidth, mode, canvasOpen, setCanvasOpen, selectedNodeId } = useUIStore()
+  const {
+    logPanelOpen, logPanelWidth, setLogPanelOpen, setLogPanelWidth,
+    canvasOpen, setCanvasOpen, selectedNodeId,
+    timelineHeight, setTimelineHeight,
+  } = useUIStore()
+  const selectedBlockId = useEpisodeStore(s => s.selectedBlockId)
   const selectedNode = useScenarioStore(s => selectedNodeId ? s.nodes.find(n => n.id === selectedNodeId)?.data ?? null : null)
-  const canvasEditSegmentId = useEpisodeStore(s => s.canvasEditSegmentId)
-  const setCanvasEditSegment = useEpisodeStore(s => s.setCanvasEditSegment)
-  const episode = useEpisodeStore(s => s.episode)
-  const editingSegment = canvasEditSegmentId ? episode.segments.find(s => s.id === canvasEditSegmentId) : null
   const { loadScenario } = useScenarioStore()
   const { logBuffer } = useSimulationStore()
   const accumulateMode = useSimulationStore(s => s.accumulateMode)
@@ -77,7 +75,6 @@ export default function EditorPageClient() {
   accumulateModeRef.current = accumulateMode
   const { destinations, setStatus, recordSent } = useDestinationsStore()
   const resizingRef = useRef(false)
-  const [panelMode, setPanelMode] = useState<PanelMode>('quarter')
   const logPanelOpenRef = useRef(logPanelOpen)
   const prevLogCountRef = useRef(logBuffer.length)
   // Refs kept current every render so interval callbacks never close over stale state
@@ -206,7 +203,6 @@ export default function EditorPageClient() {
       if (!resizingRef.current) return
       const nextWidth = Math.min(760, Math.max(300, window.innerWidth - moveEvent.clientX))
       setLogPanelWidth(nextWidth)
-      setPanelMode('custom')
     }
 
     const onUp = () => {
@@ -222,23 +218,16 @@ export default function EditorPageClient() {
   const handleSetWidth = useCallback((fraction: number) => {
     setLogPanelWidth(Math.round(window.innerWidth * fraction))
     setLogPanelOpen(true)
-    setPanelMode(fraction === 0.25 ? 'quarter' : 'custom')
     // Mobile: panes are mutually exclusive. Opening logs collapses the canvas.
     if (window.matchMedia('(max-width: 767px)').matches) {
       setCanvasOpen(false)
     }
   }, [setLogPanelWidth, setLogPanelOpen, setCanvasOpen])
 
-  const handleCollapse = useCallback(() => {
-    setLogPanelOpen(false)
-    setPanelMode('collapsed')
-  }, [setLogPanelOpen])
-
   const handleOpenCanvas = useCallback(() => {
     setCanvasOpen(true)
     if (window.matchMedia('(max-width: 767px)').matches) {
       setLogPanelOpen(false)
-      setPanelMode('collapsed')
     }
   }, [setCanvasOpen, setLogPanelOpen])
 
@@ -248,7 +237,6 @@ export default function EditorPageClient() {
     if (!isMobile) return
     if (logPanelOpen && canvasOpen) {
       setLogPanelOpen(false)
-      setPanelMode('collapsed')
     }
     // Run once per breakpoint change to mobile, not on every open/close.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -264,7 +252,6 @@ export default function EditorPageClient() {
     if (!logPanelOpenRef.current && logBuffer.length > prevLogCountRef.current) {
       setLogPanelWidth(Math.round(window.innerWidth * 0.25))
       setLogPanelOpen(true)
-      setPanelMode('quarter')
     }
     prevLogCountRef.current = logBuffer.length
   }, [logBuffer.length, isMobile, setLogPanelWidth, setLogPanelOpen])
@@ -300,31 +287,19 @@ export default function EditorPageClient() {
                 </div>
               </div>
             ) : (
-              <>
-                {mode === 'design' && editingSegment && (
-                  <div className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-xs text-amber-900">
-                    <span className="rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider">
-                      Editing segment
-                    </span>
-                    <span className="font-medium">{editingSegment.name}</span>
-                    <span className="text-[10px] text-amber-700">— canvas edits auto-save to this segment</span>
-                    <div className="ml-auto flex gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-6 gap-1 px-2 text-[11px]"
-                        onClick={() => { setCanvasEditSegment(null); useUIStore.getState().setMode('episodes') }}
-                      >
-                        Done
-                      </Button>
-                    </div>
-                  </div>
-                )}
-                <div className="flex-1 relative overflow-hidden">
-                  {mode === 'design' ? <Canvas /> : <EpisodeMode />}
-                  {mode === 'design' && <Palette />}
+              <div className="flex-1 flex flex-col min-h-0 relative overflow-hidden">
+                <div className="relative flex-1 min-h-0 overflow-hidden">
+                  <Canvas />
+                  <Palette />
                 </div>
-              </>
+                <TimelineDivider height={timelineHeight} setHeight={setTimelineHeight} />
+                <div
+                  className="shrink-0 border-t border-slate-200 bg-white overflow-hidden"
+                  style={{ height: timelineHeight }}
+                >
+                  <EpisodeTimeline />
+                </div>
+              </div>
             )}
           </div>
 
@@ -360,13 +335,11 @@ export default function EditorPageClient() {
             )}
 
             {logPanelOpen && (
-              selectedNode
-                ? <NodeInspectorPanel nodeData={selectedNode} />
-                : <LogPanel
-                    panelMode={panelMode}
-                    onCollapse={handleCollapse}
-                    onSetWidth={handleSetWidth}
-                  />
+              selectedBlockId
+                ? <BlockInspector />
+                : selectedNode
+                  ? <NodeInspectorPanel nodeData={selectedNode} />
+                  : <ScrubbedLogs />
             )}
           </div>
         </div>
@@ -376,5 +349,33 @@ export default function EditorPageClient() {
       <BulkGenerateModal />
       <KeyboardShortcutsDialog />
     </ReactFlowProvider>
+  )
+}
+
+function TimelineDivider({ height, setHeight }: { height: number; setHeight: (h: number) => void }) {
+  const startRef = useRef<{ y: number; h: number } | null>(null)
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    startRef.current = { y: e.clientY, h: height }
+    const onMove = (ev: MouseEvent) => {
+      if (!startRef.current) return
+      const dy = ev.clientY - startRef.current.y
+      const next = Math.max(120, Math.min(560, startRef.current.h - dy))
+      setHeight(next)
+    }
+    const onUp = () => {
+      startRef.current = null
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }, [height, setHeight])
+  return (
+    <div
+      onMouseDown={onMouseDown}
+      className="h-1 shrink-0 cursor-row-resize bg-slate-200 hover:bg-blue-300 transition-colors"
+      title="Drag to resize timeline"
+    />
   )
 }

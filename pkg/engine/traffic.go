@@ -182,8 +182,43 @@ func (ts *trafficSimulator) Flows(
 		}
 	}
 
+	// Phase 3: synthesize baseline self-traffic for services with no real
+	// inbound flows. Without this, a canvas that has services but no
+	// user_clients node produces only startup heartbeats — looks broken to
+	// the user. Real connections (when present) always win.
+	for i := range s.Services {
+		svc := &s.Services[i]
+		if inbound[svc.Name] > 0 {
+			continue
+		}
+		reqCount := int(math.Round(defaultServiceRPS * tickSec))
+		if reqCount <= 0 {
+			continue
+		}
+		errCount := int(math.Round(float64(reqCount) * 0.01))
+		flows = append(flows, event.Flow{
+			ConnectionIdx: -1,
+			SourceName:    "internal",
+			TargetName:    svc.Name,
+			Protocol:      "tcp",
+			RequestCount:  reqCount,
+			BytesSent:     int64(reqCount) * int64(500+rng.Intn(2000)),
+			BytesReceived: int64(reqCount) * int64(200+rng.Intn(1000)),
+			ErrorCount:    errCount,
+			SrcIP:         "127.0.0.1",
+			DstIP:         ts.ipForEntity(svc.Name, s),
+			Timestamp:     ts2,
+		})
+		inbound[svc.Name] = reqCount
+	}
+
 	return flows
 }
+
+// defaultServiceRPS is the baseline request rate synthesized for services
+// that have no real inbound traffic. Picked so a single service on the
+// canvas produces ~10 logs/sec — enough to feel "live" without spamming.
+const defaultServiceRPS = 10.0
 
 func (ts *trafficSimulator) ipForEntity(name string, s *scenario.Scenario) string {
 	if ip, ok := ts.ipByEntity[name]; ok {

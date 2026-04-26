@@ -1,44 +1,29 @@
 'use client'
 import { create } from 'zustand'
-import type { Episode, EpisodeSegment, SegmentCanvasSnapshot } from '@/types/episode'
+import type { BehaviorBlock, Episode, NarrativeBeat } from '@/types/episode'
 import { generateId } from '@/lib/id'
 
 export type EpisodeRunStatus = 'idle' | 'running' | 'stopped'
 
 interface EpisodeState {
   episode: Episode
-  selectedSegmentId: string | null
-  editingSegmentId: string | null
-  /** If set, scenario store edits in design mode are saved back into this segment's canvas. */
-  canvasEditSegmentId: string | null
+  tick: number
+  selectedBlockId: string | null
   runStatus: EpisodeRunStatus
-  runningSegmentId: string | null
-  runProgressTicks: number // ticks within the currently running segment
   // Actions
   setEpisode: (episode: Episode) => void
-  setEpisodeMeta: (patch: Partial<Pick<Episode, 'name' | 'description'>>) => void
-  addSegment: (seed?: Partial<EpisodeSegment>) => string
-  forkSegment: (segmentId: string) => string | null
-  removeSegment: (segmentId: string) => void
-  updateSegment: (segmentId: string, patch: Partial<EpisodeSegment>) => void
-  moveSegment: (segmentId: string, delta: -1 | 1) => void
-  selectSegment: (id: string | null) => void
-  setEditingSegment: (id: string | null) => void
-  setCanvasEditSegment: (id: string | null) => void
-  updateSegmentCanvas: (segmentId: string, snapshot: SegmentCanvasSnapshot) => void
+  setEpisodeMeta: (patch: Partial<Pick<Episode, 'name' | 'description' | 'duration'>>) => void
+  setTick: (tick: number) => void
+  setSelectedBlock: (id: string | null) => void
+  addBlock: (serviceId: string, block: BehaviorBlock) => void
+  updateBlock: (blockId: string, patch: Partial<BehaviorBlock>) => void
+  deleteBlock: (blockId: string) => void
+  appendBlocks: (serviceId: string, blocks: BehaviorBlock[]) => void
+  upsertBeat: (beat: NarrativeBeat) => void
+  deleteBeat: (id: string) => void
   setRunStatus: (s: EpisodeRunStatus) => void
-  setRunningSegment: (id: string | null) => void
-  setRunProgress: (ticks: number) => void
-  resetRun: () => void
+  resetEpisode: () => void
 }
-
-const DEFAULT_BASELINE_YAML = `- name: Baseline
-- description: |
-    Default baseline segment. Replace this with your scenario YAML.
-- nodes: []
-- services: []
-- connections: []
-`
 
 function defaultEpisode(): Episode {
   const now = new Date().toISOString()
@@ -46,136 +31,84 @@ function defaultEpisode(): Episode {
     id: generateId(),
     name: 'Untitled Episode',
     description: '',
+    duration: 1200,
+    lanes: {},
+    narrative: [],
     createdAt: now,
     updatedAt: now,
-    segments: [
-      {
-        id: generateId(),
-        name: 'Baseline',
-        ticks: 300,
-        scenarioYaml: DEFAULT_BASELINE_YAML,
-      },
-    ],
   }
+}
+
+function touch<T extends Episode>(ep: T): T {
+  return { ...ep, updatedAt: new Date().toISOString() }
 }
 
 export const useEpisodeStore = create<EpisodeState>()((set, get) => ({
   episode: defaultEpisode(),
-  selectedSegmentId: null,
-  editingSegmentId: null,
-  canvasEditSegmentId: null,
+  tick: 0,
+  selectedBlockId: null,
   runStatus: 'idle',
-  runningSegmentId: null,
-  runProgressTicks: 0,
 
   setEpisode: (episode) => set({
     episode,
-    selectedSegmentId: episode.segments[0]?.id ?? null,
-    editingSegmentId: null,
-    canvasEditSegmentId: null,
+    tick: 0,
+    selectedBlockId: null,
     runStatus: 'idle',
-    runningSegmentId: null,
-    runProgressTicks: 0,
   }),
 
-  setEpisodeMeta: (patch) => set(state => ({
-    episode: { ...state.episode, ...patch, updatedAt: new Date().toISOString() },
-  })),
+  setEpisodeMeta: (patch) => set(state => ({ episode: touch({ ...state.episode, ...patch }) })),
 
-  addSegment: (seed) => {
-    const id = generateId()
-    const { episode } = get()
-    const newSegment: EpisodeSegment = {
-      id,
-      name: seed?.name ?? `Segment ${episode.segments.length + 1}`,
-      ticks: seed?.ticks ?? 300,
-      scenarioYaml: seed?.scenarioYaml ?? DEFAULT_BASELINE_YAML,
-      parentId: seed?.parentId,
+  setTick: (tick) => {
+    const max = get().episode.duration
+    set({ tick: Math.max(0, Math.min(max, tick)) })
+  },
+
+  setSelectedBlock: (selectedBlockId) => set({ selectedBlockId }),
+
+  addBlock: (serviceId, block) => set(state => {
+    const lanes = { ...state.episode.lanes }
+    lanes[serviceId] = [...(lanes[serviceId] ?? []), block]
+    return { episode: touch({ ...state.episode, lanes }), selectedBlockId: block.id }
+  }),
+
+  updateBlock: (blockId, patch) => set(state => {
+    const lanes: Record<string, BehaviorBlock[]> = {}
+    for (const [sid, blocks] of Object.entries(state.episode.lanes)) {
+      lanes[sid] = blocks.map(b => (b.id === blockId ? { ...b, ...patch } : b))
     }
-    set({
-      episode: {
-        ...episode,
-        segments: [...episode.segments, newSegment],
-        updatedAt: new Date().toISOString(),
-      },
-      selectedSegmentId: id,
-    })
-    return id
-  },
+    return { episode: touch({ ...state.episode, lanes }) }
+  }),
 
-  forkSegment: (segmentId) => {
-    const { episode } = get()
-    const parent = episode.segments.find(s => s.id === segmentId)
-    if (!parent) return null
-    const id = generateId()
-    const forked: EpisodeSegment = {
-      id,
-      name: `${parent.name} (fork)`,
-      ticks: parent.ticks,
-      scenarioYaml: parent.scenarioYaml,
-      parentId: parent.id,
-      canvas: parent.canvas,
+  deleteBlock: (blockId) => set(state => {
+    const lanes: Record<string, BehaviorBlock[]> = {}
+    for (const [sid, blocks] of Object.entries(state.episode.lanes)) {
+      lanes[sid] = blocks.filter(b => b.id !== blockId)
     }
-    const idx = episode.segments.findIndex(s => s.id === segmentId)
-    const nextSegments = [
-      ...episode.segments.slice(0, idx + 1),
-      forked,
-      ...episode.segments.slice(idx + 1),
-    ]
-    set({
-      episode: { ...episode, segments: nextSegments, updatedAt: new Date().toISOString() },
-      selectedSegmentId: id,
-      editingSegmentId: id,
-    })
-    return id
-  },
+    const next = { ...state, episode: touch({ ...state.episode, lanes }) }
+    if (state.selectedBlockId === blockId) next.selectedBlockId = null
+    return next
+  }),
 
-  removeSegment: (segmentId) => {
-    const { episode, selectedSegmentId } = get()
-    if (episode.segments.length <= 1) return
-    const nextSegments = episode.segments.filter(s => s.id !== segmentId)
-    set({
-      episode: { ...episode, segments: nextSegments, updatedAt: new Date().toISOString() },
-      selectedSegmentId: selectedSegmentId === segmentId ? (nextSegments[0]?.id ?? null) : selectedSegmentId,
-    })
-  },
+  appendBlocks: (serviceId, blocks) => set(state => {
+    const lanes = { ...state.episode.lanes }
+    lanes[serviceId] = [...(lanes[serviceId] ?? []), ...blocks]
+    return { episode: touch({ ...state.episode, lanes }) }
+  }),
 
-  updateSegment: (segmentId, patch) => set(state => ({
-    episode: {
-      ...state.episode,
-      segments: state.episode.segments.map(s =>
-        s.id === segmentId ? { ...s, ...patch } : s
-      ),
-      updatedAt: new Date().toISOString(),
-    },
+  upsertBeat: (beat) => set(state => {
+    const exists = state.episode.narrative.find(b => b.id === beat.id)
+    const narrative = exists
+      ? state.episode.narrative.map(b => (b.id === beat.id ? { ...b, ...beat } : b))
+      : [...state.episode.narrative, beat]
+    narrative.sort((a, b) => a.tick - b.tick)
+    return { episode: touch({ ...state.episode, narrative }) }
+  }),
+
+  deleteBeat: (id) => set(state => ({
+    episode: touch({ ...state.episode, narrative: state.episode.narrative.filter(b => b.id !== id) }),
   })),
 
-  moveSegment: (segmentId, delta) => {
-    const { episode } = get()
-    const idx = episode.segments.findIndex(s => s.id === segmentId)
-    if (idx === -1) return
-    const target = idx + delta
-    if (target < 0 || target >= episode.segments.length) return
-    const next = [...episode.segments]
-    const [moved] = next.splice(idx, 1)
-    next.splice(target, 0, moved)
-    set({ episode: { ...episode, segments: next, updatedAt: new Date().toISOString() } })
-  },
-
-  selectSegment: (id) => set({ selectedSegmentId: id }),
-  setEditingSegment: (id) => set({ editingSegmentId: id }),
-  setCanvasEditSegment: (id) => set({ canvasEditSegmentId: id }),
-  updateSegmentCanvas: (segmentId, snapshot) => set(state => ({
-    episode: {
-      ...state.episode,
-      segments: state.episode.segments.map(s =>
-        s.id === segmentId ? { ...s, canvas: snapshot } : s
-      ),
-      updatedAt: new Date().toISOString(),
-    },
-  })),
   setRunStatus: (runStatus) => set({ runStatus }),
-  setRunningSegment: (id) => set({ runningSegmentId: id }),
-  setRunProgress: (runProgressTicks) => set({ runProgressTicks }),
-  resetRun: () => set({ runStatus: 'idle', runningSegmentId: null, runProgressTicks: 0 }),
+
+  resetEpisode: () => set({ episode: defaultEpisode(), tick: 0, selectedBlockId: null, runStatus: 'idle' }),
 }))

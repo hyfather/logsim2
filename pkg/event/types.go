@@ -2,7 +2,11 @@
 // generators, and sinks so none of those packages need to import each other.
 package event
 
-import "time"
+import (
+	"time"
+
+	"github.com/nikhilm/logsim2/pkg/scenario"
+)
 
 // LogEntry is one emitted log line.
 type LogEntry struct {
@@ -41,4 +45,8 @@ type TickContext struct {
 	// Node-level generators (VPC flow logs, load balancers) use this
 	// instead of the inbound-only slice passed as the second argument.
 	AllFlows []Flow
+	// Override is the timeline-resolved behavior override for the target
+	// being generated. Identity (LatencyMul=1, LogVolMul=1, no error rate)
+	// when no timeline block is active.
+	Override scenario.Override
 }

@@ -3,6 +3,7 @@ import type { FlowNode, FlowEdge } from '@/store/useScenarioStore'
 import type { ScenarioNode, ServiceType } from '@/types/nodes'
 import type { ScenarioMetadata } from '@/types/scenario'
 import type { CustomNodeType, CustomLogTemplate, PlaceholderSpec } from '@/types/customNodeType'
+import type { Episode } from '@/types/episode'
 
 interface YamlNode {
   type: string
@@ -68,12 +69,27 @@ interface YamlCustomType {
   templates: YamlLogTemplate[]
 }
 
+interface YamlTimelineBlock {
+  from: number
+  to: number
+  state?: string
+  error_rate?: number
+  latency_mul?: number
+  log_vol_mul?: number
+  log_vol_abs?: number
+  template_weights?: Record<string, number>
+  placeholders?: Record<string, YamlPlaceholder>
+  custom_log?: string
+  note?: string
+}
+
 interface YamlService {
   type: string
   name: string
   description?: string
   host: string
   generator: YamlGenerator
+  timeline?: YamlTimelineBlock[]
 }
 
 interface YamlConnection {
@@ -86,6 +102,8 @@ interface YamlConnection {
 interface YamlScenario {
   name: string
   description?: string
+  duration?: number
+  tick_interval_ms?: number
   nodes: YamlNode[]
   services: YamlService[]
   connections: YamlConnection[]
@@ -136,7 +154,16 @@ function findAncestorOfType(
   return undefined
 }
 
-function buildGeneratorConfig(node: ScenarioNode): YamlGenerator {
+export interface ServiceOverride {
+  /** Replaces the node's errorRate. */
+  errorRate?: number
+  /** Multiplies the node's trafficRate. */
+  logVolMul?: number
+  /** Multiplies endpoint avg_latency_ms. */
+  latencyMul?: number
+}
+
+function buildGeneratorConfig(node: ScenarioNode, override?: ServiceOverride): YamlGenerator {
   const cfg = (node.config ?? {}) as Record<string, unknown>
   const serviceType = node.serviceType ?? 'custom'
   const gen: YamlGenerator = { type: SERVICE_GENERATOR_TYPE[serviceType] ?? serviceType }
@@ -144,15 +171,23 @@ function buildGeneratorConfig(node: ScenarioNode): YamlGenerator {
   if (typeof cfg.port === 'number') gen.port = cfg.port
   if (typeof cfg.logFormat === 'string') gen.log_format = cfg.logFormat
   if (typeof cfg.logLevel === 'string') gen.log_level = cfg.logLevel
-  if (typeof cfg.errorRate === 'number') gen.error_rate = cfg.errorRate
-  if (typeof cfg.trafficRate === 'number') gen.traffic_rate = cfg.trafficRate
+
+  const baseErrorRate = typeof cfg.errorRate === 'number' ? cfg.errorRate : undefined
+  const baseTrafficRate = typeof cfg.trafficRate === 'number' ? cfg.trafficRate : undefined
+  const errorRate = override?.errorRate ?? baseErrorRate
+  const logVolMul = override?.logVolMul ?? 1
+  const trafficRate = baseTrafficRate !== undefined ? baseTrafficRate * logVolMul : undefined
+  const latencyMul = override?.latencyMul ?? 1
+
+  if (errorRate !== undefined) gen.error_rate = errorRate
+  if (trafficRate !== undefined) gen.traffic_rate = trafficRate
 
   if (Array.isArray(cfg.endpoints)) {
     gen.endpoints = (cfg.endpoints as Array<Record<string, unknown>>).map(ep => ({
       method: String(ep.method ?? 'GET'),
       path: String(ep.path ?? '/'),
-      avg_latency_ms: Number(ep.avgLatencyMs ?? 100),
-      error_rate: Number(ep.errorRate ?? 0),
+      avg_latency_ms: Number(ep.avgLatencyMs ?? 100) * latencyMul,
+      error_rate: errorRate ?? Number(ep.errorRate ?? 0),
     }))
   }
 
@@ -173,10 +208,10 @@ function buildGeneratorConfig(node: ScenarioNode): YamlGenerator {
   if (serviceType === 'custom') {
     const ct = cfg.customType as CustomNodeType | undefined
     if (ct?.id) gen.custom_type = ct.id
-    if (typeof cfg.trafficRate !== 'number' && typeof ct?.defaultRate === 'number') {
-      gen.traffic_rate = ct.defaultRate
+    if (gen.traffic_rate === undefined && typeof ct?.defaultRate === 'number') {
+      gen.traffic_rate = ct.defaultRate * logVolMul
     }
-    if (typeof cfg.errorRate !== 'number' && typeof ct?.defaultErrorRate === 'number') {
+    if (gen.error_rate === undefined && typeof ct?.defaultErrorRate === 'number') {
       gen.error_rate = ct.defaultErrorRate
     }
   }
@@ -222,6 +257,37 @@ function toYamlCustomType(ct: CustomNodeType): YamlCustomType {
   return out
 }
 
+// Default modifiers for each behavior state. Mirrors the Go side's
+// stateDefaults() so the frontend understands what gets sent without
+// re-asking the server. Used to elide redundant explicit fields when they
+// equal the state preset.
+const STATE_DEFAULTS: Record<string, { errorRate: number; latencyMul: number; logVolMul: number }> = {
+  healthy:      { errorRate: 0,    latencyMul: 1,   logVolMul: 1 },
+  degraded:     { errorRate: 0.1,  latencyMul: 2,   logVolMul: 1.2 },
+  down:         { errorRate: 1,    latencyMul: 5,   logVolMul: 0.3 },
+  recovering:   { errorRate: 0.05, latencyMul: 1.5, logVolMul: 1.4 },
+  under_attack: { errorRate: 0.3,  latencyMul: 3,   logVolMul: 4 },
+  throttled:    { errorRate: 0.15, latencyMul: 2.5, logVolMul: 0.5 },
+  compromised:  { errorRate: 0.2,  latencyMul: 2,   logVolMul: 2 },
+}
+
+function toYamlTimelineBlock(b: import('@/types/episode').BehaviorBlock): YamlTimelineBlock {
+  const out: YamlTimelineBlock = {
+    from: b.start,
+    to: b.start + b.duration,
+    state: b.state,
+  }
+  // Only emit a field when it differs from the state preset; keeps YAML
+  // readable for the common case where the user accepted the preset.
+  const d = STATE_DEFAULTS[b.state]
+  if (!d || b.errorRate !== d.errorRate) out.error_rate = b.errorRate
+  if (!d || b.latencyMul !== d.latencyMul) out.latency_mul = b.latencyMul
+  if (!d || b.logVolMul !== d.logVolMul) out.log_vol_mul = b.logVolMul
+  if (b.customLog) out.custom_log = b.customLog
+  if (b.note) out.note = b.note
+  return out
+}
+
 function buildInfraNode(node: ScenarioNode, name: string, parentSubnetName?: string): YamlNode {
   const cfg = (node.config ?? {}) as Record<string, unknown>
   const out: YamlNode = { type: node.type, name }
@@ -241,11 +307,30 @@ function buildInfraNode(node: ScenarioNode, name: string, parentSubnetName?: str
   return out
 }
 
+export interface CanvasToYamlOptions {
+  /** Per-service single-tick override (legacy path; mutually exclusive with episode). */
+  overrides?: Record<string, ServiceOverride>
+  /** Embed the episode's per-service behavior blocks as scenario `timeline:`. */
+  episode?: Episode
+  /** Default 1000 if omitted. */
+  tickIntervalMs?: number
+}
+
 export function canvasToScenarioYaml(
   flowNodes: FlowNode[],
   flowEdges: FlowEdge[],
   metadata: ScenarioMetadata,
+  optsOrOverrides?: CanvasToYamlOptions | Record<string, ServiceOverride>,
 ): string {
+  // Back-compat: callers passing the old override map keep working.
+  const opts: CanvasToYamlOptions =
+    optsOrOverrides && 'overrides' in optsOrOverrides
+      ? (optsOrOverrides as CanvasToYamlOptions)
+      : optsOrOverrides && ('episode' in optsOrOverrides || 'tickIntervalMs' in optsOrOverrides)
+        ? (optsOrOverrides as CanvasToYamlOptions)
+        : { overrides: optsOrOverrides as Record<string, ServiceOverride> | undefined }
+  const overrides = opts.overrides
+  const episode = opts.episode
   const scNodes: ScenarioNode[] = flowNodes.map(n => n.data)
   const byId = new Map(scNodes.map(n => [n.id, n]))
   const nameById = buildNameMap(scNodes)
@@ -285,12 +370,17 @@ export function canvasToScenarioYaml(
       synthesizedHostByServiceId.set(node.id, hostName)
     }
 
-    services.push({
+    const svcEntry: YamlService = {
       type: SERVICE_GENERATOR_TYPE[node.serviceType ?? 'custom'] ?? 'custom',
       name: serviceName,
       host: hostName,
-      generator: buildGeneratorConfig(node),
-    })
+      generator: buildGeneratorConfig(node, overrides?.[node.id]),
+    }
+    const blocks = episode?.lanes?.[node.id]
+    if (blocks && blocks.length > 0) {
+      svcEntry.timeline = blocks.map(toYamlTimelineBlock)
+    }
+    services.push(svcEntry)
   }
 
   // Dedupe custom-type definitions across services that share an id.
@@ -322,6 +412,8 @@ export function canvasToScenarioYaml(
   const scenario: YamlScenario = {
     name: metadata.name || 'Untitled Scenario',
     ...(metadata.description ? { description: metadata.description } : {}),
+    ...(episode?.duration ? { duration: episode.duration } : {}),
+    ...(opts.tickIntervalMs ? { tick_interval_ms: opts.tickIntervalMs } : {}),
     nodes,
     services,
     connections,

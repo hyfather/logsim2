@@ -128,14 +128,14 @@ func (e *Engine) Run(ctx context.Context, totalTicks int, sinkList []sinks.Sink)
 
 		ts := e.cfg.StartTime.Add(time.Duration(tick) * tickInterval)
 		flows := e.traffic.Flows(e.scenario, tick, e.cfg.TickIntervalMs, e.rng, ts)
-		tickCtx := event.TickContext{
+		baseCtx := event.TickContext{
 			TickIndex:      tick,
 			Timestamp:      ts,
 			TickIntervalMs: e.cfg.TickIntervalMs,
 			Rng:            e.rng,
 			AllFlows:       flows,
 		}
-		entries := e.generateTick(flows, tickCtx)
+		entries := e.generateTick(flows, baseCtx)
 
 		for _, s := range sinkList {
 			if err := s.Write(entries); err != nil {
@@ -170,7 +170,15 @@ func (e *Engine) generateTick(flows []event.Flow, ctx event.TickContext) []event
 	var all []event.LogEntry
 	for _, entry := range e.targets {
 		inbound := flowsByTarget[entry.target.Name()]
-		logs := entry.generator.Generate(entry.target, inbound, ctx)
+		// Resolve any timeline override active for this service at this tick.
+		// Node-level targets have no timeline; their override stays identity.
+		targetCtx := ctx
+		if entry.target.Service != nil {
+			targetCtx.Override = entry.target.Service.ResolveOverride(ctx.TickIndex)
+		} else {
+			targetCtx.Override = scenario.Override{LatencyMul: 1, LogVolMul: 1}
+		}
+		logs := entry.generator.Generate(entry.target, inbound, targetCtx)
 
 		// Apply channel filter.
 		for _, l := range logs {

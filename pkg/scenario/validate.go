@@ -96,6 +96,7 @@ func Validate(s *Scenario) error {
 				ve.add("service %q references unknown custom_type %q", svc.Name, ref)
 			}
 		}
+		validateTimeline(ve, svc, customTypeByID, s.Duration)
 	}
 
 	// Validate connection endpoints.
@@ -163,6 +164,71 @@ func Validate(s *Scenario) error {
 		return ve
 	}
 	return nil
+}
+
+// validateTimeline verifies block ranges, behavior states, and that
+// template_weights only reference real template ids on the service's
+// custom_type. Overlap is allowed (later blocks win).
+func validateTimeline(
+	ve *ValidationError,
+	svc *Service,
+	customTypeByID map[string]*CustomType,
+	duration int,
+) {
+	if len(svc.Timeline) == 0 {
+		return
+	}
+	knownStates := map[string]bool{
+		"healthy": true, "degraded": true, "down": true, "recovering": true,
+		"under_attack": true, "throttled": true, "compromised": true,
+	}
+	var templateIDs map[string]bool
+	if svc.Type == ServiceTypeCustom {
+		if ct := customTypeByID[svc.Generator.CustomType]; ct != nil {
+			templateIDs = make(map[string]bool, len(ct.Templates))
+			for _, t := range ct.Templates {
+				if t.ID != "" {
+					templateIDs[t.ID] = true
+				}
+			}
+		}
+	}
+
+	for i := range svc.Timeline {
+		b := &svc.Timeline[i]
+		if b.From < 0 {
+			ve.add("service %q timeline[%d] from %d must be >= 0", svc.Name, i, b.From)
+		}
+		if b.To <= b.From {
+			ve.add("service %q timeline[%d] to %d must be > from %d", svc.Name, i, b.To, b.From)
+		}
+		if duration > 0 && b.To > duration {
+			ve.add("service %q timeline[%d] to %d exceeds scenario duration %d", svc.Name, i, b.To, duration)
+		}
+		if b.State != "" && !knownStates[b.State] {
+			ve.add("service %q timeline[%d] unknown state %q", svc.Name, i, b.State)
+		}
+		if b.ErrorRate != nil && (*b.ErrorRate < 0 || *b.ErrorRate > 1) {
+			ve.add("service %q timeline[%d] error_rate %v out of range [0,1]", svc.Name, i, *b.ErrorRate)
+		}
+		if b.LatencyMul != nil && *b.LatencyMul < 0 {
+			ve.add("service %q timeline[%d] latency_mul %v must be >= 0", svc.Name, i, *b.LatencyMul)
+		}
+		if b.LogVolMul != nil && *b.LogVolMul < 0 {
+			ve.add("service %q timeline[%d] log_vol_mul %v must be >= 0", svc.Name, i, *b.LogVolMul)
+		}
+		if len(b.TemplateWeights) > 0 {
+			if templateIDs == nil {
+				ve.add("service %q timeline[%d] sets template_weights but service is not a custom type", svc.Name, i)
+			} else {
+				for id := range b.TemplateWeights {
+					if !templateIDs[id] {
+						ve.add("service %q timeline[%d] template_weights references unknown template id %q", svc.Name, i, id)
+					}
+				}
+			}
+		}
+	}
 }
 
 // ValidateFile parses and validates a scenario file in one step.

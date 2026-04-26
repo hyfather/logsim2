@@ -1,17 +1,17 @@
-// Package handler hosts the Vercel Go serverless entrypoint for log generation.
+// Package generate hosts the Vercel Lambda for short, bounded log batches.
 //
-// On Vercel, every file under /api compiles to its own Lambda-style function.
-// Each file must be in `package handler` and export `Handler(w, r)`.
-package handler
+// Used by the legacy single-tick frontend path; the new timeline UI prefers
+// /api/run (NDJSON streaming) for full episodes and /api/logs_at for scrubs.
+package generate
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/nikhilm/logsim2/pkg/apihelp"
 	"github.com/nikhilm/logsim2/pkg/engine"
 	"github.com/nikhilm/logsim2/pkg/event"
 	"github.com/nikhilm/logsim2/pkg/scenario"
@@ -22,24 +22,14 @@ import (
 // we cap the requested ticks so a pathological client can't push us past it.
 const maxTicksPerRequest = 30
 
-// CriblConfig is the subset of a Cribl Stream HEC destination the frontend
-// hands us per request. Tokens live in localStorage on the client — we only
-// see them for the duration of one invocation.
-type CriblConfig struct {
-	Enabled    bool   `json:"enabled"`
-	URL        string `json:"url"`
-	Token      string `json:"token"`
-	Sourcetype string `json:"sourcetype"`
-}
-
 type GenerateRequest struct {
-	ScenarioYAML   string       `json:"scenario_yaml"`
-	Ticks          int          `json:"ticks"`
-	TickIntervalMs int          `json:"tick_interval_ms"`
-	StartTimeMs    int64        `json:"start_time_ms"`
-	Seed           int64        `json:"seed"`
-	SourceFilter   string       `json:"source_filter"`
-	Cribl          *CriblConfig `json:"cribl,omitempty"`
+	ScenarioYAML   string                `json:"scenario_yaml"`
+	Ticks          int                   `json:"ticks"`
+	TickIntervalMs int                   `json:"tick_interval_ms"`
+	StartTimeMs    int64                 `json:"start_time_ms"`
+	Seed           int64                 `json:"seed"`
+	SourceFilter   string                `json:"source_filter"`
+	Cribl          *apihelp.CriblConfig  `json:"cribl,omitempty"`
 }
 
 type GenerateResponse struct {
@@ -51,29 +41,29 @@ type GenerateResponse struct {
 
 // Handler is the Vercel entrypoint.
 func Handler(w http.ResponseWriter, r *http.Request) {
-	setCORS(w)
+	apihelp.SetCORS(w)
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	if r.Method != http.MethodPost {
-		writeErr(w, http.StatusMethodNotAllowed, "POST required")
+		apihelp.WriteErr(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "read body: "+err.Error())
+		apihelp.WriteErr(w, http.StatusBadRequest, "read body: "+err.Error())
 		return
 	}
 
 	var req GenerateRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "decode: "+err.Error())
+		apihelp.WriteErr(w, http.StatusBadRequest, "decode: "+err.Error())
 		return
 	}
 	if req.ScenarioYAML == "" {
-		writeErr(w, http.StatusBadRequest, "scenario_yaml is required")
+		apihelp.WriteErr(w, http.StatusBadRequest, "scenario_yaml is required")
 		return
 	}
 
@@ -89,11 +79,11 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	sc, err := scenario.Parse(strings.NewReader(req.ScenarioYAML))
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "parse scenario: "+err.Error())
+		apihelp.WriteErr(w, http.StatusBadRequest, "parse scenario: "+err.Error())
 		return
 	}
 	if err := scenario.Validate(sc); err != nil {
-		writeErr(w, http.StatusBadRequest, "validate scenario: "+err.Error())
+		apihelp.WriteErr(w, http.StatusBadRequest, "validate scenario: "+err.Error())
 		return
 	}
 
@@ -111,14 +101,14 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	collector := &sliceSink{}
 	if err := eng.Run(r.Context(), req.Ticks, []sinks.Sink{collector}); err != nil {
-		writeErr(w, http.StatusInternalServerError, "engine: "+err.Error())
+		apihelp.WriteErr(w, http.StatusInternalServerError, "engine: "+err.Error())
 		return
 	}
 
 	resp := GenerateResponse{Logs: collector.entries, Ticks: req.Ticks}
 
 	if req.Cribl != nil && req.Cribl.Enabled && req.Cribl.URL != "" && req.Cribl.Token != "" && len(collector.entries) > 0 {
-		if err := forwardToCribl(r, req.Cribl, collector.entries); err != nil {
+		if err := forwardToCribl(req.Cribl, collector.entries); err != nil {
 			resp.ForwardError = err.Error()
 		} else {
 			resp.Forwarded = len(collector.entries)
@@ -140,27 +130,14 @@ func (s *sliceSink) Write(e []event.LogEntry) error {
 func (s *sliceSink) Flush() error { return nil }
 func (s *sliceSink) Close() error { return nil }
 
-func forwardToCribl(r *http.Request, c *CriblConfig, entries []event.LogEntry) error {
+func forwardToCribl(c *apihelp.CriblConfig, entries []event.LogEntry) error {
 	// Per-entry Sourcetype flows through to the sink which maps it to a Splunk
 	// vendor:product sourcetype (mysql:query, nginx:access, …). We deliberately
 	// do not flatten all entries to c.Sourcetype — that would erase the
 	// per-generator parsing hints Splunk relies on.
-	// One flush per request — no background ticker, no buffering beyond this call.
 	sink := sinks.NewCribl(c.URL, c.Token, len(entries)+1, 0)
 	if err := sink.Write(entries); err != nil {
 		return err
 	}
 	return sink.Flush()
-}
-
-func setCORS(w http.ResponseWriter) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-}
-
-func writeErr(w http.ResponseWriter, code int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	fmt.Fprintf(w, `{"error":%q}`, msg)
 }
