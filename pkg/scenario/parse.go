@@ -94,6 +94,8 @@ func applyTopLevelKey(s *Scenario, key string, node *yaml.Node) error {
 		return nil
 	case "connections":
 		return node.Decode(&s.Connections)
+	case "custom_types":
+		return node.Decode(&s.CustomTypes)
 	case "editor":
 		s.Editor = &EditorMeta{}
 		return node.Decode(s.Editor)

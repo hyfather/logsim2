@@ -2,6 +2,7 @@ import yaml from 'js-yaml'
 import type { FlowNode, FlowEdge } from '@/store/useScenarioStore'
 import type { ScenarioNode, ServiceType } from '@/types/nodes'
 import type { ScenarioMetadata } from '@/types/scenario'
+import type { CustomNodeType, CustomLogTemplate, PlaceholderSpec } from '@/types/customNodeType'
 
 interface YamlNode {
   type: string
@@ -35,6 +36,36 @@ interface YamlGenerator {
   eviction_policy?: string
   error_rate?: number
   traffic_rate?: number
+  custom_type?: string
+}
+
+interface YamlPlaceholder {
+  kind: string
+  enum_values?: string[]
+  literal?: string
+  min?: number
+  max?: number
+  format?: string
+  length?: number
+  description?: string
+}
+
+interface YamlLogTemplate {
+  template: string
+  weight?: number
+  level?: string
+  is_error?: boolean
+}
+
+interface YamlCustomType {
+  id: string
+  name?: string
+  description?: string
+  default_port?: number
+  default_rate?: number
+  default_error_rate?: number
+  placeholders?: Record<string, YamlPlaceholder>
+  templates: YamlLogTemplate[]
 }
 
 interface YamlService {
@@ -58,6 +89,7 @@ interface YamlScenario {
   nodes: YamlNode[]
   services: YamlService[]
   connections: YamlConnection[]
+  custom_types?: YamlCustomType[]
 }
 
 const SERVICE_GENERATOR_TYPE: Record<ServiceType, string> = {
@@ -138,7 +170,56 @@ function buildGeneratorConfig(node: ScenarioNode): YamlGenerator {
     if (typeof cfg.evictionPolicy === 'string') gen.eviction_policy = cfg.evictionPolicy
   }
 
+  if (serviceType === 'custom') {
+    const ct = cfg.customType as CustomNodeType | undefined
+    if (ct?.id) gen.custom_type = ct.id
+    if (typeof cfg.trafficRate !== 'number' && typeof ct?.defaultRate === 'number') {
+      gen.traffic_rate = ct.defaultRate
+    }
+    if (typeof cfg.errorRate !== 'number' && typeof ct?.defaultErrorRate === 'number') {
+      gen.error_rate = ct.defaultErrorRate
+    }
+  }
+
   return gen
+}
+
+function toYamlPlaceholder(spec: PlaceholderSpec): YamlPlaceholder {
+  const out: YamlPlaceholder = { kind: spec.kind }
+  if (spec.enumValues?.length) out.enum_values = spec.enumValues
+  if (typeof spec.literal === 'string') out.literal = spec.literal
+  if (typeof spec.min === 'number') out.min = spec.min
+  if (typeof spec.max === 'number') out.max = spec.max
+  if (typeof spec.format === 'string') out.format = spec.format
+  if (typeof spec.length === 'number') out.length = spec.length
+  if (typeof spec.description === 'string') out.description = spec.description
+  return out
+}
+
+function toYamlTemplate(t: CustomLogTemplate): YamlLogTemplate {
+  const out: YamlLogTemplate = { template: t.template }
+  if (typeof t.weight === 'number') out.weight = t.weight
+  if (t.level) out.level = t.level
+  if (t.isError) out.is_error = true
+  return out
+}
+
+function toYamlCustomType(ct: CustomNodeType): YamlCustomType {
+  const placeholders: Record<string, YamlPlaceholder> = {}
+  for (const [name, spec] of Object.entries(ct.placeholders ?? {})) {
+    placeholders[name] = toYamlPlaceholder(spec)
+  }
+  const out: YamlCustomType = {
+    id: ct.id,
+    name: ct.name,
+    templates: (ct.templates ?? []).map(toYamlTemplate),
+  }
+  if (ct.description) out.description = ct.description
+  if (typeof ct.defaultPort === 'number') out.default_port = ct.defaultPort
+  if (typeof ct.defaultRate === 'number') out.default_rate = ct.defaultRate
+  if (typeof ct.defaultErrorRate === 'number') out.default_error_rate = ct.defaultErrorRate
+  if (Object.keys(placeholders).length > 0) out.placeholders = placeholders
+  return out
 }
 
 function buildInfraNode(node: ScenarioNode, name: string, parentSubnetName?: string): YamlNode {
@@ -212,6 +293,15 @@ export function canvasToScenarioYaml(
     })
   }
 
+  // Dedupe custom-type definitions across services that share an id.
+  const customTypesById = new Map<string, YamlCustomType>()
+  for (const node of scNodes) {
+    if (node.type !== 'service' || node.serviceType !== 'custom') continue
+    const ct = (node.config as Record<string, unknown> | undefined)?.customType as CustomNodeType | undefined
+    if (!ct?.id || customTypesById.has(ct.id)) continue
+    customTypesById.set(ct.id, toYamlCustomType(ct))
+  }
+
   const allNames = new Set<string>([...nodes.map(n => n.name), ...services.map(s => s.name)])
 
   const connections: YamlConnection[] = []
@@ -235,6 +325,7 @@ export function canvasToScenarioYaml(
     nodes,
     services,
     connections,
+    ...(customTypesById.size > 0 ? { custom_types: [...customTypesById.values()] } : {}),
   }
 
   return yaml.dump(scenario, { lineWidth: 120, noRefs: true })

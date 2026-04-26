@@ -7,6 +7,7 @@ type Scenario struct {
 	Nodes       []Node       `yaml:"nodes"`
 	Services    []Service    `yaml:"services"`
 	Connections []Connection `yaml:"connections"`
+	CustomTypes []CustomType `yaml:"custom_types,omitempty"`
 	Editor      *EditorMeta  `yaml:"editor,omitempty"`
 }
 
@@ -59,7 +60,9 @@ const (
 	ServiceTypePostgres ServiceType = "postgres"
 	ServiceTypeRedis    ServiceType = "redis"
 	ServiceTypeNginx    ServiceType = "nginx"
-	ServiceTypeCustom   ServiceType = "custom"
+	// ServiceTypeCustom is rendered by CustomGenerator using the CustomType
+	// referenced by GeneratorConfig.CustomType.
+	ServiceTypeCustom ServiceType = "custom"
 )
 
 // Service represents an application or database running on a host.
@@ -84,6 +87,44 @@ type GeneratorConfig struct {
 	EvictionPolicy     string     `yaml:"eviction_policy,omitempty"`
 	ErrorRate          float64    `yaml:"error_rate,omitempty"`
 	TrafficRate        float64    `yaml:"traffic_rate,omitempty"`
+	// CustomType references an entry in Scenario.CustomTypes by id; required
+	// when Type == "custom".
+	CustomType string `yaml:"custom_type,omitempty"`
+}
+
+// CustomType is a user-defined log shape: a set of weighted templates plus
+// the placeholders they reference. Mirrors src/types/customNodeType.ts so
+// the frontend preview and the backend generator agree on output.
+type CustomType struct {
+	ID               string                 `yaml:"id"`
+	Name             string                 `yaml:"name,omitempty"`
+	Description      string                 `yaml:"description,omitempty"`
+	DefaultPort      int                    `yaml:"default_port,omitempty"`
+	DefaultRate      float64                `yaml:"default_rate,omitempty"`
+	DefaultErrorRate float64                `yaml:"default_error_rate,omitempty"`
+	Placeholders     map[string]Placeholder `yaml:"placeholders,omitempty"`
+	Templates        []LogTemplate          `yaml:"templates"`
+}
+
+// Placeholder controls how a `{{name}}` marker in a template is filled.
+// Kinds match the frontend's PlaceholderKind enum.
+type Placeholder struct {
+	Kind        string   `yaml:"kind"`
+	EnumValues  []string `yaml:"enum_values,omitempty"`
+	Literal     string   `yaml:"literal,omitempty"`
+	Min         *float64 `yaml:"min,omitempty"`
+	Max         *float64 `yaml:"max,omitempty"`
+	Format      string   `yaml:"format,omitempty"`
+	Length      int      `yaml:"length,omitempty"`
+	Description string   `yaml:"description,omitempty"`
+}
+
+// LogTemplate is one weighted output line within a CustomType.
+type LogTemplate struct {
+	Template string  `yaml:"template"`
+	Weight   float64 `yaml:"weight,omitempty"`
+	Level    string  `yaml:"level,omitempty"`
+	IsError  bool    `yaml:"is_error,omitempty"`
 }
 
 // Endpoint defines one HTTP route on a service.

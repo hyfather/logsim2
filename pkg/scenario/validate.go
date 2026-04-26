@@ -56,6 +56,23 @@ func Validate(s *Scenario) error {
 		serviceByName[svc.Name] = svc
 	}
 
+	// Build custom-type lookup once for service validation below.
+	customTypeByID := make(map[string]*CustomType, len(s.CustomTypes))
+	for i := range s.CustomTypes {
+		ct := &s.CustomTypes[i]
+		if ct.ID == "" {
+			ve.add("custom_type at index %d has no id", i)
+			continue
+		}
+		if _, exists := customTypeByID[ct.ID]; exists {
+			ve.add("duplicate custom_type id %q", ct.ID)
+		}
+		if len(ct.Templates) == 0 {
+			ve.add("custom_type %q has no templates", ct.ID)
+		}
+		customTypeByID[ct.ID] = ct
+	}
+
 	// Validate service host references.
 	for i := range s.Services {
 		svc := &s.Services[i]
@@ -70,6 +87,14 @@ func Validate(s *Scenario) error {
 		}
 		if n.Type != NodeTypeVirtualServer {
 			ve.add("service %q host %q is type %q, must be virtual_server", svc.Name, svc.Host, n.Type)
+		}
+		if svc.Type == ServiceTypeCustom {
+			ref := svc.Generator.CustomType
+			if ref == "" {
+				ve.add("service %q is type custom but generator.custom_type is unset", svc.Name)
+			} else if _, ok := customTypeByID[ref]; !ok {
+				ve.add("service %q references unknown custom_type %q", svc.Name, ref)
+			}
 		}
 	}
 

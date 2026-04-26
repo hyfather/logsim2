@@ -62,10 +62,23 @@ func New(s *scenario.Scenario, cfg Config) *Engine {
 }
 
 func (e *Engine) buildTargets() {
+	customByID := make(map[string]*scenario.CustomType, len(e.scenario.CustomTypes))
+	for i := range e.scenario.CustomTypes {
+		customByID[e.scenario.CustomTypes[i].ID] = &e.scenario.CustomTypes[i]
+	}
+
 	// Services first (most generators live here).
 	for i := range e.scenario.Services {
 		svc := &e.scenario.Services[i]
-		gen := generators.ForService(svc.Type)
+		var gen generators.Generator
+		if svc.Type == scenario.ServiceTypeCustom {
+			// Avoid the typed-nil interface trap: assign only if non-nil.
+			if cg := generators.NewCustomGenerator(customByID[svc.Generator.CustomType]); cg != nil {
+				gen = cg
+			}
+		} else {
+			gen = generators.ForService(svc.Type)
+		}
 		if gen == nil {
 			continue
 		}
