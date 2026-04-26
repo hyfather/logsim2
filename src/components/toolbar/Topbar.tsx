@@ -453,12 +453,9 @@ export function Topbar() {
 
   // ── Render ──────────────────────────────────────────────────────
   return (
-    <div
-      className="grid h-12 shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-3.5"
-      style={{ gridTemplateColumns: '1fr auto 1fr' }}
-    >
+    <div className="flex h-12 shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-2 sm:gap-3 sm:px-3.5 sm:[display:grid] sm:[grid-template-columns:1fr_auto_1fr]">
       {/* LEFT: logo + breadcrumbs */}
-      <div className="flex min-w-0 items-center gap-3.5">
+      <div className="flex min-w-0 items-center gap-2 sm:gap-3.5">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
@@ -467,8 +464,8 @@ export function Topbar() {
               title="File menu"
             >
               <LogoMark />
-              <span className="text-[14px] font-bold tracking-[-0.01em] text-slate-900">logsim</span>
-              <span className="font-mono text-[11px] font-medium text-slate-500">v2</span>
+              <span className="hidden text-[14px] font-bold tracking-[-0.01em] text-slate-900 sm:inline">logsim</span>
+              <span className="hidden font-mono text-[11px] font-medium text-slate-500 sm:inline">v2</span>
               <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
             </button>
           </DropdownMenuTrigger>
@@ -591,8 +588,8 @@ export function Topbar() {
         </div>
       </div>
 
-      {/* CENTER: dataset shortcut */}
-      <div className="flex shrink-0 items-center gap-0.5 rounded-md border border-slate-200 bg-slate-100 p-[3px]">
+      {/* CENTER: dataset shortcut (desktop only — accessible via File menu on mobile) */}
+      <div className="hidden shrink-0 items-center gap-0.5 rounded-md border border-slate-200 bg-slate-100 p-[3px] sm:flex">
         <TabButton asLink href="/settings">Datasets</TabButton>
       </div>
 
@@ -604,13 +601,14 @@ export function Topbar() {
           <span className="hidden sm:inline">{isRunning ? 'streaming' : 'paused'}</span>
         </div>
 
-        {/* Destinations status chip */}
+        {/* Destinations status chip — hide entirely on phones when nothing's configured */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
               type="button"
               className={cn(
-                'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2 text-[11px] font-medium transition-colors',
+                'h-7 shrink-0 items-center gap-1.5 rounded-md border px-2 text-[11px] font-medium transition-colors sm:inline-flex',
+                destinations.length === 0 ? 'hidden sm:inline-flex' : 'inline-flex',
                 destOverall === 'error'
                   ? 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100'
                   : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
@@ -680,7 +678,7 @@ export function Topbar() {
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {/* Time multiplier segmented control */}
+        {/* Time multiplier — segmented on desktop, dropdown on mobile */}
         <div className="hidden shrink-0 items-center gap-0.5 rounded-md border border-slate-200 bg-slate-100 p-[2px] sm:flex">
           {SPEED_OPTIONS.map(s => (
             <button
@@ -697,13 +695,38 @@ export function Topbar() {
             >{s}×</button>
           ))}
         </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="inline-flex h-9 shrink-0 items-center justify-center rounded-md border border-slate-300 bg-white px-2 font-mono text-[12px] font-semibold text-slate-700 hover:bg-slate-50 sm:hidden"
+              title={`Simulation speed (${speed}×)`}
+            >
+              {speed}×
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-0">
+            {SPEED_OPTIONS.map(s => (
+              <DropdownMenuItem
+                key={s}
+                onClick={() => handleSpeedSelect(s)}
+                className={cn(
+                  'cursor-pointer justify-center font-mono text-xs',
+                  speed === s && 'font-bold text-blue-600',
+                )}
+              >
+                {s}×
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
 
-        {/* Step + Reset (icon-only) */}
+        {/* Step (desktop only — saved space matters more on phones) */}
         <button
           type="button"
           onClick={handleStep}
           disabled={isRunning}
-          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+          className="hidden h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 sm:inline-flex"
           title="Step one tick"
         >
           <StepForward className="h-3.5 w-3.5" />
@@ -712,10 +735,10 @@ export function Topbar() {
           type="button"
           onClick={handleReset}
           disabled={!isRunning && tickCount === 0}
-          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 sm:h-7 sm:w-7"
           title="Reset simulation"
         >
-          <RotateCcw className="h-3.5 w-3.5" />
+          <RotateCcw className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
         </button>
 
         {/* Pause/Run primary */}
@@ -723,14 +746,14 @@ export function Topbar() {
           type="button"
           onClick={handlePlayPause}
           className={cn(
-            'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium transition-colors',
+            'inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium transition-colors sm:h-7',
             'border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
           )}
           title={isRunning ? 'Pause simulation' : 'Run simulation'}
         >
-          {isRunning ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+          {isRunning ? <Pause className="h-4 w-4 sm:h-3.5 sm:w-3.5" /> : <Play className="h-4 w-4 sm:h-3.5 sm:w-3.5" />}
           <span className="hidden sm:inline">{isRunning ? 'Pause' : 'Run'}</span>
-          {!isRunning && speed > 1 && <FastForward className="h-3 w-3 text-slate-400" />}
+          {!isRunning && speed > 1 && <FastForward className="hidden h-3 w-3 text-slate-400 sm:inline" />}
         </button>
 
         {/* Export primary */}
@@ -738,10 +761,10 @@ export function Topbar() {
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-blue-600 bg-blue-600 px-2.5 text-[12px] font-semibold text-white transition-colors hover:bg-blue-700"
+              className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-blue-600 bg-blue-600 px-2.5 text-[12px] font-semibold text-white transition-colors hover:bg-blue-700 sm:h-7"
               title="Export dataset"
             >
-              <Download className="h-3.5 w-3.5" />
+              <Download className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
               <span className="hidden md:inline">Export</span>
             </button>
           </DropdownMenuTrigger>

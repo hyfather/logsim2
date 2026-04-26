@@ -24,6 +24,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Button } from '@/components/ui/button'
 import { useUrlSync } from '@/hooks/useUrlSync'
 import { useIsMobile } from '@/hooks/useMediaQuery'
+import { startPointerDrag } from '@/lib/pointerDrag'
 
 function KeyboardShortcutsDialog() {
   const { showKeyboardShortcuts, setShowKeyboardShortcuts } = useUIStore()
@@ -74,7 +75,6 @@ export default function EditorPageClient() {
   const accumulateModeRef = useRef(accumulateMode)
   accumulateModeRef.current = accumulateMode
   const { destinations, setStatus, recordSent } = useDestinationsStore()
-  const resizingRef = useRef(false)
   const logPanelOpenRef = useRef(logPanelOpen)
   const prevLogCountRef = useRef(logBuffer.length)
   // Refs kept current every render so interval callbacks never close over stale state
@@ -195,24 +195,14 @@ export default function EditorPageClient() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
-  const handleResizeStart = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+  const handleResizeStart = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault()
-    resizingRef.current = true
-
-    const onMove = (moveEvent: MouseEvent) => {
-      if (!resizingRef.current) return
-      const nextWidth = Math.min(760, Math.max(300, window.innerWidth - moveEvent.clientX))
-      setLogPanelWidth(nextWidth)
-    }
-
-    const onUp = () => {
-      resizingRef.current = false
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
+    startPointerDrag(event, {
+      onMove: ({ event: ev }) => {
+        const nextWidth = Math.min(760, Math.max(300, window.innerWidth - ev.clientX))
+        setLogPanelWidth(nextWidth)
+      },
+    })
   }, [setLogPanelWidth])
 
   const handleSetWidth = useCallback((fraction: number) => {
@@ -315,7 +305,7 @@ export default function EditorPageClient() {
             {logPanelOpen && !useFullWidthLogPanel && (
               <div
                 className="absolute left-0 top-0 z-20 hidden h-full w-1 -translate-x-1/2 cursor-col-resize bg-transparent hover:bg-blue-200 md:block"
-                onMouseDown={handleResizeStart}
+                onPointerDown={handleResizeStart}
               />
             )}
 
@@ -353,28 +343,23 @@ export default function EditorPageClient() {
 }
 
 function TimelineDivider({ height, setHeight }: { height: number; setHeight: (h: number) => void }) {
-  const startRef = useRef<{ y: number; h: number } | null>(null)
-  const onMouseDown = useCallback((e: React.MouseEvent) => {
+  const onPointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault()
-    startRef.current = { y: e.clientY, h: height }
-    const onMove = (ev: MouseEvent) => {
-      if (!startRef.current) return
-      const dy = ev.clientY - startRef.current.y
-      const next = Math.max(120, Math.min(560, startRef.current.h - dy))
-      setHeight(next)
-    }
-    const onUp = () => {
-      startRef.current = null
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
+    const startH = height
+    startPointerDrag(e, {
+      onMove: ({ dy }) => {
+        const next = Math.max(120, Math.min(560, startH - dy))
+        setHeight(next)
+      },
+    })
   }, [height, setHeight])
   return (
     <div
-      onMouseDown={onMouseDown}
-      className="h-1 shrink-0 cursor-row-resize bg-slate-200 hover:bg-blue-300 transition-colors"
+      onPointerDown={onPointerDown}
+      // Visible bar stays thin, but the touch hit area is taller via the
+      // ::before pseudo so it's grabbable on phones without making the divider
+      // look chunky on desktop.
+      className="relative h-1 shrink-0 cursor-row-resize touch-none bg-slate-200 transition-colors before:absolute before:inset-x-0 before:-top-2 before:-bottom-2 before:content-[''] hover:bg-blue-300"
       title="Drag to resize timeline"
     />
   )
