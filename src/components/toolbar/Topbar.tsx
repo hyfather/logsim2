@@ -39,6 +39,7 @@ import { pickCriblPayload } from '@/lib/backendClient'
 import { canvasToScenarioYaml } from '@/lib/canvasToScenarioYaml'
 import { runStream } from '@/lib/runStream'
 import { logsAt } from '@/lib/logsAt'
+import { materializeProposedScenarioJson } from '@/lib/scenarioPrompt'
 
 interface ExampleEpisodeManifestEntry {
   file: string
@@ -46,6 +47,16 @@ interface ExampleEpisodeManifestEntry {
   description: string
   segmentCount: number
   totalTicks: number
+}
+
+interface PresetScenarioManifestEntry {
+  file: string
+  title: string
+  description: string
+  category: string
+  difficulty: 'easy' | 'medium' | 'hard'
+  durationTicks: number
+  serviceCount: number
 }
 
 const SPEED_OPTIONS = [1, 2, 4, 8] as const
@@ -95,6 +106,8 @@ export function Topbar() {
 
   const [examples, setExamples] = useState<ExampleEpisodeManifestEntry[]>([])
   const [examplesLoaded, setExamplesLoaded] = useState(false)
+  const [presets, setPresets] = useState<PresetScenarioManifestEntry[]>([])
+  const [presetsLoaded, setPresetsLoaded] = useState(false)
   const [draftName, setDraftName] = useState(metadata.name)
   const [editingTitle, setEditingTitle] = useState(false)
 
@@ -207,6 +220,35 @@ export function Topbar() {
       alert(`Failed to load example episode: ${String(err)}`)
     }
   }, [setEpisode])
+
+  // ── Example Scenarios (presets w/ embedded timelines) ───────────
+  const loadPresetsManifest = useCallback(async () => {
+    if (presetsLoaded) return
+    try {
+      const res = await fetch('/scenarios/presets/index.json', { cache: 'no-cache' })
+      if (res.ok) setPresets(await res.json())
+    } catch { /* ignore */ }
+    setPresetsLoaded(true)
+  }, [presetsLoaded])
+
+  const loadExampleScenario = useCallback(async (entry: PresetScenarioManifestEntry) => {
+    try {
+      const res = await fetch(`/scenarios/presets/${entry.file}`, { cache: 'no-cache' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const json = await res.json()
+      const result = materializeProposedScenarioJson(json)
+      const now = new Date().toISOString()
+      loadScenario(result.flowNodes, result.flowEdges, {
+        name: result.name?.trim() || entry.title,
+        description: result.description?.trim() || entry.description,
+        createdAt: now,
+        updatedAt: now,
+      })
+      if (result.episode) setEpisode(result.episode)
+    } catch (err) {
+      alert(`Failed to load preset scenario: ${String(err)}`)
+    }
+  }, [loadScenario, setEpisode])
 
   const handleEpisodeSave = useCallback(() => {
     const payload: EpisodeFileV2 = { version: 2, episode }
@@ -437,6 +479,48 @@ export function Topbar() {
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={handleEpisodeOpen} className="cursor-pointer text-xs">🎬 Open Episode…</DropdownMenuItem>
             <DropdownMenuItem onClick={handleEpisodeSave} className="cursor-pointer text-xs">🎬 Save Episode</DropdownMenuItem>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger
+                onMouseEnter={loadPresetsManifest}
+                onFocus={loadPresetsManifest}
+                className="cursor-pointer text-xs"
+              >
+                📚 Example Scenarios
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="max-w-sm text-xs">
+                <DropdownMenuLabel className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                  Realistic scenarios with timelines
+                </DropdownMenuLabel>
+                {!presetsLoaded ? (
+                  <div className="px-2 py-1.5 text-[11px] text-slate-400">Loading…</div>
+                ) : presets.length === 0 ? (
+                  <div className="px-2 py-1.5 text-[11px] text-slate-400">No example scenarios found.</div>
+                ) : (
+                  presets.map(p => (
+                    <DropdownMenuItem
+                      key={p.file}
+                      onClick={() => loadExampleScenario(p)}
+                      className="flex cursor-pointer flex-col items-start gap-0.5 text-xs"
+                    >
+                      <span className="flex items-center gap-1.5 font-medium">
+                        {p.title}
+                        <span className={cn(
+                          'rounded px-1 py-px text-[9px] font-semibold uppercase tracking-wide',
+                          p.category === 'security' ? 'bg-rose-100 text-rose-700'
+                            : p.category === 'incident' ? 'bg-amber-100 text-amber-800'
+                            : p.category === 'deploy' ? 'bg-violet-100 text-violet-700'
+                            : 'bg-slate-100 text-slate-600',
+                        )}>{p.category}</span>
+                      </span>
+                      <span className="whitespace-normal text-[10px] leading-tight text-slate-500">{p.description}</span>
+                      <span className="text-[10px] text-slate-400">
+                        {p.serviceCount} services · {Math.round(p.durationTicks / 60)} min · {p.difficulty}
+                      </span>
+                    </DropdownMenuItem>
+                  ))
+                )}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
             <DropdownMenuSub>
               <DropdownMenuSubTrigger
                 onMouseEnter={loadExamplesManifest}

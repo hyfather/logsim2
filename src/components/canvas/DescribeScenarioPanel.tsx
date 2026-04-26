@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
 import { useAIKeysStore } from '@/store/useAIKeysStore'
 import { useScenarioStore } from '@/store/useScenarioStore'
+import { useEpisodeStore } from '@/store/useEpisodeStore'
 import { AI_PROVIDER_META, type AIProvider } from '@/types/aiKeys'
 import { generateScenarioFromDescription } from '@/lib/scenarioPrompt'
 import { AIRequestError } from '@/lib/aiClient'
@@ -47,6 +48,7 @@ export function DescribeScenarioPanel({ open, onClose }: DescribeScenarioPanelPr
   const loadScenario = useScenarioStore(s => s.loadScenario)
   const setMetadata = useScenarioStore(s => s.setMetadata)
   const organizeLayout = useScenarioStore(s => s.organizeLayout)
+  const setEpisode = useEpisodeStore(s => s.setEpisode)
   const { fitView } = useReactFlow()
 
   const [description, setDescription] = useState('')
@@ -105,6 +107,13 @@ export function DescribeScenarioPanel({ open, onClose }: DescribeScenarioPanelPr
         updatedAt: new Date().toISOString(),
       })
       setMetadata({ name: result.name?.trim() || 'AI scenario' })
+
+      // If the model also produced a timeline, replace the active episode with it
+      // so the timeline panel comes up populated and ready to scrub.
+      if (result.episode) {
+        setEpisode(result.episode)
+      }
+
       // Re-run the canvas layout pass so service tiers and edge anchors are
       // computed from the live store state, then fit-view to center the result.
       organizeLayout()
@@ -113,9 +122,16 @@ export function DescribeScenarioPanel({ open, onClose }: DescribeScenarioPanelPr
           fitView({ padding: 0.2, duration: 400, maxZoom: 1 })
         })
       })
+
+      const laneCount = result.episode ? Object.keys(result.episode.lanes).length : 0
+      const beatCount = result.episode ? result.episode.narrative.length : 0
+      const timelinePart = result.episode
+        ? `, plus a ${Math.round(result.episode.duration / 60)}-minute timeline (${laneCount} lane${laneCount === 1 ? '' : 's'}, ${beatCount} beat${beatCount === 1 ? '' : 's'})`
+        : ''
       setSuccess(
         `Generated ${result.flowNodes.length} node${result.flowNodes.length === 1 ? '' : 's'}` +
-          ` and ${result.flowEdges.length} connection${result.flowEdges.length === 1 ? '' : 's'}.`,
+          ` and ${result.flowEdges.length} connection${result.flowEdges.length === 1 ? '' : 's'}` +
+          `${timelinePart}.`,
       )
     } catch (err) {
       if ((err as Error).name === 'AbortError') {

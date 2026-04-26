@@ -1,0 +1,60 @@
+{
+  "name": "Cache Failure Cascade",
+  "description": "Redis OOM kill forces all reads onto Postgres; the database connection pool exhausts, APIs degrade, then Redis recovers and the cache warms back up.",
+  "reasoning": "Two Node APIs read from Redis and fall back to Postgres on miss. Redis dies, the DB takes the full read load, both APIs degrade, recovery is gradual.",
+  "category": "incident",
+  "difficulty": "easy",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "prod-vpc",      "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "public-subnet", "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "app-subnet",    "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "data-subnet",   "parent": "vpc" },
+    { "id": "lb",   "type": "service", "serviceType": "nginx",    "label": "edge-lb",      "parent": "pubnet" },
+    { "id": "api1", "type": "service", "serviceType": "nodejs",   "label": "products-api-1", "parent": "appnet" },
+    { "id": "api2", "type": "service", "serviceType": "nodejs",   "label": "products-api-2", "parent": "appnet" },
+    { "id": "rd",   "type": "service", "serviceType": "redis",    "label": "products-cache", "parent": "datanet", "notes": "Read-through product cache." },
+    { "id": "db",   "type": "service", "serviceType": "postgres", "label": "products-db",    "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "lb",   "target": "api1", "protocol": "http", "port": 3000, "trafficRate": 80,  "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb",   "target": "api2", "protocol": "http", "port": 3000, "trafficRate": 80,  "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "api1", "target": "rd",   "protocol": "tcp",  "port": 6379, "trafficRate": 240, "trafficPattern": "steady",  "errorRate": 0.0005 },
+    { "source": "api2", "target": "rd",   "protocol": "tcp",  "port": 6379, "trafficRate": 240, "trafficPattern": "steady",  "errorRate": 0.0005 },
+    { "source": "api1", "target": "db",   "protocol": "tcp",  "port": 5432, "trafficRate": 25,  "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "api2", "target": "db",   "protocol": "tcp",  "port": 5432, "trafficRate": 25,  "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1080,
+    "narrative": [
+      { "tick": 0,   "text": "Cache hit ratio 95%; everything healthy." },
+      { "tick": 240, "text": "Redis OOM kill — eviction policy misconfigured." },
+      { "tick": 280, "text": "Read traffic falling back to products-db." },
+      { "tick": 420, "text": "products-db connection pool saturating; APIs return 5xx." },
+      { "tick": 660, "text": "Redis restarted with corrected maxmemory; cache warming." },
+      { "tick": 840, "text": "Cache hit ratio recovered above 80%; APIs back to baseline." }
+    ],
+    "lanes": {
+      "rd": [
+        { "start": 0,   "duration": 240, "state": "healthy" },
+        { "start": 240, "duration": 60,  "state": "down",       "note": "OOM kill" },
+        { "start": 300, "duration": 360, "state": "recovering", "note": "warming cache" },
+        { "start": 660, "duration": 420, "state": "healthy" }
+      ],
+      "db": [
+        { "start": 0,   "duration": 300, "state": "healthy" },
+        { "start": 300, "duration": 360, "state": "degraded",   "note": "pool saturated" },
+        { "start": 660, "duration": 420, "state": "healthy" }
+      ],
+      "api1": [
+        { "start": 0,   "duration": 280, "state": "healthy" },
+        { "start": 280, "duration": 380, "state": "degraded",   "note": "p95 latency up 4x" },
+        { "start": 660, "duration": 420, "state": "healthy" }
+      ],
+      "api2": [
+        { "start": 0,   "duration": 280, "state": "healthy" },
+        { "start": 280, "duration": 380, "state": "degraded",   "note": "p95 latency up 4x" },
+        { "start": 660, "duration": 420, "state": "healthy" }
+      ]
+    }
+  }
+}

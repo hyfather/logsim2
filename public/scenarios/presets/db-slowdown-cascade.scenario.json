@@ -1,0 +1,58 @@
+{
+  "name": "Database Slowdown Cascade",
+  "description": "Three-tier web app where the primary database starts returning slow queries, cascading degradation up through the API tier until a read-replica failover restores service.",
+  "reasoning": "Public Nginx LB fronts two stateless Node.js APIs which share a Postgres + Redis. The DB lane drives the incident; APIs follow with a small lag.",
+  "category": "incident",
+  "difficulty": "easy",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "prod-vpc",      "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "public-subnet", "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "app-subnet",    "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "data-subnet",   "parent": "vpc" },
+    { "id": "lb",   "type": "service", "serviceType": "nginx",    "label": "edge-lb",       "parent": "pubnet",  "notes": "Public HTTPS reverse proxy." },
+    { "id": "api1", "type": "service", "serviceType": "nodejs",   "label": "users-api-1",   "parent": "appnet",  "notes": "Stateless user directory API." },
+    { "id": "api2", "type": "service", "serviceType": "nodejs",   "label": "users-api-2",   "parent": "appnet",  "notes": "Stateless user directory API." },
+    { "id": "db",   "type": "service", "serviceType": "postgres", "label": "users-db",      "parent": "datanet", "notes": "Primary user record store." },
+    { "id": "rd",   "type": "service", "serviceType": "redis",    "label": "session-cache", "parent": "datanet", "notes": "Session lookup cache." }
+  ],
+  "edges": [
+    { "source": "lb",   "target": "api1", "protocol": "http", "port": 3000, "trafficRate": 90,  "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb",   "target": "api2", "protocol": "http", "port": 3000, "trafficRate": 90,  "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "api1", "target": "db",   "protocol": "tcp",  "port": 5432, "trafficRate": 45,  "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "api2", "target": "db",   "protocol": "tcp",  "port": 5432, "trafficRate": 45,  "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "api1", "target": "rd",   "protocol": "tcp",  "port": 6379, "trafficRate": 220, "trafficPattern": "steady",  "errorRate": 0.0005 },
+    { "source": "api2", "target": "rd",   "protocol": "tcp",  "port": 6379, "trafficRate": 220, "trafficPattern": "steady",  "errorRate": 0.0005 }
+  ],
+  "timeline": {
+    "duration": 1200,
+    "narrative": [
+      { "tick": 0,    "text": "Baseline traffic — diurnal ingress, all green." },
+      { "tick": 240,  "text": "users-db p95 latency climbs; slow query log fills up." },
+      { "tick": 360,  "text": "API error rate exceeds 5%; PagerDuty fires." },
+      { "tick": 600,  "text": "On-call confirms lock contention from a long-running migration." },
+      { "tick": 720,  "text": "Read-replica failover initiated; APIs throttle to drain queue." },
+      { "tick": 960,  "text": "Mitigation complete; traffic normalising." },
+      { "tick": 1140, "text": "Post-incident — error rate back to baseline." }
+    ],
+    "lanes": {
+      "db": [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 480, "state": "degraded",   "note": "slow queries / lock waits" },
+        { "start": 720,  "duration": 240, "state": "recovering", "note": "failover in progress" },
+        { "start": 960,  "duration": 240, "state": "healthy" }
+      ],
+      "api1": [
+        { "start": 0,    "duration": 300, "state": "healthy" },
+        { "start": 300,  "duration": 420, "state": "degraded",   "note": "DB latency cascade" },
+        { "start": 720,  "duration": 240, "state": "throttled",  "note": "rate limit while DB drains" },
+        { "start": 960,  "duration": 240, "state": "healthy" }
+      ],
+      "api2": [
+        { "start": 0,    "duration": 300, "state": "healthy" },
+        { "start": 300,  "duration": 420, "state": "degraded",   "note": "DB latency cascade" },
+        { "start": 720,  "duration": 240, "state": "throttled",  "note": "rate limit while DB drains" },
+        { "start": 960,  "duration": 240, "state": "healthy" }
+      ]
+    }
+  }
+}
