@@ -1,0 +1,59 @@
+/* logsim2 — light mode (matches repo: white bg, slate text, indigo/blue accent, green node borders) */
+:root {
+  --ls-bg: #f8fafc;          /* slate-50 */
+  --ls-bg-1: #ffffff;
+  --ls-bg-2: #f1f5f9;        /* slate-100 */
+  --ls-bg-3: #e2e8f0;        /* slate-200 */
+  --ls-bg-elev: #ffffff;
+  --ls-border: #e2e8f0;      /* slate-200 */
+  --ls-border-strong: #cbd5e1; /* slate-300 */
+  --ls-text: #0f172a;        /* slate-900 */
+  --ls-text-2: #334155;      /* slate-700 */
+  --ls-text-3: #64748b;      /* slate-500 */
+  --ls-text-4: #94a3b8;      /* slate-400 */
+
+  --ls-accent: #2563eb;      /* blue-600 */
+  --ls-accent-soft: rgba(37, 99, 235, 0.10);
+  --ls-accent-border: rgba(37, 99, 235, 0.32);
+
+  --ls-green: #16a34a;
+  --ls-green-soft: #86efac;
+  --ls-amber: #d97706;
+  --ls-red: #dc2626;
+  --ls-purple: #7c3aed;
+
+  --ls-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  --ls-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+  --ls-radius-sm: 4px;
+  --ls-radius: 6px;
+  --ls-radius-lg: 8px;
+
+  --ls-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --ls-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+  --ls-shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.10);
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  font-family: var(--ls-sans);
+  color: var(--ls-text);
+  background: var(--ls-bg);
+  -webkit-font-smoothing: antialiased;
+}
+button { font-family: inherit; }
+
+.ls-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.ls-scroll::-webkit-scrollbar-track { background: transparent; }
+.ls-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+.ls-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* connection-flow animation (mirrors repo) */
+@keyframes connection-flow {
+  0%   { stroke-dashoffset: 0; }
+  100% { stroke-dashoffset: -20; }
+}
+.connection-flow-path { animation: connection-flow 0.8s linear infinite; }

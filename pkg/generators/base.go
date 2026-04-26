@@ -76,6 +76,54 @@ func makeID(tickIndex, idx int) string {
 	return fmt.Sprintf("t%d-%d", tickIndex, idx)
 }
 
+// applyVolumeAndError applies the timeline override on TickContext to a
+// baseline (totalReqs, totalErrs) computed from inbound flows or a service's
+// own traffic_rate. LogVolAbs (lines/sec) wins over LogVolMul when set;
+// HasErrorRate replaces baseline errors with totalReqs * override rate;
+// otherwise errors scale with volume so the existing fraction is preserved.
+func applyVolumeAndError(totalReqs, totalErrs int, ctx event.TickContext) (int, int) {
+	ov := ctx.Override
+	tickSec := float64(ctx.TickIntervalMs) / 1000.0
+	prevReqs := totalReqs
+
+	if ov.LogVolAbs != nil {
+		totalReqs = int(math.Round(*ov.LogVolAbs * tickSec))
+	} else if ov.LogVolMul > 0 && ov.LogVolMul != 1 {
+		totalReqs = int(math.Round(float64(totalReqs) * ov.LogVolMul))
+	}
+	if totalReqs < 0 {
+		totalReqs = 0
+	}
+
+	if ov.HasErrorRate {
+		totalErrs = int(math.Round(float64(totalReqs) * ov.ErrorRate))
+	} else if prevReqs > 0 && totalReqs != prevReqs {
+		frac := float64(totalErrs) / float64(prevReqs)
+		totalErrs = int(math.Round(float64(totalReqs) * frac))
+	}
+	if totalErrs > totalReqs {
+		totalErrs = totalReqs
+	}
+	if totalErrs < 0 {
+		totalErrs = 0
+	}
+	return totalReqs, totalErrs
+}
+
+// applyLatency multiplies a baseline latency by the override's LatencyMul.
+// Returns at least 1ms.
+func applyLatency(latencyMs int, ctx event.TickContext) int {
+	mul := ctx.Override.LatencyMul
+	if mul <= 0 {
+		return latencyMs
+	}
+	v := float64(latencyMs) * mul
+	if v < 1 {
+		v = 1
+	}
+	return int(math.Round(v))
+}
+
 // spreadTimestamps distributes n events across tickIntervalMs milliseconds.
 func spreadTimestamps(base time.Time, n, tickIntervalMs int, rng interface{ Intn(int) int }) []time.Time {
 	if n <= 0 {

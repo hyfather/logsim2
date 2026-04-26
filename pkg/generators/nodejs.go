@@ -51,6 +51,9 @@ func (g *NodejsGenerator) Generate(target Target, inbound []event.Flow, ctx even
 		}
 	}
 
+	// Apply timeline override.
+	totalReqs, totalErrs = applyVolumeAndError(totalReqs, totalErrs, ctx)
+
 	if totalReqs == 0 {
 		// Emit a startup heartbeat on tick 0.
 		if ctx.TickIndex == 0 {
@@ -82,7 +85,7 @@ func (g *NodejsGenerator) Generate(target Target, inbound []event.Flow, ctx even
 		} else {
 			status = pickRandom(nodejsSuccessCodes, ctx.Rng)
 		}
-		latency := sampleLatency(ep.AvgLatencyMs, ctx.Rng)
+		latency := applyLatency(sampleLatency(ep.AvgLatencyMs, ctx.Rng), ctx)
 		switch {
 		case status >= 500:
 			level = "ERROR"

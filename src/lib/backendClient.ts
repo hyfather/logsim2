@@ -9,6 +9,7 @@ export interface GenerateOpts {
   seed: number
   sourceFilter?: string
   cribl?: CriblPayload
+  signal?: AbortSignal
 }
 
 export interface CriblPayload {
@@ -49,6 +50,7 @@ export async function generate(opts: GenerateOpts): Promise<{ logs: LogEntry[]; 
       source_filter: opts.sourceFilter ?? '*',
       cribl: opts.cribl,
     }),
+    signal: opts.signal,
   })
   if (!res.ok) {
     const body = await res.text().catch(() => '')

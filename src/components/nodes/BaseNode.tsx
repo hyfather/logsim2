@@ -7,7 +7,6 @@ import { useScenarioStore } from '@/store/useScenarioStore'
 import { useUIStore } from '@/store/useUIStore'
 import { cn } from '@/lib/utils'
 import { getNodeAddress, getNodeHoverDetails } from '@/lib/network'
-import { NodeInspector } from '@/components/panels/NodeInspector'
 import { NodeAnchors } from '@/components/nodes/NodeAnchors'
 import { NodeEmojiButton } from '@/components/nodes/NodeEmojiButton'
 import { TileResizeControls } from '@/components/nodes/TileResizeControls'
@@ -39,7 +38,7 @@ export function BaseNode({
   const [isEditing, setIsEditing] = useState(false)
   const [editLabel, setEditLabel] = useState(data.label)
   const { nodes, renameNode, updateNode } = useScenarioStore()
-  const { selectedNodeId, selectNode, configPanelOpen, setConfigPanelOpen, setConfigPanelAnchor } = useUIStore()
+  const { selectNode, setLogPanelOpen } = useUIStore()
   const address = getNodeAddress(data, nodes.map(node => node.data))
   const hoverText = getNodeHoverDetails(data, nodes.map(node => node.data))
   const emoji = getNodeEmoji(data)
@@ -77,21 +76,14 @@ export function BaseNode({
   const handleClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation()
     selectNode(id)
-  }, [id, selectNode])
+    setLogPanelOpen(true)
+  }, [id, selectNode, setLogPanelOpen])
 
   const handleSettingsClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation()
-    if (selectedNodeId === id && configPanelOpen) {
-      setConfigPanelOpen(false)
-      setConfigPanelAnchor(null)
-      return
-    }
-
-    const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect()
     selectNode(id)
-    setConfigPanelAnchor({ x: rect.right + 10, y: rect.top })
-    setConfigPanelOpen(true)
-  }, [configPanelOpen, id, selectNode, selectedNodeId, setConfigPanelAnchor, setConfigPanelOpen])
+    setLogPanelOpen(true)
+  }, [id, selectNode, setLogPanelOpen])
 
   const borderStyleStr = borderStyle === 'dashed' ? '1.5px dashed' : '1.5px solid'
 
@@ -162,8 +154,6 @@ export function BaseNode({
       </div>
 
       {children}
-
-      {selectedNodeId === id && configPanelOpen && <NodeInspector nodeData={data} />}
 
       <NodeAnchors nodeId={id} selected={selected} accentColor={selected ? '#3b82f6' : borderColor} />
     </div>

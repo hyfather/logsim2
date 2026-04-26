@@ -6,6 +6,12 @@
       "runtimeExecutable": "bash",
       "runtimeArgs": ["-c", "source ~/.nvm/nvm.sh && nvm use 20 && npm run dev -- -p 3002"],
       "port": 3002
+    },
+    {
+      "name": "api",
+      "runtimeExecutable": "go",
+      "runtimeArgs": ["run", "./cmd/devserver"],
+      "port": 8787
     }
   ]
 }

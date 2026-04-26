@@ -94,13 +94,47 @@ func applyTopLevelKey(s *Scenario, key string, node *yaml.Node) error {
 		return nil
 	case "connections":
 		return node.Decode(&s.Connections)
+	case "duration":
+		return node.Decode(&s.Duration)
+	case "tick_interval_ms":
+		return node.Decode(&s.TickIntervalMs)
 	case "custom_types":
-		return node.Decode(&s.CustomTypes)
+		if err := node.Decode(&s.CustomTypes); err != nil {
+			return err
+		}
+		assignTemplateIDs(s.CustomTypes)
+		return nil
 	case "editor":
 		s.Editor = &EditorMeta{}
 		return node.Decode(s.Editor)
 	default:
 		return nil // forward-compat: ignore unknown keys
+	}
+}
+
+// assignTemplateIDs fills in Template.ID for any template that omitted it,
+// using "tpl_<index>". Stable ids let timeline blocks reference templates by
+// name rather than position.
+func assignTemplateIDs(cts []CustomType) {
+	for i := range cts {
+		ct := &cts[i]
+		used := make(map[string]bool, len(ct.Templates))
+		for j := range ct.Templates {
+			if id := strings.TrimSpace(ct.Templates[j].ID); id != "" {
+				used[id] = true
+			}
+		}
+		for j := range ct.Templates {
+			if strings.TrimSpace(ct.Templates[j].ID) != "" {
+				continue
+			}
+			candidate := fmt.Sprintf("tpl_%d", j)
+			for used[candidate] {
+				candidate += "_x"
+			}
+			ct.Templates[j].ID = candidate
+			used[candidate] = true
+		}
 	}
 }
 

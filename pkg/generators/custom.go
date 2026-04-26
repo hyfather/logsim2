@@ -60,6 +60,9 @@ func (g *CustomGenerator) Generate(target Target, inbound []event.Flow, ctx even
 		}
 		totalErrs = int(math.Round(float64(totalReqs) * errRate))
 	}
+
+	// Apply timeline override.
+	totalReqs, totalErrs = applyVolumeAndError(totalReqs, totalErrs, ctx)
 	if totalReqs == 0 {
 		return nil
 	}
@@ -72,11 +75,16 @@ func (g *CustomGenerator) Generate(target Target, inbound []event.Flow, ctx even
 			ts = timestamps[i]
 		}
 		isError := i < totalErrs
-		tpl := pickWeightedTemplate(g.customType.Templates, ctx.Rng, isError)
+		tpl := pickWeightedTemplate(g.customType.Templates, ctx.Override.TemplateWeights, ctx.Rng, isError)
 		if tpl == nil {
 			continue
 		}
-		raw := renderTemplate(tpl.Template, g.customType.Placeholders, ts, isError, tpl.Level, ctx.Rng)
+		// Placeholder overrides layer on top of the custom type's defaults.
+		placeholders := g.customType.Placeholders
+		if len(ctx.Override.Placeholders) > 0 {
+			placeholders = mergePlaceholders(g.customType.Placeholders, ctx.Override.Placeholders)
+		}
+		raw := renderTemplate(tpl.Template, placeholders, ts, isError, tpl.Level, ctx.Rng)
 		level := normalizeLevel(tpl.Level, isError)
 		out = append(out, event.LogEntry{
 			ID:         makeID(ctx.TickIndex, i),
@@ -92,8 +100,11 @@ func (g *CustomGenerator) Generate(target Target, inbound []event.Flow, ctx even
 
 // pickWeightedTemplate picks a template by weight, preferring those whose
 // IsError flag matches mustError. Falls back to the full pool if none match.
+// weightOverrides (keyed by template ID) replace baseline weights when
+// non-empty — that's how timeline blocks reshape the mix of log lines.
 func pickWeightedTemplate(
 	templates []scenario.LogTemplate,
+	weightOverrides map[string]float64,
 	rng interface{ Float64() float64 },
 	mustError bool,
 ) *scenario.LogTemplate {
@@ -111,26 +122,49 @@ func pickWeightedTemplate(
 			pool = append(pool, &templates[i])
 		}
 	}
-	var total float64
-	for _, t := range pool {
+	weightOf := func(t *scenario.LogTemplate) float64 {
+		if w, ok := weightOverrides[t.ID]; ok {
+			if w < 0 {
+				return 0
+			}
+			return w
+		}
 		w := t.Weight
 		if w <= 0 {
 			w = 1
 		}
-		total += w
+		return w
+	}
+	var total float64
+	for _, t := range pool {
+		total += weightOf(t)
+	}
+	if total <= 0 {
+		// All overridden to zero — fall back to uniform pick rather than
+		// silently emitting nothing.
+		return pool[rng.(interface{ Intn(int) int }).Intn(len(pool))]
 	}
 	r := rng.Float64() * total
 	for _, t := range pool {
-		w := t.Weight
-		if w <= 0 {
-			w = 1
-		}
-		r -= w
+		r -= weightOf(t)
 		if r <= 0 {
 			return t
 		}
 	}
 	return pool[len(pool)-1]
+}
+
+// mergePlaceholders returns a new map with base layered under override.
+// Override entries replace base entries with the same key.
+func mergePlaceholders(base, override map[string]scenario.Placeholder) map[string]scenario.Placeholder {
+	out := make(map[string]scenario.Placeholder, len(base)+len(override))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range override {
+		out[k] = v
+	}
+	return out
 }
 
 // renderTemplate replaces every `{{name}}` marker by filling the matching
