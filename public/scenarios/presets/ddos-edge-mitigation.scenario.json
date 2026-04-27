@@ -1,0 +1,67 @@
+{
+  "name": "DDoS at the Edge",
+  "description": "Public-facing API gateway absorbs an L7 flood; APIs degrade under load, rate limiting engages, the attack subsides and traffic returns to baseline.",
+  "reasoning": "Edge Nginx fans out to three Go services that share a MySQL and Redis. The edge takes the brunt of the attack, downstream services throttle.",
+  "category": "security",
+  "difficulty": "medium",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "prod-vpc",      "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "public-subnet", "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "app-subnet",    "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "data-subnet",   "parent": "vpc" },
+    { "id": "lb",      "type": "service", "serviceType": "nginx",  "label": "edge-lb",        "parent": "pubnet",  "notes": "Public HTTPS edge with rate limiting." },
+    { "id": "orders",  "type": "service", "serviceType": "golang", "label": "orders-api",     "parent": "appnet",  "notes": "Order placement service." },
+    { "id": "users",   "type": "service", "serviceType": "golang", "label": "users-api",      "parent": "appnet",  "notes": "Account profile service." },
+    { "id": "billing", "type": "service", "serviceType": "golang", "label": "billing-api",    "parent": "appnet",  "notes": "Charges and invoices." },
+    { "id": "db",      "type": "service", "serviceType": "mysql", "label": "platform-db",     "parent": "datanet", "notes": "Shared transactional store." },
+    { "id": "rd",      "type": "service", "serviceType": "redis", "label": "ratelimit-cache", "parent": "datanet", "notes": "Token-bucket counters." }
+  ],
+  "edges": [
+    { "source": "lb",      "target": "orders",  "protocol": "http", "port": 8080, "trafficRate": 70,  "trafficPattern": "bursty",  "errorRate": 0.01 },
+    { "source": "lb",      "target": "users",   "protocol": "http", "port": 8080, "trafficRate": 100, "trafficPattern": "bursty",  "errorRate": 0.01 },
+    { "source": "lb",      "target": "billing", "protocol": "http", "port": 8080, "trafficRate": 30,  "trafficPattern": "steady",  "errorRate": 0.005 },
+    { "source": "orders",  "target": "db",      "protocol": "tcp",  "port": 3306, "trafficRate": 40,  "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "users",   "target": "db",      "protocol": "tcp",  "port": 3306, "trafficRate": 60,  "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "billing", "target": "db",      "protocol": "tcp",  "port": 3306, "trafficRate": 20,  "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "lb",      "target": "rd",      "protocol": "tcp",  "port": 6379, "trafficRate": 200, "trafficPattern": "steady",  "errorRate": 0.0005 }
+  ],
+  "timeline": {
+    "duration": 1200,
+    "narrative": [
+      { "tick": 0,    "text": "Normal traffic, all green." },
+      { "tick": 180,  "text": "Anomalous request volume from a small set of ASNs hits edge-lb." },
+      { "tick": 240,  "text": "edge-lb 5xx ratio passes 8%; suspected L7 flood." },
+      { "tick": 420,  "text": "users-api saturating; CPU at 95%." },
+      { "tick": 540,  "text": "Edge rate limiting engaged (token bucket), bot traffic shed." },
+      { "tick": 780,  "text": "Attack subsiding; legitimate users still throttled briefly." },
+      { "tick": 1020, "text": "Rate limits relaxed; system back to baseline." }
+    ],
+    "lanes": {
+      "lb": [
+        { "start": 0,    "duration": 180, "state": "healthy" },
+        { "start": 180,  "duration": 360, "state": "under_attack", "note": "L7 flood" },
+        { "start": 540,  "duration": 240, "state": "throttled",    "note": "rate limit engaged" },
+        { "start": 780,  "duration": 240, "state": "recovering" },
+        { "start": 1020, "duration": 180, "state": "healthy" }
+      ],
+      "users": [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 300, "state": "degraded", "note": "saturated CPU" },
+        { "start": 540,  "duration": 240, "state": "throttled" },
+        { "start": 780,  "duration": 240, "state": "recovering" },
+        { "start": 1020, "duration": 180, "state": "healthy" }
+      ],
+      "orders": [
+        { "start": 0,    "duration": 300, "state": "healthy" },
+        { "start": 300,  "duration": 240, "state": "degraded" },
+        { "start": 540,  "duration": 240, "state": "throttled" },
+        { "start": 780,  "duration": 420, "state": "healthy" }
+      ],
+      "billing": [
+        { "start": 0,    "duration": 360, "state": "healthy" },
+        { "start": 360,  "duration": 180, "state": "degraded" },
+        { "start": 540,  "duration": 660, "state": "healthy" }
+      ]
+    }
+  }
+}

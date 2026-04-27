@@ -3,6 +3,7 @@ import type { AIProviderConfig } from '@/types/aiKeys'
 import type { ScenarioNode, NodeType, ServiceType, NodeConfig, Provider } from '@/types/nodes'
 import type { Connection, Protocol, AnchorHandleId } from '@/types/connections'
 import type { ScenarioFlowNode, ConnectionFlowEdge } from '@/types/flow'
+import type { BehaviorBlock, BehaviorState, Episode, NarrativeBeat } from '@/types/episode'
 import { complete } from '@/lib/aiClient'
 import { generateId } from '@/lib/id'
 import { getDefaultConfig } from '@/registry/nodeRegistry'
@@ -10,12 +11,16 @@ import { DEFAULT_NODE_SIZES } from '@/lib/defaults'
 import { recomputeAllChannels } from '@/engine/channels/ChannelManager'
 import { asFlowNodeData, asFlowEdgeData } from '@/lib/flow-data'
 import { getDefaultNodeEmoji } from '@/lib/nodeAppearance'
+import { defaultsFor } from '@/lib/episodeBehavior'
 
 const VALID_NODE_TYPES: NodeType[] = ['vpc', 'subnet', 'virtual_server', 'service']
 const VALID_SERVICE_TYPES: ServiceType[] = ['nodejs', 'golang', 'postgres', 'mysql', 'redis', 'nginx', 'custom']
 const VALID_PROTOCOLS: Protocol[] = ['tcp', 'udp', 'icmp', 'http', 'https', 'grpc']
 const VALID_PATTERNS = ['steady', 'bursty', 'diurnal', 'incident'] as const
 type TrafficPattern = typeof VALID_PATTERNS[number]
+const VALID_BEHAVIOR_STATES: BehaviorState[] = [
+  'healthy', 'degraded', 'down', 'recovering', 'under_attack', 'throttled', 'compromised',
+]
 
 // ── Schema we ask the model to produce ────────────────────────────────────────
 
@@ -38,12 +43,36 @@ interface ProposedEdge {
   errorRate?: number
 }
 
+interface ProposedBlock {
+  start: number
+  duration: number
+  state: BehaviorState
+  errorRate?: number
+  latencyMul?: number
+  logVolMul?: number
+  note?: string
+  customLog?: string
+}
+
+interface ProposedNarrativeBeat {
+  tick: number
+  text: string
+}
+
+interface ProposedTimeline {
+  duration: number
+  narrative?: ProposedNarrativeBeat[]
+  /** Map of AI node id (matching `nodes[].id`) → ordered behavior blocks. */
+  lanes?: Record<string, ProposedBlock[]>
+}
+
 interface ProposedScenario {
   name?: string
   description?: string
   reasoning?: string
   nodes: ProposedNode[]
   edges?: ProposedEdge[]
+  timeline?: ProposedTimeline
 }
 
 // ── Prompt ────────────────────────────────────────────────────────────────────
@@ -51,6 +80,8 @@ interface ProposedScenario {
 const SYSTEM_PROMPT = `You translate a natural-language description of cloud architecture into a strict JSON scenario for the LogSim canvas editor.
 
 LogSim is an **observability and security simulation environment**. Scenarios you generate become live systems that emit realistic infrastructure logs, network flows, traffic patterns, and (optionally) attack signals so engineers can practice detection, response, and analysis. Your goal is to produce a scenario that is **realistic enough to generate interesting telemetry** — not the bare minimum the user literally typed.
+
+Beyond static topology, every scenario you produce MUST include a **timeline** (a.k.a. an episode): a story-driven sequence of behavior states that turns the scenario into something an SRE could actually drill against. A flat "everything healthy forever" timeline is never acceptable unless the user explicitly asks for it.
 
 ═══════════════════════════════════════════════════════════════════════════
 TOPOLOGY MODEL (strict)
@@ -95,7 +126,29 @@ RESPONSE FORMAT — return ONE JSON object, no prose, no markdown fences.
       "trafficPattern": "steady|bursty|diurnal|incident",
       "errorRate": 0..0.2                               // typically 0.001–0.03
     }
-  ]
+  ],
+  "timeline": {
+    "duration": 600..3600,                              // total ticks (1 tick = 1 second). Aim for 600–1800.
+    "narrative": [                                       // 3–8 story beats over the duration
+      { "tick": 0,   "text": "Baseline traffic, all green." },
+      { "tick": 240, "text": "Latency spike on user-db; error rate climbs." },
+      { "tick": 480, "text": "On-call paged; rate-limiter engaged." },
+      { "tick": 780, "text": "Mitigation deployed; traffic normalising." }
+    ],
+    "lanes": {                                           // keyed by NODE id from "nodes" above (services only)
+      "<service id>": [
+        {
+          "start": 0,                                    // tick where this block begins
+          "duration": 240,                               // length in ticks (start+duration must fit "duration")
+          "state": "healthy|degraded|down|recovering|under_attack|throttled|compromised",
+          "errorRate": 0..1,                             // optional override; sensible defaults per state
+          "latencyMul": 1..10,                           // optional override
+          "logVolMul":  0.1..6,                          // optional override
+          "note": "Short label shown on the block (optional)."
+        }
+      ]
+    }
+  }
 }
 
 ═══════════════════════════════════════════════════════════════════════════
@@ -148,6 +201,45 @@ RULES
 8. SIZE
    Keep it focused. Prefer 1 VPC, 1–3 subnets, 2–10 services unless the user explicitly asks for more.
 
+9. TIMELINE / EPISODE — REQUIRED
+   Every response MUST include a \`timeline\` field. The timeline tells the *story*
+   of what happens to the scenario over time. Engineers will scrub through it to
+   investigate the resulting logs, so the story has to be specific and causal.
+
+   Behavior states (per-service, per-block):
+     • healthy      — nominal, low error rate, normal latency
+     • degraded     — elevated errors / latency, still serving (~5% errors)
+     • down         — service is failing most requests (~85% errors)
+     • recovering   — coming back online, slightly elevated errors / latency
+     • under_attack — high traffic, suspicious patterns, elevated errors (DDoS, brute force)
+     • throttled    — rate-limiter engaged, requests rejected with 429-style errors
+     • compromised  — security incident, attacker has foothold (lateral movement, exfil)
+
+   Authoring rules:
+   • Pick a duration of 600–1800 ticks (10–30 minutes) for typical scenarios.
+   • Always include a "Baseline" block first (state="healthy") of at least 120 ticks so the user
+     can see what nominal looks like. Always include a recovery block at the end.
+   • Lanes are keyed by NODE ID from your "nodes" array, and ONLY services (type="service")
+     can have lanes. Skip services that stay healthy for the whole duration — a missing lane
+     means "healthy throughout".
+   • Blocks within a single lane must NOT overlap. \`start + duration\` of every block must be
+     ≤ \`timeline.duration\`. Order blocks by start.
+   • Cause and effect: an upstream failure should propagate. If \`user-db\` goes "degraded",
+     the API services that depend on it should also be "degraded" (with a small lag is fine).
+     If \`edge-lb\` is "under_attack", downstream APIs are typically "throttled" or "degraded".
+   • Narrative beats are story annotations placed at the moments of state change. Aim for 4–6
+     beats. Reference services by label, not id. Pick verbs that read like an incident timeline:
+     "latency climbing on user-db", "Nginx 5xx rate exceeds 5%", "PagerDuty fires", "rollback
+     completes", "traffic normalises".
+   • Pick a DEFAULT story type based on user intent. If the user describes a normal architecture
+     with no incident, invent a plausible incident appropriate to the topology. Examples:
+       - DB-heavy app          → DB slowdown cascading into API latency, then mitigation.
+       - Public-facing web app → traffic spike or DDoS on the LB, throttled APIs, recovery.
+       - Cache + DB            → Redis OOM, cache misses overload Postgres, recovery.
+       - Multiple app servers  → bad deploy on one instance, rollback, fleet stabilises.
+     If the user explicitly describes an incident ("DB outage", "DDoS", "bad deploy"), follow
+     their description exactly.
+
 ═══════════════════════════════════════════════════════════════════════════
 WORKED EXAMPLES — STUDY THESE BEFORE GENERATING
 ═══════════════════════════════════════════════════════════════════════════
@@ -175,7 +267,37 @@ OUTPUT:
     { "source": "lb",   "target": "api2", "protocol": "http", "port": 8080, "trafficRate": 80, "trafficPattern": "steady",  "errorRate": 0.005 },
     { "source": "api1", "target": "db",   "protocol": "tcp",  "port": 3306, "trafficRate": 40, "trafficPattern": "steady",  "errorRate": 0.001 },
     { "source": "api2", "target": "db",   "protocol": "tcp",  "port": 3306, "trafficRate": 40, "trafficPattern": "steady",  "errorRate": 0.001 }
-  ]
+  ],
+  "timeline": {
+    "duration": 1200,
+    "narrative": [
+      { "tick": 0,    "text": "Baseline traffic, all services healthy." },
+      { "tick": 240,  "text": "user-db latency climbing — slow queries appearing." },
+      { "tick": 360,  "text": "API error rate exceeds 5%; on-call paged." },
+      { "tick": 720,  "text": "Read-replica failover initiated; APIs throttle to drain queue." },
+      { "tick": 960,  "text": "Mitigation complete; traffic normalising." }
+    ],
+    "lanes": {
+      "db":   [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 480, "state": "degraded", "note": "slow queries / lock waits" },
+        { "start": 720,  "duration": 240, "state": "recovering", "note": "failover in progress" },
+        { "start": 960,  "duration": 240, "state": "healthy" }
+      ],
+      "api1": [
+        { "start": 0,    "duration": 300, "state": "healthy" },
+        { "start": 300,  "duration": 420, "state": "degraded", "note": "DB latency cascades" },
+        { "start": 720,  "duration": 240, "state": "throttled", "note": "rate limit while DB drains" },
+        { "start": 960,  "duration": 240, "state": "healthy" }
+      ],
+      "api2": [
+        { "start": 0,    "duration": 300, "state": "healthy" },
+        { "start": 300,  "duration": 420, "state": "degraded", "note": "DB latency cascades" },
+        { "start": 720,  "duration": 240, "state": "throttled", "note": "rate limit while DB drains" },
+        { "start": 960,  "duration": 240, "state": "healthy" }
+      ]
+    }
+  }
 }
 
 ────────────────────────────────────────────────────────────────────────
@@ -196,7 +318,35 @@ OUTPUT:
   "edges": [
     { "source": "api", "target": "pg", "protocol": "tcp", "port": 5432, "trafficRate": 30,  "trafficPattern": "steady", "errorRate": 0.001 },
     { "source": "api", "target": "rd", "protocol": "tcp", "port": 6379, "trafficRate": 200, "trafficPattern": "steady", "errorRate": 0.0005 }
-  ]
+  ],
+  "timeline": {
+    "duration": 900,
+    "narrative": [
+      { "tick": 0,   "text": "Dev environment baseline." },
+      { "tick": 240, "text": "Redis OOM kill; cache misses pour into Postgres." },
+      { "tick": 420, "text": "Postgres connection pool saturating." },
+      { "tick": 660, "text": "Redis restarted; cache warming." },
+      { "tick": 780, "text": "Cache hit ratio recovered." }
+    ],
+    "lanes": {
+      "rd":  [
+        { "start": 0,   "duration": 240, "state": "healthy" },
+        { "start": 240, "duration": 60,  "state": "down", "note": "OOM kill" },
+        { "start": 300, "duration": 360, "state": "recovering", "note": "warming cache" },
+        { "start": 660, "duration": 240, "state": "healthy" }
+      ],
+      "pg":  [
+        { "start": 0,   "duration": 300, "state": "healthy" },
+        { "start": 300, "duration": 360, "state": "degraded", "note": "extra load from cache misses" },
+        { "start": 660, "duration": 240, "state": "healthy" }
+      ],
+      "api": [
+        { "start": 0,   "duration": 280, "state": "healthy" },
+        { "start": 280, "duration": 380, "state": "degraded", "note": "p95 latency up 4x" },
+        { "start": 660, "duration": 240, "state": "healthy" }
+      ]
+    }
+  }
 }
 
 ────────────────────────────────────────────────────────────────────────
@@ -223,7 +373,35 @@ OUTPUT (note: user said "EC2" → wrap services in virtual_servers):
     { "source": "svc1", "target": "pg", "protocol": "tcp", "port": 5432, "trafficRate": 30, "trafficPattern": "steady", "errorRate": 0.001 },
     { "source": "svc2", "target": "pg", "protocol": "tcp", "port": 5432, "trafficRate": 30, "trafficPattern": "steady", "errorRate": 0.001 },
     { "source": "svc3", "target": "pg", "protocol": "tcp", "port": 5432, "trafficRate": 30, "trafficPattern": "steady", "errorRate": 0.001 }
-  ]
+  ],
+  "timeline": {
+    "duration": 1080,
+    "narrative": [
+      { "tick": 0,    "text": "Steady baseline traffic." },
+      { "tick": 240,  "text": "Bad deploy promoted to node-1 — health checks fail." },
+      { "tick": 360,  "text": "node-1 removed from rotation; node-2/node-3 absorb load." },
+      { "tick": 720,  "text": "Rollback of node-1 deployed." },
+      { "tick": 900,  "text": "Fleet stable; traffic redistributed." }
+    ],
+    "lanes": {
+      "svc1": [
+        { "start": 0,   "duration": 240, "state": "healthy" },
+        { "start": 240, "duration": 480, "state": "down",       "note": "bad deploy 5xx" },
+        { "start": 720, "duration": 180, "state": "recovering", "note": "rollback" },
+        { "start": 900, "duration": 180, "state": "healthy" }
+      ],
+      "svc2": [
+        { "start": 0,   "duration": 360, "state": "healthy" },
+        { "start": 360, "duration": 360, "state": "degraded", "note": "absorbing failed-over load" },
+        { "start": 720, "duration": 360, "state": "healthy" }
+      ],
+      "svc3": [
+        { "start": 0,   "duration": 360, "state": "healthy" },
+        { "start": 360, "duration": 360, "state": "degraded", "note": "absorbing failed-over load" },
+        { "start": 720, "duration": 360, "state": "healthy" }
+      ]
+    }
+  }
 }
 
 ═══════════════════════════════════════════════════════════════════════════
@@ -244,6 +422,8 @@ export interface GenerateScenarioResult {
   name?: string
   description?: string
   reasoning?: string
+  /** Episode constructed from the timeline portion of the AI response, if present. */
+  episode?: Episode
 }
 
 export async function generateScenarioFromDescription(
@@ -256,13 +436,28 @@ export async function generateScenarioFromDescription(
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: buildUserPrompt(description) },
     ],
-    maxTokens: 4096,
+    maxTokens: 8192,
     jsonMode: true,
     signal: options.signal,
   })
 
   const proposed = parseProposedScenario(completion.text)
   const cleaned = postProcessProposedScenario(proposed, description)
+  return materializeScenario(cleaned)
+}
+
+/**
+ * Materialize a static preset (same JSON shape the AI emits — nodes, edges,
+ * and an optional timeline) into the canvas/episode types. Used by the
+ * "Example Scenarios" menu so presets share the AI generator's output schema
+ * and post-processing pipeline (subnet ordering, anchor picking, fan-out).
+ */
+export function materializeProposedScenarioJson(raw: unknown): GenerateScenarioResult {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error('Preset must be a JSON object')
+  }
+  const proposed = parseProposedScenarioObject(raw as Record<string, unknown>)
+  const cleaned = postProcessProposedScenario(proposed, '')
   return materializeScenario(cleaned)
 }
 
@@ -292,10 +487,13 @@ function parseProposedScenario(raw: string): ProposedScenario {
   if (!data || typeof data !== 'object') {
     throw new Error('AI response was not a JSON object.')
   }
-  const obj = data as Record<string, unknown>
+  return parseProposedScenarioObject(data as Record<string, unknown>)
+}
+
+function parseProposedScenarioObject(obj: Record<string, unknown>): ProposedScenario {
   const nodesRaw = obj.nodes
   if (!Array.isArray(nodesRaw) || nodesRaw.length === 0) {
-    throw new Error('AI response had no "nodes" array.')
+    throw new Error('Scenario JSON had no "nodes" array.')
   }
 
   const nodes: ProposedNode[] = []
@@ -323,7 +521,7 @@ function parseProposedScenario(raw: string): ProposedScenario {
   }
 
   if (nodes.length === 0) {
-    throw new Error('AI response did not include any valid nodes.')
+    throw new Error('Scenario JSON did not include any valid nodes.')
   }
 
   const edges: ProposedEdge[] = []
@@ -351,13 +549,86 @@ function parseProposedScenario(raw: string): ProposedScenario {
     }
   }
 
+  const timeline = parseProposedTimeline(obj.timeline)
+
   return {
     name: typeof obj.name === 'string' ? obj.name : undefined,
     description: typeof obj.description === 'string' ? obj.description : undefined,
     reasoning: typeof obj.reasoning === 'string' ? obj.reasoning : undefined,
     nodes,
     edges,
+    timeline,
   }
+}
+
+function parseProposedTimeline(raw: unknown): ProposedTimeline | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const obj = raw as Record<string, unknown>
+  const duration = typeof obj.duration === 'number' && obj.duration > 0
+    ? Math.floor(obj.duration)
+    : undefined
+  if (!duration) return undefined
+
+  const narrative: ProposedNarrativeBeat[] = []
+  if (Array.isArray(obj.narrative)) {
+    for (const b of obj.narrative) {
+      if (!b || typeof b !== 'object') continue
+      const beat = b as Record<string, unknown>
+      const tick = typeof beat.tick === 'number' ? Math.max(0, Math.min(duration, Math.floor(beat.tick))) : null
+      const text = typeof beat.text === 'string' ? beat.text.trim() : ''
+      if (tick === null || !text) continue
+      narrative.push({ tick, text })
+    }
+  }
+
+  const lanes: Record<string, ProposedBlock[]> = {}
+  if (obj.lanes && typeof obj.lanes === 'object' && !Array.isArray(obj.lanes)) {
+    for (const [aiId, blocksRaw] of Object.entries(obj.lanes as Record<string, unknown>)) {
+      if (!Array.isArray(blocksRaw)) continue
+      const out: ProposedBlock[] = []
+      for (const b of blocksRaw) {
+        if (!b || typeof b !== 'object') continue
+        const block = b as Record<string, unknown>
+        const start = typeof block.start === 'number' ? Math.max(0, Math.floor(block.start)) : null
+        const dur = typeof block.duration === 'number' ? Math.max(1, Math.floor(block.duration)) : null
+        const stateRaw = typeof block.state === 'string' ? block.state as BehaviorState : null
+        if (start === null || dur === null || !stateRaw || !VALID_BEHAVIOR_STATES.includes(stateRaw)) continue
+        if (start >= duration) continue
+        const clampedDur = Math.min(dur, duration - start)
+        out.push({
+          start,
+          duration: clampedDur,
+          state: stateRaw,
+          errorRate: typeof block.errorRate === 'number' ? clamp01(block.errorRate) : undefined,
+          latencyMul: typeof block.latencyMul === 'number' ? clampPositive(block.latencyMul, 0.1, 20) : undefined,
+          logVolMul: typeof block.logVolMul === 'number' ? clampPositive(block.logVolMul, 0.05, 20) : undefined,
+          note: typeof block.note === 'string' ? block.note : undefined,
+          customLog: typeof block.customLog === 'string' ? block.customLog : undefined,
+        })
+      }
+      // Keep blocks sorted and drop overlaps so timeline rendering doesn't crash.
+      out.sort((a, b) => a.start - b.start)
+      const cleaned: ProposedBlock[] = []
+      let lastEnd = 0
+      for (const blk of out) {
+        if (blk.start < lastEnd) continue // overlap → skip
+        cleaned.push(blk)
+        lastEnd = blk.start + blk.duration
+      }
+      if (cleaned.length > 0) lanes[aiId] = cleaned
+    }
+  }
+
+  return { duration, narrative, lanes }
+}
+
+function clamp01(n: number): number {
+  if (!Number.isFinite(n)) return 0
+  return Math.max(0, Math.min(1, n))
+}
+function clampPositive(n: number, min: number, max: number): number {
+  if (!Number.isFinite(n)) return min
+  return Math.max(min, Math.min(max, n))
 }
 
 // ── Post-process: lift services out of unwanted virtual_servers ──────────────
@@ -629,12 +900,80 @@ function materializeScenario(proposed: ProposedScenario): GenerateScenarioResult
     zIndex: 1000,
   }))
 
+  const episode = proposed.timeline
+    ? buildEpisodeFromTimeline(proposed, idMap)
+    : undefined
+
   return {
     flowNodes,
     flowEdges,
     name: proposed.name,
     description: proposed.description,
     reasoning: proposed.reasoning,
+    episode,
+  }
+}
+
+// ── Timeline → Episode ──────────────────────────────────────────────────────
+
+function buildEpisodeFromTimeline(
+  proposed: ProposedScenario,
+  idMap: Map<string, string>,
+): Episode | undefined {
+  const t = proposed.timeline
+  if (!t) return undefined
+
+  // Only services can have lanes — skip blocks for non-service nodes.
+  const serviceAiIds = new Set(
+    proposed.nodes.filter(n => n.type === 'service').map(n => n.id),
+  )
+
+  const lanes: Record<string, BehaviorBlock[]> = {}
+  for (const [aiId, blocks] of Object.entries(t.lanes ?? {})) {
+    if (!serviceAiIds.has(aiId)) continue
+    const realId = idMap.get(aiId)
+    if (!realId) continue
+    const out: BehaviorBlock[] = []
+    for (const blk of blocks) {
+      const defaults = defaultsFor(blk.state)
+      out.push({
+        id: generateId(),
+        start: blk.start,
+        duration: blk.duration,
+        state: blk.state,
+        errorRate: blk.errorRate ?? defaults.errorRate,
+        latencyMul: blk.latencyMul ?? defaults.latencyMul,
+        logVolMul: blk.logVolMul ?? defaults.logVolMul,
+        ...(blk.note ? { note: blk.note } : {}),
+        ...(blk.customLog ? { customLog: blk.customLog } : {}),
+      })
+    }
+    if (out.length > 0) lanes[realId] = out
+  }
+
+  const narrative: NarrativeBeat[] = (t.narrative ?? []).map(b => ({
+    id: generateId(),
+    tick: b.tick,
+    text: b.text,
+  }))
+  narrative.sort((a, b) => a.tick - b.tick)
+
+  // Round duration up to a sensible boundary so trailing blocks aren't cut off.
+  const maxBlockEnd = Object.values(lanes)
+    .flat()
+    .reduce((acc, b) => Math.max(acc, b.start + b.duration), 0)
+  const duration = Math.max(t.duration, maxBlockEnd)
+
+  const now = new Date().toISOString()
+  return {
+    id: generateId(),
+    name: proposed.name?.trim() || 'AI scenario timeline',
+    description: proposed.description?.trim() || '',
+    duration,
+    lanes,
+    narrative,
+    createdAt: now,
+    updatedAt: now,
   }
 }
 

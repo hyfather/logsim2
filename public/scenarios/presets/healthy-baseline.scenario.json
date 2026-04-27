@@ -1,0 +1,33 @@
+{
+  "name": "Healthy Baseline — No Incident",
+  "description": "A boring, well-behaved three-tier app running diurnal traffic for 20 minutes. Useful as a reference dataset for detection rule tuning.",
+  "reasoning": "Same shape as the cascade scenario but with no incident — every service stays healthy. Lets users compare 'good' telemetry against the incident presets.",
+  "category": "baseline",
+  "difficulty": "easy",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "prod-vpc",      "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "public-subnet", "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "app-subnet",    "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "data-subnet",   "parent": "vpc" },
+    { "id": "lb",   "type": "service", "serviceType": "nginx",    "label": "edge-lb",    "parent": "pubnet" },
+    { "id": "api",  "type": "service", "serviceType": "nodejs",   "label": "users-api",  "parent": "appnet" },
+    { "id": "db",   "type": "service", "serviceType": "postgres", "label": "users-db",   "parent": "datanet" },
+    { "id": "rd",   "type": "service", "serviceType": "redis",    "label": "users-cache", "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "lb",  "target": "api", "protocol": "http", "port": 3000, "trafficRate": 80,  "trafficPattern": "diurnal", "errorRate": 0.003 },
+    { "source": "api", "target": "db",  "protocol": "tcp",  "port": 5432, "trafficRate": 35,  "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "api", "target": "rd",  "protocol": "tcp",  "port": 6379, "trafficRate": 200, "trafficPattern": "steady",  "errorRate": 0.0005 }
+  ],
+  "timeline": {
+    "duration": 1200,
+    "narrative": [
+      { "tick": 0,    "text": "Steady baseline — diurnal traffic into a healthy stack." },
+      { "tick": 300,  "text": "Cache hit ratio holding at ~96%." },
+      { "tick": 600,  "text": "Mid-window check — error rate < 0.5% across the board." },
+      { "tick": 900,  "text": "Approaching p95 traffic for this window." },
+      { "tick": 1140, "text": "Window closing; everything still green." }
+    ],
+    "lanes": {}
+  }
+}

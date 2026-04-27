@@ -1,0 +1,58 @@
+{
+  "name": "Bad Canary Deploy",
+  "description": "A canary deploy on api-1 fails health checks, the load balancer shifts traffic to the remaining instances, they degrade under the extra load until a rollback restores the fleet.",
+  "reasoning": "LB → 3 Node API instances (api-1 is the canary) → Postgres. Story exercises canary failure detection and absorbed-load degradation.",
+  "category": "deploy",
+  "difficulty": "medium",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "prod-vpc",      "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "public-subnet", "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "app-subnet",    "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "data-subnet",   "parent": "vpc" },
+    { "id": "lb",   "type": "service", "serviceType": "nginx",    "label": "edge-lb", "parent": "pubnet",  "notes": "Active health-check pool." },
+    { "id": "api1", "type": "service", "serviceType": "nodejs",   "label": "api-1",   "parent": "appnet",  "notes": "Canary target." },
+    { "id": "api2", "type": "service", "serviceType": "nodejs",   "label": "api-2",   "parent": "appnet" },
+    { "id": "api3", "type": "service", "serviceType": "nodejs",   "label": "api-3",   "parent": "appnet" },
+    { "id": "db",   "type": "service", "serviceType": "postgres", "label": "app-db",  "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "lb",   "target": "api1", "protocol": "http", "port": 3000, "trafficRate": 60, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb",   "target": "api2", "protocol": "http", "port": 3000, "trafficRate": 60, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb",   "target": "api3", "protocol": "http", "port": 3000, "trafficRate": 60, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "api1", "target": "db",   "protocol": "tcp",  "port": 5432, "trafficRate": 30, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "api2", "target": "db",   "protocol": "tcp",  "port": 5432, "trafficRate": 30, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "api3", "target": "db",   "protocol": "tcp",  "port": 5432, "trafficRate": 30, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1080,
+    "narrative": [
+      { "tick": 0,   "text": "Steady baseline traffic across all three instances." },
+      { "tick": 240, "text": "Canary build promoted to api-1." },
+      { "tick": 280, "text": "api-1 health checks failing — 5xx surge." },
+      { "tick": 360, "text": "edge-lb removes api-1 from rotation; api-2/api-3 take 50% more traffic." },
+      { "tick": 540, "text": "api-2/api-3 latency climbing; CPU at 80%." },
+      { "tick": 720, "text": "Rollback of api-1 deployed; instance returning to rotation." },
+      { "tick": 900, "text": "Fleet stable, traffic redistributed evenly." }
+    ],
+    "lanes": {
+      "api1": [
+        { "start": 0,   "duration": 240, "state": "healthy" },
+        { "start": 240, "duration": 480, "state": "down",       "note": "bad deploy 5xx" },
+        { "start": 720, "duration": 180, "state": "recovering", "note": "rollback warm-up" },
+        { "start": 900, "duration": 180, "state": "healthy" }
+      ],
+      "api2": [
+        { "start": 0,   "duration": 360, "state": "healthy" },
+        { "start": 360, "duration": 360, "state": "degraded",   "note": "absorbing failed-over load" },
+        { "start": 720, "duration": 180, "state": "recovering" },
+        { "start": 900, "duration": 180, "state": "healthy" }
+      ],
+      "api3": [
+        { "start": 0,   "duration": 360, "state": "healthy" },
+        { "start": 360, "duration": 360, "state": "degraded",   "note": "absorbing failed-over load" },
+        { "start": 720, "duration": 180, "state": "recovering" },
+        { "start": 900, "duration": 180, "state": "healthy" }
+      ]
+    }
+  }
+}

@@ -1,15 +1,18 @@
 'use client'
-import React, { useCallback, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Minus, Plus, X } from 'lucide-react'
 import { useEpisodeStore } from '@/store/useEpisodeStore'
 import { useScenarioStore } from '@/store/useScenarioStore'
 import { BEHAVIOR_STATES, fmtTime, makeBlock } from '@/lib/episodeBehavior'
 import type { BehaviorBlock, BehaviorState, NarrativeBeat } from '@/types/episode'
 import { generateId } from '@/lib/id'
+import { startPointerDrag } from '@/lib/pointerDrag'
+import { useIsMobile } from '@/hooks/useMediaQuery'
 import { cn } from '@/lib/utils'
 
 const LANE_HEIGHT = 44
-const LABEL_COL = 160
+const LABEL_COL_DESKTOP = 160
+const LABEL_COL_MOBILE = 108
 const NARR_TRACK_H = 56
 const RULER_H = 22
 
@@ -47,16 +50,22 @@ function Ruler({ totalTicks, pxPerTick, onSeek }: {
   const stepTicks = pxPerTick > 1.2 ? 30 : pxPerTick > 0.6 ? 60 : 120
   const ticks: number[] = []
   for (let t = 0; t <= totalTicks; t += stepTicks) ticks.push(t)
-  const handleClick = (e: React.MouseEvent) => {
-    const rect = e.currentTarget.getBoundingClientRect()
-    const x = e.clientX - rect.left
+  const seekFromClientX = (clientX: number, rect: DOMRect) => {
+    const x = clientX - rect.left
     onSeek(Math.max(0, Math.min(totalTicks, x / pxPerTick)))
+  }
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    seekFromClientX(e.clientX, rect)
+    startPointerDrag(e, {
+      onMove: ({ event: ev }) => seekFromClientX(ev.clientX, rect),
+    })
   }
   return (
     <div
-      className="relative cursor-pointer border-b border-slate-200 bg-slate-100/80 font-mono text-[10px] text-slate-500"
+      className="relative cursor-pointer touch-none border-b border-slate-200 bg-slate-100/80 font-mono text-[10px] text-slate-500"
       style={{ width: widthPx, height: RULER_H }}
-      onClick={handleClick}
+      onPointerDown={onPointerDown}
     >
       {ticks.map(t => (
         <div
@@ -124,7 +133,7 @@ function NarrativeTrack({ widthPx, pxPerTick, beats, duration, onSeek, onUpsert,
           {editing === m.id ? (
             <input
               autoFocus
-              className="mt-1.5 w-44 rounded-md border-[1.5px] border-indigo-500 bg-white px-2 py-0.5 text-[11px] shadow-[0_0_0_3px_rgba(99,102,241,0.15)] outline-none"
+              className="mt-1.5 w-32 rounded-md border-[1.5px] border-indigo-500 bg-white px-2 py-0.5 text-[11px] shadow-[0_0_0_3px_rgba(99,102,241,0.15)] outline-none sm:w-44"
               value={editText}
               onChange={e => setEditText(e.target.value)}
               onBlur={commit}
@@ -139,7 +148,7 @@ function NarrativeTrack({ widthPx, pxPerTick, beats, duration, onSeek, onUpsert,
               onDoubleClick={e => { e.stopPropagation(); setEditing(m.id); setEditText(m.text) }}
               onClick={e => { e.stopPropagation(); onSeek(m.tick) }}
               title={`${m.text} @ ${fmtTime(m.tick)} — double-click to edit`}
-              className="mt-1.5 max-w-[200px] cursor-pointer truncate rounded-md border border-indigo-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-indigo-700 shadow-sm hover:border-indigo-400 hover:bg-indigo-50"
+              className="mt-1.5 max-w-[120px] cursor-pointer truncate rounded-md border border-indigo-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-indigo-700 shadow-sm hover:border-indigo-400 hover:bg-indigo-50 sm:max-w-[200px]"
             >
               {m.text}
             </div>
@@ -162,7 +171,7 @@ function NarrativeTrack({ widthPx, pxPerTick, beats, duration, onSeek, onUpsert,
           <input
             autoFocus
             placeholder="Type a narrative beat…"
-            className="mt-1.5 w-44 rounded-md border-[1.5px] border-emerald-500 bg-white px-2 py-0.5 text-[11px] shadow-[0_0_0_3px_rgba(34,197,94,0.15)] outline-none"
+            className="mt-1.5 w-32 rounded-md border-[1.5px] border-emerald-500 bg-white px-2 py-0.5 text-[11px] shadow-[0_0_0_3px_rgba(34,197,94,0.15)] outline-none sm:w-44"
             value={editText}
             onChange={e => setEditText(e.target.value)}
             onBlur={commit}
@@ -222,58 +231,45 @@ function BehaviorBlockView({
   const showLabel = width > 60
   const showMeta = width > 120
 
-  const onBodyMouseDown = (e: React.MouseEvent) => {
-    if (e.button !== 0) return
+  const onBodyPointerDown = (e: React.PointerEvent) => {
     if ((e.target as HTMLElement).closest('[data-resize-handle]')) return
     e.stopPropagation()
     onSelect()
-    const startX = e.clientX
     const startVal = block.start
-    const onMoveEv = (ev: MouseEvent) => {
-      const dx = (ev.clientX - startX) / pxPerTick
-      const newStart = Math.max(0, Math.min(episodeDuration - block.duration, Math.round(startVal + dx)))
-      onMove(newStart)
-    }
-    const onUp = () => {
-      window.removeEventListener('mousemove', onMoveEv)
-      window.removeEventListener('mouseup', onUp)
-    }
-    window.addEventListener('mousemove', onMoveEv)
-    window.addEventListener('mouseup', onUp)
+    startPointerDrag(e, {
+      onMove: ({ dx }) => {
+        const newStart = Math.max(0, Math.min(episodeDuration - block.duration, Math.round(startVal + dx / pxPerTick)))
+        onMove(newStart)
+      },
+    })
   }
 
-  const onResizeMouseDown = (side: 'left' | 'right') => (e: React.MouseEvent) => {
-    if (e.button !== 0) return
+  const onResizePointerDown = (side: 'left' | 'right') => (e: React.PointerEvent) => {
     e.stopPropagation()
     e.preventDefault()
-    const startX = e.clientX
     const startStart = block.start
     const startDur = block.duration
-    const onMoveEv = (ev: MouseEvent) => {
-      const dx = (ev.clientX - startX) / pxPerTick
-      if (side === 'right') {
-        const newDur = Math.max(5, Math.round(startDur + dx))
-        onResize({ start: startStart, duration: Math.min(newDur, episodeDuration - startStart) })
-      } else {
-        const newStart = Math.max(0, Math.min(startStart + startDur - 5, Math.round(startStart + dx)))
-        const newDur = startDur + (startStart - newStart)
-        onResize({ start: newStart, duration: newDur })
-      }
-    }
-    const onUp = () => {
-      window.removeEventListener('mousemove', onMoveEv)
-      window.removeEventListener('mouseup', onUp)
-    }
-    window.addEventListener('mousemove', onMoveEv)
-    window.addEventListener('mouseup', onUp)
+    startPointerDrag(e, {
+      onMove: ({ dx }) => {
+        const ticks = dx / pxPerTick
+        if (side === 'right') {
+          const newDur = Math.max(5, Math.round(startDur + ticks))
+          onResize({ start: startStart, duration: Math.min(newDur, episodeDuration - startStart) })
+        } else {
+          const newStart = Math.max(0, Math.min(startStart + startDur - 5, Math.round(startStart + ticks)))
+          const newDur = startDur + (startStart - newStart)
+          onResize({ start: newStart, duration: newDur })
+        }
+      },
+    })
   }
 
   return (
     <div
-      onMouseDown={onBodyMouseDown}
+      onPointerDown={onBodyPointerDown}
       title={`${meta.label} • ${block.duration}t • err ${(block.errorRate * 100).toFixed(1)}% • lat ${block.latencyMul}× • log ${block.logVolMul}×`}
       className={cn(
-        'absolute top-1.5 bottom-1.5 cursor-grab overflow-hidden rounded-md border text-[11px] shadow-sm transition-shadow active:cursor-grabbing',
+        'absolute top-1.5 bottom-1.5 cursor-grab touch-none overflow-hidden rounded-md border text-[11px] shadow-sm transition-shadow active:cursor-grabbing',
         selected ? 'shadow-md ring-2 ring-blue-500/40' : 'hover:shadow-md',
       )}
       style={{
@@ -295,13 +291,13 @@ function BehaviorBlockView({
       )}
       <div
         data-resize-handle
-        onMouseDown={onResizeMouseDown('left')}
-        className="absolute left-0 top-0 bottom-0 w-1.5 cursor-ew-resize hover:bg-black/10"
+        onPointerDown={onResizePointerDown('left')}
+        className="absolute left-0 top-0 bottom-0 w-2.5 cursor-ew-resize touch-none hover:bg-black/10 sm:w-1.5"
       />
       <div
         data-resize-handle
-        onMouseDown={onResizeMouseDown('right')}
-        className="absolute right-0 top-0 bottom-0 w-1.5 cursor-ew-resize hover:bg-black/10"
+        onPointerDown={onResizePointerDown('right')}
+        className="absolute right-0 top-0 bottom-0 w-2.5 cursor-ew-resize touch-none hover:bg-black/10 sm:w-1.5"
       />
     </div>
   )
@@ -362,21 +358,13 @@ function Playhead({ tick, pxPerTick, height, onScrub }: {
   height: number
   onScrub: (t: number) => void
 }) {
-  const onMouseDown = (e: React.MouseEvent) => {
+  const onPointerDown = (e: React.PointerEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    const startX = e.clientX
     const startTick = tick
-    const onMove = (ev: MouseEvent) => {
-      const dx = ev.clientX - startX
-      onScrub(startTick + dx / pxPerTick)
-    }
-    const onUp = () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
+    startPointerDrag(e, {
+      onMove: ({ dx }) => onScrub(startTick + dx / pxPerTick),
+    })
   }
   return (
     <div
@@ -387,9 +375,16 @@ function Playhead({ tick, pxPerTick, height, onScrub }: {
         {fmtTime(Math.round(tick))}
       </div>
       <div className="absolute left-0 top-4 -ml-px h-[calc(100%-1rem)] w-0.5 bg-blue-500" />
+      {/* Visible handle (small, cosmetic) */}
       <div
-        onMouseDown={onMouseDown}
-        className="pointer-events-auto absolute left-0 top-0 -ml-2 size-4 cursor-ew-resize rounded-full border-2 border-blue-500 bg-white shadow"
+        aria-hidden
+        className="pointer-events-none absolute left-0 top-0 -ml-2 size-4 rounded-full border-2 border-blue-500 bg-white shadow"
+      />
+      {/* Larger transparent hit area so the scrubber is grabbable on touch */}
+      <div
+        onPointerDown={onPointerDown}
+        title="Drag to scrub"
+        className="pointer-events-auto absolute left-0 top-0 -ml-5 -mt-1 h-10 w-10 cursor-ew-resize touch-none"
       />
     </div>
   )
@@ -408,8 +403,20 @@ export function EpisodeTimeline() {
   const deleteBeat = useEpisodeStore(s => s.deleteBeat)
 
   const services = useServices()
+  const isMobile = useIsMobile()
+  const labelCol = isMobile ? LABEL_COL_MOBILE : LABEL_COL_DESKTOP
+  // Default to a slightly tighter zoom on mobile so a typical 20-minute episode
+  // fits without endless horizontal scrolling.
   const [pxPerTick, setPxPerTick] = useState(0.85)
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  // When the breakpoint flips, ease the default zoom so the timeline stays
+  // legible on both ends without touching the user's manually-set zoom.
+  const userZoomedRef = useRef(false)
+  useEffect(() => {
+    if (userZoomedRef.current) return
+    setPxPerTick(isMobile ? 0.55 : 0.85)
+  }, [isMobile])
 
   const widthPx = episode.duration * pxPerTick
   const lanesHeight = services.length * LANE_HEIGHT
@@ -425,27 +432,41 @@ export function EpisodeTimeline() {
     addBlock(serviceId, makeBlock(state, startTick, dur))
   }, [addBlock, episode.duration, episode.lanes])
 
-  const zoomOut = () => setPxPerTick(v => Math.max(ZOOM_MIN, v / 1.5))
-  const zoomIn = () => setPxPerTick(v => Math.min(ZOOM_MAX, v * 1.5))
-  const zoomReset = () => setPxPerTick(0.85)
+  const zoomOut = () => { userZoomedRef.current = true; setPxPerTick(v => Math.max(ZOOM_MIN, v / 1.5)) }
+  const zoomIn = () => { userZoomedRef.current = true; setPxPerTick(v => Math.min(ZOOM_MAX, v * 1.5)) }
+  const zoomReset = () => { userZoomedRef.current = false; setPxPerTick(isMobile ? 0.55 : 0.85) }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col border-b border-slate-200 bg-white">
-      <div className="flex items-center gap-3 border-b border-slate-200 px-4 py-2">
+      <div className="flex items-center gap-2 border-b border-slate-200 px-2 py-1.5 sm:gap-3 sm:px-4 sm:py-2">
         <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-600">Timeline</span>
-        <span className="font-mono text-[11px] text-slate-400">
-          {services.length} service{services.length !== 1 ? 's' : ''} · {fmtTime(episode.duration)}
+        <span className="min-w-0 truncate font-mono text-[11px] text-slate-400">
+          {services.length} svc{services.length !== 1 ? 's' : ''} · {fmtTime(episode.duration)}
         </span>
         <div className="ml-auto flex items-center gap-2">
-          <div className="flex items-center rounded border border-slate-200 bg-slate-50">
-            <button onClick={zoomOut} className="px-2 py-1 font-mono text-[11px] text-slate-500 hover:text-slate-800" title="Zoom out">
-              <Minus className="size-3" />
+          <div className="flex items-center rounded-md border border-slate-200 bg-slate-50">
+            <button
+              onClick={zoomOut}
+              className="inline-flex h-9 w-9 items-center justify-center text-slate-500 hover:text-slate-800 sm:h-7 sm:w-7"
+              title="Zoom out"
+              aria-label="Zoom out"
+            >
+              <Minus className="size-4 sm:size-3" />
             </button>
-            <button onClick={zoomReset} className="border-x border-slate-200 px-2 py-1 font-mono text-[10px] text-slate-700" title="Reset zoom">
+            <button
+              onClick={zoomReset}
+              className="border-x border-slate-200 px-2 py-1 font-mono text-[11px] text-slate-700 sm:text-[10px]"
+              title="Reset zoom"
+            >
               {pxPerTick.toFixed(2)}×
             </button>
-            <button onClick={zoomIn} className="px-2 py-1 font-mono text-[11px] text-slate-500 hover:text-slate-800" title="Zoom in">
-              <Plus className="size-3" />
+            <button
+              onClick={zoomIn}
+              className="inline-flex h-9 w-9 items-center justify-center text-slate-500 hover:text-slate-800 sm:h-7 sm:w-7"
+              title="Zoom in"
+              aria-label="Zoom in"
+            >
+              <Plus className="size-4 sm:size-3" />
             </button>
           </div>
         </div>
@@ -453,7 +474,7 @@ export function EpisodeTimeline() {
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {/* Left sticky labels */}
-        <div className="shrink-0 border-r border-slate-200 bg-slate-50" style={{ width: LABEL_COL }}>
+        <div className="shrink-0 border-r border-slate-200 bg-slate-50" style={{ width: labelCol }}>
           <div className="border-b border-slate-200 px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500" style={{ height: NARR_TRACK_H, lineHeight: `${NARR_TRACK_H}px` }}>
             Narrative
           </div>
@@ -463,13 +484,14 @@ export function EpisodeTimeline() {
           {services.map(s => (
             <div
               key={s.id}
-              className="flex items-center gap-2 border-b border-slate-100 px-3"
+              className="flex items-center gap-2 border-b border-slate-100 px-2 sm:px-3"
               style={{ height: LANE_HEIGHT }}
+              title={`${s.label} (${s.kind})`}
             >
               <span className="text-base leading-none">{s.emoji}</span>
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[12px] font-medium text-slate-800">{s.label}</div>
-                <div className="truncate font-mono text-[9.5px] uppercase tracking-wider text-slate-400">{s.kind}</div>
+                <div className="hidden truncate font-mono text-[9.5px] uppercase tracking-wider text-slate-400 sm:block">{s.kind}</div>
               </div>
             </div>
           ))}

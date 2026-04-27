@@ -39,6 +39,7 @@ import { pickCriblPayload } from '@/lib/backendClient'
 import { canvasToScenarioYaml } from '@/lib/canvasToScenarioYaml'
 import { runStream } from '@/lib/runStream'
 import { logsAt } from '@/lib/logsAt'
+import { materializeProposedScenarioJson } from '@/lib/scenarioPrompt'
 
 interface ExampleEpisodeManifestEntry {
   file: string
@@ -46,6 +47,16 @@ interface ExampleEpisodeManifestEntry {
   description: string
   segmentCount: number
   totalTicks: number
+}
+
+interface PresetScenarioManifestEntry {
+  file: string
+  title: string
+  description: string
+  category: string
+  difficulty: 'easy' | 'medium' | 'hard'
+  durationTicks: number
+  serviceCount: number
 }
 
 const SPEED_OPTIONS = [1, 2, 4, 8] as const
@@ -95,6 +106,8 @@ export function Topbar() {
 
   const [examples, setExamples] = useState<ExampleEpisodeManifestEntry[]>([])
   const [examplesLoaded, setExamplesLoaded] = useState(false)
+  const [presets, setPresets] = useState<PresetScenarioManifestEntry[]>([])
+  const [presetsLoaded, setPresetsLoaded] = useState(false)
   const [draftName, setDraftName] = useState(metadata.name)
   const [editingTitle, setEditingTitle] = useState(false)
 
@@ -207,6 +220,35 @@ export function Topbar() {
       alert(`Failed to load example episode: ${String(err)}`)
     }
   }, [setEpisode])
+
+  // ── Example Scenarios (presets w/ embedded timelines) ───────────
+  const loadPresetsManifest = useCallback(async () => {
+    if (presetsLoaded) return
+    try {
+      const res = await fetch('/scenarios/presets/index.json', { cache: 'no-cache' })
+      if (res.ok) setPresets(await res.json())
+    } catch { /* ignore */ }
+    setPresetsLoaded(true)
+  }, [presetsLoaded])
+
+  const loadExampleScenario = useCallback(async (entry: PresetScenarioManifestEntry) => {
+    try {
+      const res = await fetch(`/scenarios/presets/${entry.file}`, { cache: 'no-cache' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const json = await res.json()
+      const result = materializeProposedScenarioJson(json)
+      const now = new Date().toISOString()
+      loadScenario(result.flowNodes, result.flowEdges, {
+        name: result.name?.trim() || entry.title,
+        description: result.description?.trim() || entry.description,
+        createdAt: now,
+        updatedAt: now,
+      })
+      if (result.episode) setEpisode(result.episode)
+    } catch (err) {
+      alert(`Failed to load preset scenario: ${String(err)}`)
+    }
+  }, [loadScenario, setEpisode])
 
   const handleEpisodeSave = useCallback(() => {
     const payload: EpisodeFileV2 = { version: 2, episode }
@@ -411,12 +453,9 @@ export function Topbar() {
 
   // ── Render ──────────────────────────────────────────────────────
   return (
-    <div
-      className="grid h-12 shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-3.5"
-      style={{ gridTemplateColumns: '1fr auto 1fr' }}
-    >
+    <div className="flex h-12 shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-2 sm:gap-3 sm:px-3.5 sm:[display:grid] sm:[grid-template-columns:1fr_auto_1fr]">
       {/* LEFT: logo + breadcrumbs */}
-      <div className="flex min-w-0 items-center gap-3.5">
+      <div className="flex min-w-0 items-center gap-2 sm:gap-3.5">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
@@ -425,8 +464,8 @@ export function Topbar() {
               title="File menu"
             >
               <LogoMark />
-              <span className="text-[14px] font-bold tracking-[-0.01em] text-slate-900">logsim</span>
-              <span className="font-mono text-[11px] font-medium text-slate-500">v2</span>
+              <span className="hidden text-[14px] font-bold tracking-[-0.01em] text-slate-900 sm:inline">logsim</span>
+              <span className="hidden font-mono text-[11px] font-medium text-slate-500 sm:inline">v2</span>
               <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
             </button>
           </DropdownMenuTrigger>
@@ -437,6 +476,48 @@ export function Topbar() {
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={handleEpisodeOpen} className="cursor-pointer text-xs">🎬 Open Episode…</DropdownMenuItem>
             <DropdownMenuItem onClick={handleEpisodeSave} className="cursor-pointer text-xs">🎬 Save Episode</DropdownMenuItem>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger
+                onMouseEnter={loadPresetsManifest}
+                onFocus={loadPresetsManifest}
+                className="cursor-pointer text-xs"
+              >
+                📚 Example Scenarios
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="max-w-sm text-xs">
+                <DropdownMenuLabel className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                  Realistic scenarios with timelines
+                </DropdownMenuLabel>
+                {!presetsLoaded ? (
+                  <div className="px-2 py-1.5 text-[11px] text-slate-400">Loading…</div>
+                ) : presets.length === 0 ? (
+                  <div className="px-2 py-1.5 text-[11px] text-slate-400">No example scenarios found.</div>
+                ) : (
+                  presets.map(p => (
+                    <DropdownMenuItem
+                      key={p.file}
+                      onClick={() => loadExampleScenario(p)}
+                      className="flex cursor-pointer flex-col items-start gap-0.5 text-xs"
+                    >
+                      <span className="flex items-center gap-1.5 font-medium">
+                        {p.title}
+                        <span className={cn(
+                          'rounded px-1 py-px text-[9px] font-semibold uppercase tracking-wide',
+                          p.category === 'security' ? 'bg-rose-100 text-rose-700'
+                            : p.category === 'incident' ? 'bg-amber-100 text-amber-800'
+                            : p.category === 'deploy' ? 'bg-violet-100 text-violet-700'
+                            : 'bg-slate-100 text-slate-600',
+                        )}>{p.category}</span>
+                      </span>
+                      <span className="whitespace-normal text-[10px] leading-tight text-slate-500">{p.description}</span>
+                      <span className="text-[10px] text-slate-400">
+                        {p.serviceCount} services · {Math.round(p.durationTicks / 60)} min · {p.difficulty}
+                      </span>
+                    </DropdownMenuItem>
+                  ))
+                )}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
             <DropdownMenuSub>
               <DropdownMenuSubTrigger
                 onMouseEnter={loadExamplesManifest}
@@ -507,8 +588,8 @@ export function Topbar() {
         </div>
       </div>
 
-      {/* CENTER: dataset shortcut */}
-      <div className="flex shrink-0 items-center gap-0.5 rounded-md border border-slate-200 bg-slate-100 p-[3px]">
+      {/* CENTER: dataset shortcut (desktop only — accessible via File menu on mobile) */}
+      <div className="hidden shrink-0 items-center gap-0.5 rounded-md border border-slate-200 bg-slate-100 p-[3px] sm:flex">
         <TabButton asLink href="/settings">Datasets</TabButton>
       </div>
 
@@ -520,13 +601,14 @@ export function Topbar() {
           <span className="hidden sm:inline">{isRunning ? 'streaming' : 'paused'}</span>
         </div>
 
-        {/* Destinations status chip */}
+        {/* Destinations status chip — hide entirely on phones when nothing's configured */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
               type="button"
               className={cn(
-                'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2 text-[11px] font-medium transition-colors',
+                'h-7 shrink-0 items-center gap-1.5 rounded-md border px-2 text-[11px] font-medium transition-colors sm:inline-flex',
+                destinations.length === 0 ? 'hidden sm:inline-flex' : 'inline-flex',
                 destOverall === 'error'
                   ? 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100'
                   : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
@@ -596,7 +678,7 @@ export function Topbar() {
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {/* Time multiplier segmented control */}
+        {/* Time multiplier — segmented on desktop, dropdown on mobile */}
         <div className="hidden shrink-0 items-center gap-0.5 rounded-md border border-slate-200 bg-slate-100 p-[2px] sm:flex">
           {SPEED_OPTIONS.map(s => (
             <button
@@ -613,13 +695,38 @@ export function Topbar() {
             >{s}×</button>
           ))}
         </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="inline-flex h-9 shrink-0 items-center justify-center rounded-md border border-slate-300 bg-white px-2 font-mono text-[12px] font-semibold text-slate-700 hover:bg-slate-50 sm:hidden"
+              title={`Simulation speed (${speed}×)`}
+            >
+              {speed}×
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-0">
+            {SPEED_OPTIONS.map(s => (
+              <DropdownMenuItem
+                key={s}
+                onClick={() => handleSpeedSelect(s)}
+                className={cn(
+                  'cursor-pointer justify-center font-mono text-xs',
+                  speed === s && 'font-bold text-blue-600',
+                )}
+              >
+                {s}×
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
 
-        {/* Step + Reset (icon-only) */}
+        {/* Step (desktop only — saved space matters more on phones) */}
         <button
           type="button"
           onClick={handleStep}
           disabled={isRunning}
-          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+          className="hidden h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 sm:inline-flex"
           title="Step one tick"
         >
           <StepForward className="h-3.5 w-3.5" />
@@ -628,10 +735,10 @@ export function Topbar() {
           type="button"
           onClick={handleReset}
           disabled={!isRunning && tickCount === 0}
-          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 sm:h-7 sm:w-7"
           title="Reset simulation"
         >
-          <RotateCcw className="h-3.5 w-3.5" />
+          <RotateCcw className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
         </button>
 
         {/* Pause/Run primary */}
@@ -639,14 +746,14 @@ export function Topbar() {
           type="button"
           onClick={handlePlayPause}
           className={cn(
-            'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium transition-colors',
+            'inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium transition-colors sm:h-7',
             'border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
           )}
           title={isRunning ? 'Pause simulation' : 'Run simulation'}
         >
-          {isRunning ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+          {isRunning ? <Pause className="h-4 w-4 sm:h-3.5 sm:w-3.5" /> : <Play className="h-4 w-4 sm:h-3.5 sm:w-3.5" />}
           <span className="hidden sm:inline">{isRunning ? 'Pause' : 'Run'}</span>
-          {!isRunning && speed > 1 && <FastForward className="h-3 w-3 text-slate-400" />}
+          {!isRunning && speed > 1 && <FastForward className="hidden h-3 w-3 text-slate-400 sm:inline" />}
         </button>
 
         {/* Export primary */}
@@ -654,10 +761,10 @@ export function Topbar() {
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-blue-600 bg-blue-600 px-2.5 text-[12px] font-semibold text-white transition-colors hover:bg-blue-700"
+              className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-blue-600 bg-blue-600 px-2.5 text-[12px] font-semibold text-white transition-colors hover:bg-blue-700 sm:h-7"
               title="Export dataset"
             >
-              <Download className="h-3.5 w-3.5" />
+              <Download className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
               <span className="hidden md:inline">Export</span>
             </button>
           </DropdownMenuTrigger>

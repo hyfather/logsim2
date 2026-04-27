@@ -1,0 +1,56 @@
+[
+  {
+    "file": "db-slowdown-cascade.scenario.json",
+    "title": "Database Slowdown Cascade",
+    "description": "Postgres slow queries cascade into API degradation; replica failover restores service.",
+    "category": "incident",
+    "difficulty": "easy",
+    "durationTicks": 1200,
+    "serviceCount": 5
+  },
+  {
+    "file": "ddos-edge-mitigation.scenario.json",
+    "title": "DDoS at the Edge",
+    "description": "L7 flood saturates the edge LB; downstream APIs throttle, attack subsides, traffic normalises.",
+    "category": "security",
+    "difficulty": "medium",
+    "durationTicks": 1200,
+    "serviceCount": 6
+  },
+  {
+    "file": "bad-canary-deploy.scenario.json",
+    "title": "Bad Canary Deploy",
+    "description": "Canary fails health checks; LB shifts traffic and the rest of the fleet absorbs the load until rollback.",
+    "category": "deploy",
+    "difficulty": "medium",
+    "durationTicks": 1080,
+    "serviceCount": 5
+  },
+  {
+    "file": "cache-failure-cascade.scenario.json",
+    "title": "Cache Failure Cascade",
+    "description": "Redis OOM forces reads onto Postgres; pool exhausts; APIs degrade until cache recovers.",
+    "category": "incident",
+    "difficulty": "easy",
+    "durationTicks": 1080,
+    "serviceCount": 5
+  },
+  {
+    "file": "credential-stuffing-takeover.scenario.json",
+    "title": "Credential Stuffing → Account Takeover",
+    "description": "Brute force on auth-api breaks through; lateral movement and bulk PII reads before containment.",
+    "category": "security",
+    "difficulty": "hard",
+    "durationTicks": 1500,
+    "serviceCount": 5
+  },
+  {
+    "file": "healthy-baseline.scenario.json",
+    "title": "Healthy Baseline — No Incident",
+    "description": "A well-behaved three-tier app for 20 minutes. Reference dataset for detection rule tuning.",
+    "category": "baseline",
+    "difficulty": "easy",
+    "durationTicks": 1200,
+    "serviceCount": 4
+  }
+]

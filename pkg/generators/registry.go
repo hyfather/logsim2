@@ -3,13 +3,23 @@ package generators
 import "github.com/nikhilm/logsim2/pkg/scenario"
 
 // ForService returns the Generator for the given service type, or nil.
+//
+// nodejs and mysql have first-class generators. Other web/db service types
+// (golang, nginx, postgres, redis) currently fall back to the closest
+// analogue so any scenario the canvas can author actually emits logs at
+// runtime — without that fallback an "nginx" or "redis" service is silent
+// and the user thinks the simulator is broken. Custom is handled by
+// NewCustomGenerator at the call site.
 func ForService(serviceType scenario.ServiceType) Generator {
 	switch serviceType {
-	case scenario.ServiceTypeNodejs:
+	case scenario.ServiceTypeNodejs,
+		scenario.ServiceTypeGolang,
+		scenario.ServiceTypeNginx:
 		return &NodejsGenerator{}
-	case scenario.ServiceTypeMySQL:
+	case scenario.ServiceTypeMySQL,
+		scenario.ServiceTypePostgres,
+		scenario.ServiceTypeRedis:
 		return &MysqlGenerator{}
-	// Phase 4+: golang, postgres, redis, nginx (standalone), custom
 	default:
 		return nil
 	}
