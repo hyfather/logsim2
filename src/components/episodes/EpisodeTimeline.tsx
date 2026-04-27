@@ -1,6 +1,6 @@
 'use client'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Minus, Plus, X } from 'lucide-react'
+import { Minus, Plus, X, ChevronUp } from 'lucide-react'
 import { useEpisodeStore } from '@/store/useEpisodeStore'
 import { useScenarioStore } from '@/store/useScenarioStore'
 import { BEHAVIOR_STATES, fmtTime, makeBlock } from '@/lib/episodeBehavior'
@@ -13,7 +13,7 @@ import { cn } from '@/lib/utils'
 const LANE_HEIGHT = 44
 const LABEL_COL_DESKTOP = 160
 const LABEL_COL_MOBILE = 108
-const NARR_TRACK_H = 56
+const NARR_TRACK_H = 32
 const RULER_H = 22
 
 const ZOOM_MIN = 0.2
@@ -123,44 +123,61 @@ function NarrativeTrack({ widthPx, pxPerTick, beats, duration, onSeek, onUpsert,
       style={{ width: widthPx, height: NARR_TRACK_H }}
       onClick={onTrackClick}
     >
-      {beats.map(m => (
+      {beats.map((m, i) => (
         <div
           key={m.id}
           data-narr-marker
-          className="group absolute top-0 bottom-0 z-10 flex -translate-x-1/2 flex-col items-center"
-          style={{ left: m.tick * pxPerTick }}
+          className="group pointer-events-none absolute top-0 bottom-0 flex -translate-x-1/2 flex-col items-center"
+          style={{ left: m.tick * pxPerTick, zIndex: 10 + i }}
         >
           {editing === m.id ? (
-            <input
-              autoFocus
-              className="mt-1.5 w-32 rounded-md border-[1.5px] border-indigo-500 bg-white px-2 py-0.5 text-[11px] shadow-[0_0_0_3px_rgba(99,102,241,0.15)] outline-none sm:w-44"
-              value={editText}
-              onChange={e => setEditText(e.target.value)}
-              onBlur={commit}
-              onKeyDown={e => {
-                if (e.key === 'Enter') commit()
-                if (e.key === 'Escape') { setEditing(null); setEditText('') }
-              }}
-              onClick={e => e.stopPropagation()}
-            />
-          ) : (
-            <div
-              onDoubleClick={e => { e.stopPropagation(); setEditing(m.id); setEditText(m.text) }}
-              onClick={e => { e.stopPropagation(); onSeek(m.tick) }}
-              title={`${m.text} @ ${fmtTime(m.tick)} — double-click to edit`}
-              className="mt-1.5 max-w-[120px] cursor-pointer truncate rounded-md border border-indigo-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-indigo-700 shadow-sm hover:border-indigo-400 hover:bg-indigo-50 sm:max-w-[200px]"
-            >
-              {m.text}
+            <div className="pointer-events-auto mt-1.5 flex items-center overflow-hidden rounded-full border-[1.5px] border-indigo-500 bg-white shadow-[0_0_0_3px_rgba(99,102,241,0.15)]">
+              <span className="bg-indigo-100 px-2 py-0.5 font-mono text-[10.5px] font-semibold text-indigo-700">
+                {fmtTime(m.tick)}
+              </span>
+              <input
+                autoFocus
+                className="w-32 bg-transparent px-2 py-0.5 text-[11px] outline-none sm:w-44"
+                value={editText}
+                onChange={e => setEditText(e.target.value)}
+                onBlur={commit}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') commit()
+                  if (e.key === 'Escape') { setEditing(null); setEditText('') }
+                }}
+                onClick={e => e.stopPropagation()}
+              />
             </div>
+          ) : (
+            <>
+              <button
+                onClick={e => { e.stopPropagation(); onSeek(m.tick) }}
+                onDoubleClick={e => { e.stopPropagation(); setEditing(m.id); setEditText(m.text) }}
+                title={`${m.text} @ ${fmtTime(m.tick)} — double-click to edit`}
+                className="pointer-events-auto mt-1.5 inline-flex h-5 items-center gap-1 rounded-full border border-indigo-300 bg-white/95 px-1.5 font-mono text-[10px] font-semibold text-indigo-700 shadow-sm transition-colors hover:border-indigo-500 hover:bg-indigo-50 hover:shadow group-hover:z-50"
+              >
+                <span className="size-1.5 rounded-full bg-indigo-500" />
+                {fmtTime(m.tick)}
+              </button>
+              <div className="pointer-events-none absolute left-1/2 top-7 z-50 hidden -translate-x-1/2 group-hover:block">
+                <div className="flex max-w-[260px] items-center gap-2 whitespace-nowrap rounded-lg border border-indigo-200 bg-white px-2.5 py-1.5 shadow-[0_8px_24px_-12px_rgba(15,23,42,0.4)]">
+                  <span className="shrink-0 rounded bg-indigo-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-indigo-700">
+                    {fmtTime(m.tick)}
+                  </span>
+                  <span className="overflow-hidden text-ellipsis text-[11px] font-medium text-indigo-900">
+                    {m.text}
+                  </span>
+                </div>
+              </div>
+              <button
+                onClick={e => { e.stopPropagation(); onDelete(m.id) }}
+                className="pointer-events-auto absolute top-0.5 -right-4 hidden size-4 items-center justify-center rounded-full border border-slate-300 bg-white text-[11px] leading-none text-slate-500 hover:border-red-300 hover:bg-red-50 hover:text-red-600 group-hover:flex"
+                title="Delete beat"
+              >
+                <X className="size-2.5" />
+              </button>
+            </>
           )}
-          <button
-            onClick={e => { e.stopPropagation(); onDelete(m.id) }}
-            className="absolute top-1 -right-5 hidden size-4 items-center justify-center rounded border border-slate-300 bg-white text-[11px] leading-none text-slate-500 hover:border-red-300 hover:bg-red-50 hover:text-red-600 group-hover:flex"
-            title="Delete beat"
-          >
-            <X className="size-2.5" />
-          </button>
-          <div className="mt-1 font-mono text-[9.5px] text-slate-400">{fmtTime(m.tick)}</div>
         </div>
       ))}
       {adding && (
@@ -168,25 +185,29 @@ function NarrativeTrack({ widthPx, pxPerTick, beats, duration, onSeek, onUpsert,
           className="absolute top-0 bottom-0 z-10 flex -translate-x-1/2 flex-col items-center"
           style={{ left: adding.tick * pxPerTick }}
         >
-          <input
-            autoFocus
-            placeholder="Type a narrative beat…"
-            className="mt-1.5 w-32 rounded-md border-[1.5px] border-emerald-500 bg-white px-2 py-0.5 text-[11px] shadow-[0_0_0_3px_rgba(34,197,94,0.15)] outline-none sm:w-44"
-            value={editText}
-            onChange={e => setEditText(e.target.value)}
-            onBlur={commit}
-            onKeyDown={e => {
-              if (e.key === 'Enter') commit()
-              if (e.key === 'Escape') { setAdding(null); setEditText('') }
-            }}
-            onClick={e => e.stopPropagation()}
-          />
-          <div className="mt-1 font-mono text-[9.5px] text-slate-400">{fmtTime(adding.tick)}</div>
+          <div className="mt-1.5 flex items-center overflow-hidden rounded-full border-[1.5px] border-emerald-500 bg-white shadow-[0_0_0_3px_rgba(34,197,94,0.15)]">
+            <span className="bg-emerald-100 px-2 py-0.5 font-mono text-[10.5px] font-semibold text-emerald-700">
+              {fmtTime(adding.tick)}
+            </span>
+            <input
+              autoFocus
+              placeholder="Type a narrative beat…"
+              className="w-32 bg-transparent px-2 py-0.5 text-[11px] outline-none sm:w-44"
+              value={editText}
+              onChange={e => setEditText(e.target.value)}
+              onBlur={commit}
+              onKeyDown={e => {
+                if (e.key === 'Enter') commit()
+                if (e.key === 'Escape') { setAdding(null); setEditText('') }
+              }}
+              onClick={e => e.stopPropagation()}
+            />
+          </div>
         </div>
       )}
       {beats.length === 0 && !adding && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[11px] italic text-slate-400">
-          Click anywhere to drop a narrative beat (e.g. &ldquo;DDoS starts&rdquo;)
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[10.5px] italic text-slate-400">
+          Click to drop a narrative beat
         </div>
       )}
     </div>
@@ -266,6 +287,7 @@ function BehaviorBlockView({
 
   return (
     <div
+      data-block
       onPointerDown={onBodyPointerDown}
       title={`${meta.label} • ${block.duration}t • err ${(block.errorRate * 100).toFixed(1)}% • lat ${block.latencyMul}× • log ${block.logVolMul}×`}
       className={cn(
@@ -335,17 +357,16 @@ function ServiceLane({
       {/* baseline healthy stripe */}
       <div className="pointer-events-none absolute left-0 right-0 top-1/2 h-px -translate-y-1/2 bg-emerald-100" />
       {blocks.map(b => (
-        <div key={b.id} data-block className="absolute inset-y-0" style={{ left: 0, right: 0 }}>
-          <BehaviorBlockView
-            block={b}
-            pxPerTick={pxPerTick}
-            selected={selectedBlockId === b.id}
-            episodeDuration={episodeDuration}
-            onSelect={() => onSelectBlock(b.id)}
-            onMove={(newStart) => onMoveBlock(b.id, newStart)}
-            onResize={(patch) => onResizeBlock(b.id, patch)}
-          />
-        </div>
+        <BehaviorBlockView
+          key={b.id}
+          block={b}
+          pxPerTick={pxPerTick}
+          selected={selectedBlockId === b.id}
+          episodeDuration={episodeDuration}
+          onSelect={() => onSelectBlock(b.id)}
+          onMove={(newStart) => onMoveBlock(b.id, newStart)}
+          onResize={(patch) => onResizeBlock(b.id, patch)}
+        />
       ))}
     </div>
   )
@@ -391,7 +412,7 @@ function Playhead({ tick, pxPerTick, height, onScrub }: {
 }
 
 // ---------- Main ----------
-export function EpisodeTimeline() {
+export function EpisodeTimeline({ onCollapse }: { onCollapse?: () => void } = {}) {
   const episode = useEpisodeStore(s => s.episode)
   const tick = useEpisodeStore(s => s.tick)
   const selectedBlockId = useEpisodeStore(s => s.selectedBlockId)
@@ -437,8 +458,18 @@ export function EpisodeTimeline() {
   const zoomReset = () => { userZoomedRef.current = false; setPxPerTick(isMobile ? 0.55 : 0.85) }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col border-b border-slate-200 bg-white">
+    <div className="flex h-full min-h-0 flex-col bg-white">
       <div className="flex items-center gap-2 border-b border-slate-200 px-2 py-1.5 sm:gap-3 sm:px-4 sm:py-2">
+        {onCollapse && (
+          <button
+            onClick={onCollapse}
+            title="Collapse timeline"
+            aria-label="Collapse timeline"
+            className="-ml-1 inline-flex h-6 w-6 items-center justify-center rounded text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+          >
+            <ChevronUp className="size-3.5" />
+          </button>
+        )}
         <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-600">Timeline</span>
         <span className="min-w-0 truncate font-mono text-[11px] text-slate-400">
           {services.length} svc{services.length !== 1 ? 's' : ''} · {fmtTime(episode.duration)}
@@ -472,39 +503,41 @@ export function EpisodeTimeline() {
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 overflow-hidden">
-        {/* Left sticky labels */}
-        <div className="shrink-0 border-r border-slate-200 bg-slate-50" style={{ width: labelCol }}>
-          <div className="border-b border-slate-200 px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500" style={{ height: NARR_TRACK_H, lineHeight: `${NARR_TRACK_H}px` }}>
-            Narrative
-          </div>
-          <div className="border-b border-slate-200 px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500" style={{ height: RULER_H, lineHeight: `${RULER_H}px` }}>
-            Time
-          </div>
-          {services.map(s => (
-            <div
-              key={s.id}
-              className="flex items-center gap-2 border-b border-slate-100 px-2 sm:px-3"
-              style={{ height: LANE_HEIGHT }}
-              title={`${s.label} (${s.kind})`}
-            >
-              <span className="text-base leading-none">{s.emoji}</span>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[12px] font-medium text-slate-800">{s.label}</div>
-                <div className="hidden truncate font-mono text-[9.5px] uppercase tracking-wider text-slate-400 sm:block">{s.kind}</div>
+      {/* Single scroll container — vertical for many services, horizontal for long durations.
+          Labels are sticky-left so they stay visible while panning right. */}
+      <div ref={scrollRef} className="relative min-h-0 flex-1 overflow-auto">
+        <div className="relative flex" style={{ width: labelCol + widthPx, minWidth: '100%' }}>
+          {/* Sticky left labels column */}
+          <div className="sticky left-0 z-20 shrink-0 border-r border-slate-200 bg-slate-50" style={{ width: labelCol }}>
+            <div className="border-b border-slate-200 px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500" style={{ height: NARR_TRACK_H, lineHeight: `${NARR_TRACK_H}px` }}>
+              Narrative
+            </div>
+            <div className="border-b border-slate-200 px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500" style={{ height: RULER_H, lineHeight: `${RULER_H}px` }}>
+              Time
+            </div>
+            {services.map(s => (
+              <div
+                key={s.id}
+                className="flex items-center gap-2 border-b border-slate-100 px-2 sm:px-3"
+                style={{ height: LANE_HEIGHT }}
+                title={`${s.label} (${s.kind})`}
+              >
+                <span className="text-base leading-none">{s.emoji}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[12px] font-medium text-slate-800">{s.label}</div>
+                  <div className="hidden truncate font-mono text-[9.5px] uppercase tracking-wider text-slate-400 sm:block">{s.kind}</div>
+                </div>
               </div>
-            </div>
-          ))}
-          {services.length === 0 && (
-            <div className="px-3 py-4 text-[11px] italic text-slate-400">
-              Drag a service from the palette to populate lanes here.
-            </div>
-          )}
-        </div>
+            ))}
+            {services.length === 0 && (
+              <div className="px-3 py-4 text-[11px] italic text-slate-400">
+                Drag a service from the palette to populate lanes here.
+              </div>
+            )}
+          </div>
 
-        {/* Right scrollable timeline */}
-        <div ref={scrollRef} className="relative min-w-0 flex-1 overflow-auto">
-          <div className="relative" style={{ width: widthPx, minWidth: '100%' }}>
+          {/* Right timeline content — natural width = widthPx */}
+          <div className="relative" style={{ width: widthPx }}>
             <NarrativeTrack
               widthPx={widthPx}
               pxPerTick={pxPerTick}

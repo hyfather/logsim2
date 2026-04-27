@@ -1,5 +1,5 @@
 'use client'
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useState } from 'react'
 import { useReactFlow } from '@xyflow/react'
 import { useIsMobile } from '@/hooks/useMediaQuery'
 import { useScenarioStore } from '@/store/useScenarioStore'
@@ -9,7 +9,7 @@ import type { CustomNodeType } from '@/types/customNodeType'
 import { cn } from '@/lib/utils'
 import { getDefaultConfig, getDefaultLabel } from '@/registry/nodeRegistry'
 import { DEFAULT_NODE_SIZES } from '@/lib/defaults'
-import { PanelLeftClose, PanelLeftOpen, Plus, Settings2 } from 'lucide-react'
+import { PanelLeftClose, Plus, Settings2 } from 'lucide-react'
 import { CreateCustomNodeTypeDialog } from './CreateCustomNodeTypeDialog'
 
 interface PaletteItem {
@@ -103,10 +103,8 @@ function PaletteItemCard({
 
 export function Palette() {
   const isMobile = useIsMobile()
-  const [open, setOpen] = useState(true)
-  useEffect(() => {
-    if (isMobile) setOpen(false)
-  }, [isMobile])
+  void isMobile
+  const [open, setOpen] = useState(false)
   const { screenToFlowPosition } = useReactFlow()
   const { addNode, nodes } = useScenarioStore()
   const customTypes = useCustomNodeTypesStore(s => s.types)
@@ -179,10 +177,12 @@ export function Palette() {
       <div className="absolute left-3 top-3 z-10 flex flex-col items-center rounded-md border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.05)]">
         <button
           onClick={() => setOpen(true)}
-          title="Open palette"
-          className="rounded-md p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
+          title="Add node"
+          aria-label="Add node"
+          className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px] font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
         >
-          <PanelLeftOpen className="h-4 w-4" />
+          <Plus className="h-4 w-4" />
+          <span className="hidden sm:inline">Add node</span>
         </button>
       </div>
     )

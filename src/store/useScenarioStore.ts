@@ -22,6 +22,8 @@ interface ScenarioState {
   metadata: ScenarioMetadata
   nodes: FlowNode[]
   edges: FlowEdge[]
+  /** Increments every time loadScenario runs — observers (Canvas) use it to fitView. */
+  loadCounter: number
   // Actions
   setMetadata: (metadata: Partial<ScenarioMetadata>) => void
   onNodesChange: (changes: NodeChange[]) => void
@@ -107,6 +109,7 @@ export const useScenarioStore = create<ScenarioState>()(
     metadata: defaultMetadata,
     nodes: [],
     edges: [],
+    loadCounter: 0,
 
     setMetadata: (meta) => {
       set(state => ({
@@ -275,7 +278,12 @@ export const useScenarioStore = create<ScenarioState>()(
     },
 
     loadScenario: (nodes, edges, metadata) => {
-      set({ nodes: sortNodesByHierarchy(nodes), edges, metadata })
+      set(state => ({
+        nodes: sortNodesByHierarchy(nodes),
+        edges,
+        metadata,
+        loadCounter: state.loadCounter + 1,
+      }))
     },
 
     organizeLayout: () => {

@@ -1,5 +1,5 @@
 'use client'
-import React, { useCallback, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef } from 'react'
 import {
   ReactFlow,
   Background,
@@ -12,7 +12,7 @@ import {
   type OnReconnect,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { Sparkles, LayoutGrid } from 'lucide-react'
+import { LayoutGrid } from 'lucide-react'
 import { useScenarioStore } from '@/store/useScenarioStore'
 import { useUIStore } from '@/store/useUIStore'
 import { VpcNode } from '@/components/nodes/VpcNode'
@@ -46,10 +46,23 @@ export function Canvas() {
     onNodesChange, onEdgesChange, onConnect,
     addNode, updateEdge, organizeLayout,
   } = useScenarioStore()
+  const loadCounter = useScenarioStore(s => s.loadCounter)
   const { selectNode, selectEdge, pendingConnection, hoveredConnectionTarget, clearPendingConnection } = useUIStore()
+  const describeOpen = useUIStore(s => s.describePanelOpen)
+  const setDescribeOpen = useUIStore(s => s.setDescribePanelOpen)
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition, fitView } = useReactFlow()
-  const [describeOpen, setDescribeOpen] = useState(false)
+
+  // Fit the canvas to the freshly-loaded scenario (preset, AI gen, file open, autoload).
+  useEffect(() => {
+    if (loadCounter === 0) return
+    const id1 = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        fitView({ padding: 0.18, duration: 350, maxZoom: 1.1, minZoom: 0.4 })
+      })
+    })
+    return () => cancelAnimationFrame(id1)
+  }, [loadCounter, fitView])
 
   const handleOrganize = useCallback(() => {
     organizeLayout()
@@ -259,30 +272,17 @@ export function Canvas() {
             </div>
           </Panel>
         )}
-        {!describeOpen && (
+        {!describeOpen && nodes.length > 0 && (
           <Panel position="top-right">
-            <div className="flex items-center gap-2">
-              {nodes.length > 0 && (
-                <button
-                  onClick={handleOrganize}
-                  type="button"
-                  title="Re-arrange nodes by traffic tier (preserves all connections)"
-                  className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white/95 px-3 py-1.5 text-xs font-medium text-slate-700 shadow-[0_18px_40px_-28px_rgba(15,23,42,0.45)] backdrop-blur transition-colors hover:bg-slate-50"
-                >
-                  <LayoutGrid className="h-3.5 w-3.5" />
-                  <span className="hidden sm:inline">Organize</span>
-                </button>
-              )}
-              <button
-                onClick={() => setDescribeOpen(true)}
-                type="button"
-                title="Describe a scenario in natural language"
-                className="inline-flex items-center gap-1.5 rounded-full border border-violet-200 bg-white/95 px-3 py-1.5 text-xs font-medium text-violet-700 shadow-[0_18px_40px_-28px_rgba(15,23,42,0.45)] backdrop-blur transition-colors hover:bg-violet-50"
-              >
-                <Sparkles className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">Describe scenario</span>
-              </button>
-            </div>
+            <button
+              onClick={handleOrganize}
+              type="button"
+              title="Re-arrange nodes by traffic tier (preserves all connections)"
+              className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white/95 px-3 py-1.5 text-xs font-medium text-slate-700 shadow-[0_18px_40px_-28px_rgba(15,23,42,0.45)] backdrop-blur transition-colors hover:bg-slate-50"
+            >
+              <LayoutGrid className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Organize</span>
+            </button>
           </Panel>
         )}
       </ReactFlow>

@@ -74,7 +74,7 @@ function LogoMark() {
 
 export function Topbar() {
   const { nodes, edges, metadata, setMetadata, resetScenario, loadScenario } = useScenarioStore()
-  const { setShowBulkGenerateModal, setShowKeyboardShortcuts } = useUIStore()
+  const { setShowBulkGenerateModal, setShowKeyboardShortcuts, setDescribePanelOpen } = useUIStore()
   const { episode, setEpisode } = useEpisodeStore()
   const setTick = useEpisodeStore(s => s.setTick)
   const setRunStatus = useEpisodeStore(s => s.setRunStatus)
@@ -471,6 +471,12 @@ export function Topbar() {
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-56 text-xs">
             <DropdownMenuItem onClick={handleNewScenario} className="cursor-pointer text-xs">📄 New Scenario</DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => setDescribePanelOpen(true)}
+              className="cursor-pointer text-xs text-violet-700 focus:text-violet-800"
+            >
+              ✨ Describe with AI…
+            </DropdownMenuItem>
             <DropdownMenuItem onClick={handleOpenScenario} className="cursor-pointer text-xs">📂 Open Scenario…</DropdownMenuItem>
             <DropdownMenuItem onClick={handleSaveScenario} className="cursor-pointer text-xs">💾 Save Scenario  ⌘S</DropdownMenuItem>
             <DropdownMenuSeparator />

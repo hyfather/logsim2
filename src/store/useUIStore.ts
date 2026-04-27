@@ -18,10 +18,13 @@ interface UIState {
   logPanelOpen: boolean
   canvasOpen: boolean
   timelineHeight: number
+  timelineCollapsed: boolean
+  canvasCollapsed: boolean
   isDraggingFromPalette: boolean
   paletteNodeType: string | null
   showBulkGenerateModal: boolean
   showKeyboardShortcuts: boolean
+  describePanelOpen: boolean
   // Actions
   selectNode: (id: string | null) => void
   selectEdge: (id: string | null) => void
@@ -34,9 +37,12 @@ interface UIState {
   setLogPanelOpen: (open: boolean) => void
   setCanvasOpen: (open: boolean) => void
   setTimelineHeight: (height: number) => void
+  setTimelineCollapsed: (collapsed: boolean) => void
+  setCanvasCollapsed: (collapsed: boolean) => void
   setDraggingFromPalette: (isDragging: boolean, nodeType?: string) => void
   setShowBulkGenerateModal: (show: boolean) => void
   setShowKeyboardShortcuts: (show: boolean) => void
+  setDescribePanelOpen: (open: boolean) => void
 }
 
 export const useUIStore = create<UIState>()((set) => ({
@@ -50,10 +56,13 @@ export const useUIStore = create<UIState>()((set) => ({
   logPanelOpen: true,
   canvasOpen: true,
   timelineHeight: 240,
+  timelineCollapsed: false,
+  canvasCollapsed: false,
   isDraggingFromPalette: false,
   paletteNodeType: null,
   showBulkGenerateModal: false,
   showKeyboardShortcuts: false,
+  describePanelOpen: false,
 
   selectNode: (id) => set({
     selectedNodeId: id,
@@ -76,8 +85,11 @@ export const useUIStore = create<UIState>()((set) => ({
   setLogPanelOpen: (open) => set({ logPanelOpen: open }),
   setCanvasOpen: (open) => set({ canvasOpen: open }),
   setTimelineHeight: (height) => set({ timelineHeight: height }),
+  setTimelineCollapsed: (collapsed) => set({ timelineCollapsed: collapsed }),
+  setCanvasCollapsed: (collapsed) => set({ canvasCollapsed: collapsed }),
   setDraggingFromPalette: (isDragging, nodeType) =>
     set({ isDraggingFromPalette: isDragging, paletteNodeType: nodeType || null }),
   setShowBulkGenerateModal: (show) => set({ showBulkGenerateModal: show }),
   setShowKeyboardShortcuts: (show) => set({ showKeyboardShortcuts: show }),
+  setDescribePanelOpen: (open) => set({ describePanelOpen: open }),
 }))

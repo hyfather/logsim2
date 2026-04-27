@@ -352,25 +352,29 @@ function buildSparklines(logs: LogEntry[], channels: string[]): SparkSeries[] {
 
 function Sparkline({ buckets, max }: { buckets: number[]; max: number }) {
   const W = 160
-  const H = 16
+  const H = 18
+  const PAD = 1.5
   const n = buckets.length
-  const barW = W / n
+  if (n === 0) return <svg width={W} height={H} aria-hidden />
   const safeMax = Math.max(1, max)
+  const xs = buckets.map((_, i) => (n === 1 ? W / 2 : (i / (n - 1)) * W))
+  const ys = buckets.map(v => H - PAD - (v / safeMax) * (H - PAD * 2))
+  const linePath = xs.map((x, i) => `${i === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${ys[i].toFixed(2)}`).join(' ')
+  const areaPath = `${linePath} L ${xs[n - 1].toFixed(2)} ${H} L ${xs[0].toFixed(2)} ${H} Z`
+  const lastX = xs[n - 1]
+  const lastY = ys[n - 1]
   return (
-    <svg width={W} height={H} className="shrink-0" aria-hidden>
-      {buckets.map((v, i) => {
-        const h = v === 0 ? 0 : Math.max(1, (v / safeMax) * (H - 2))
-        return (
-          <rect
-            key={i}
-            x={i * barW}
-            y={H - h}
-            width={Math.max(1, barW - 1)}
-            height={h}
-            className="fill-sky-500"
-          />
-        )
-      })}
+    <svg width={W} height={H} className="shrink-0 overflow-visible" aria-hidden>
+      <path d={areaPath} className="fill-sky-500/15" />
+      <path
+        d={linePath}
+        className="stroke-sky-500"
+        strokeWidth={1.25}
+        fill="none"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx={lastX} cy={lastY} r={1.6} className="fill-sky-500" />
     </svg>
   )
 }

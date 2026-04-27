@@ -16,9 +16,10 @@ import { useSimulationStore } from '@/store/useSimulationStore'
 import { useDestinationsStore } from '@/store/useDestinationsStore'
 import { forwardToHec } from '@/lib/criblForwarder'
 import type { CriblHecDestination } from '@/types/destinations'
-import { PanelLeftOpen, PanelRightOpen } from 'lucide-react'
+import { PanelLeftOpen, PanelRightOpen, ChevronDown, ChevronUp } from 'lucide-react'
 import { deserializeScenario } from '@/lib/serialization'
 import { asFlowEdgeData, asFlowNodeData } from '@/lib/flow-data'
+import { materializeProposedScenarioJson } from '@/lib/scenarioPrompt'
 import { cn } from '@/lib/utils'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
@@ -66,8 +67,12 @@ export default function EditorPageClient() {
     logPanelOpen, logPanelWidth, setLogPanelOpen, setLogPanelWidth,
     canvasOpen, setCanvasOpen, selectedNodeId,
     timelineHeight, setTimelineHeight,
+    timelineCollapsed, setTimelineCollapsed,
+    canvasCollapsed, setCanvasCollapsed,
+    setDescribePanelOpen,
   } = useUIStore()
   const selectedBlockId = useEpisodeStore(s => s.selectedBlockId)
+  const setEpisode = useEpisodeStore(s => s.setEpisode)
   const selectedNode = useScenarioStore(s => selectedNodeId ? s.nodes.find(n => n.id === selectedNodeId)?.data ?? null : null)
   const { loadScenario } = useScenarioStore()
   const { logBuffer } = useSimulationStore()
@@ -86,8 +91,48 @@ export default function EditorPageClient() {
   logBufferRef.current = logBuffer
   destinationsRef.current = destinations
 
-  // Auto-restore from localStorage
+  // Bootstrap: prefer ?scenario=<slug> from the landing page, else fall back to autosave.
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('ai') === '1') {
+      setDescribePanelOpen(true)
+      params.delete('ai')
+      const next = params.toString()
+      const url = next ? `${window.location.pathname}?${next}` : window.location.pathname
+      window.history.replaceState(null, '', url)
+    }
+    const slug = params.get('scenario')
+    if (slug) {
+      let cancelled = false
+      ;(async () => {
+        try {
+          const res = await fetch(`/scenarios/presets/${slug}.scenario.json`, { cache: 'no-cache' })
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          const json = await res.json()
+          if (cancelled) return
+          const result = materializeProposedScenarioJson(json)
+          const now = new Date().toISOString()
+          loadScenario(result.flowNodes, result.flowEdges, {
+            name: result.name?.trim() || slug,
+            description: result.description?.trim() || '',
+            createdAt: now,
+            updatedAt: now,
+          })
+          if (result.episode) setEpisode(result.episode)
+        } catch (err) {
+          console.warn('Failed to load preset from URL:', err)
+        } finally {
+          // Strip the param so refreshes don't re-load and overwrite edits.
+          const cleaned = new URLSearchParams(window.location.search)
+          cleaned.delete('scenario')
+          const next = cleaned.toString()
+          const url = next ? `${window.location.pathname}?${next}` : window.location.pathname
+          window.history.replaceState(null, '', url)
+        }
+      })()
+      return () => { cancelled = true }
+    }
+
     const saved = localStorage.getItem('logsim-autosave')
     const savedTime = localStorage.getItem('logsim-autosave-time')
     if (saved && savedTime) {
@@ -278,17 +323,53 @@ export default function EditorPageClient() {
               </div>
             ) : (
               <div className="flex-1 flex flex-col min-h-0 relative overflow-hidden">
-                <div className="relative flex-1 min-h-0 overflow-hidden">
-                  <Canvas />
-                  <Palette />
-                </div>
-                <TimelineDivider height={timelineHeight} setHeight={setTimelineHeight} />
-                <div
-                  className="shrink-0 border-t border-slate-200 bg-white overflow-hidden"
-                  style={{ height: timelineHeight }}
-                >
-                  <EpisodeTimeline />
-                </div>
+                {/* Timeline (top) */}
+                {timelineCollapsed ? (
+                  <CollapsedSectionHeader
+                    title="Timeline"
+                    onExpand={() => setTimelineCollapsed(false)}
+                  />
+                ) : (
+                  <div
+                    className="shrink-0 border-b border-slate-200 bg-white overflow-hidden"
+                    style={canvasCollapsed ? { flex: '1 1 0%', minHeight: 0 } : { height: timelineHeight }}
+                  >
+                    <EpisodeTimeline onCollapse={() => setTimelineCollapsed(true)} />
+                  </div>
+                )}
+
+                {/* Resize divider — only when both expanded */}
+                {!timelineCollapsed && !canvasCollapsed && (
+                  <TimelineDivider height={timelineHeight} setHeight={setTimelineHeight} />
+                )}
+
+                {/* Canvas (bottom) */}
+                {canvasCollapsed ? (
+                  <CollapsedSectionHeader
+                    title="Canvas"
+                    onExpand={() => setCanvasCollapsed(false)}
+                  />
+                ) : (
+                  <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
+                    <div className="flex shrink-0 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 py-1">
+                      <button
+                        onClick={() => setCanvasCollapsed(true)}
+                        title="Collapse canvas"
+                        aria-label="Collapse canvas"
+                        className="-ml-1 rounded p-1 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800"
+                      >
+                        <ChevronDown className="size-3.5" />
+                      </button>
+                      <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-600">
+                        Canvas
+                      </span>
+                    </div>
+                    <div className="relative flex-1 min-h-0 overflow-hidden">
+                      <Canvas />
+                      <Palette />
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -342,13 +423,29 @@ export default function EditorPageClient() {
   )
 }
 
+function CollapsedSectionHeader({ title, onExpand }: { title: string; onExpand: () => void }) {
+  return (
+    <button
+      onClick={onExpand}
+      title={`Expand ${title.toLowerCase()}`}
+      className="group flex shrink-0 items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-1.5 text-left hover:bg-slate-100"
+    >
+      <ChevronDown className="size-3.5 -rotate-90 text-slate-500 transition-transform group-hover:text-slate-800" />
+      <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-600 group-hover:text-slate-900">
+        {title}
+      </span>
+      <span className="ml-auto text-[10px] text-slate-400">Click to expand</span>
+    </button>
+  )
+}
+
 function TimelineDivider({ height, setHeight }: { height: number; setHeight: (h: number) => void }) {
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault()
     const startH = height
     startPointerDrag(e, {
       onMove: ({ dy }) => {
-        const next = Math.max(120, Math.min(560, startH - dy))
+        const next = Math.max(120, Math.min(560, startH + dy))
         setHeight(next)
       },
     })
