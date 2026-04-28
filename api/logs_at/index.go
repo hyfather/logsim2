@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nikhilm/logsim2/pkg/apihelp"
+	"github.com/nikhilm/logsim2/pkg/encoders"
 	"github.com/nikhilm/logsim2/pkg/engine"
 	"github.com/nikhilm/logsim2/pkg/event"
 	"github.com/nikhilm/logsim2/pkg/scenario"
@@ -31,6 +32,10 @@ type Request struct {
 	StartTimeMs    int64  `json:"start_time_ms"`
 	Seed           int64  `json:"seed"`
 	SourceFilter   string `json:"source_filter"`
+	// Format selects the schema applied to each entry's Raw field before
+	// returning. Empty/"native" keeps the generator's log line; "ocsf"
+	// replaces it with an OCSF JSON event.
+	Format string `json:"format,omitempty"`
 }
 
 type Response struct {
@@ -114,14 +119,19 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	entries := collector.entries
+	if format := encoders.Parse(req.Format); format != encoders.FormatNative {
+		entries = encoders.ApplyToRaw(entries, format)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(Response{
 		From:  req.From,
 		To:    req.To,
-		Logs:  collector.entries,
-		Count: len(collector.entries),
+		Logs:  entries,
+		Count: len(entries),
 	})
 }
 

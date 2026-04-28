@@ -70,12 +70,13 @@ func (g *MysqlGenerator) Generate(target Target, inbound []event.Flow, ctx event
 		raw := fmt.Sprintf("%s\t%d Query\t%s", tsStr, connID, query)
 
 		entries = append(entries, event.LogEntry{
-			ID:      makeID(ctx.TickIndex, i*2),
-			TS:      ts.Format("2006-01-02T15:04:05.000Z07:00"),
+			ID:         makeID(ctx.TickIndex, i*2),
+			TS:         ts.Format("2006-01-02T15:04:05.000Z07:00"),
 			Source:     target.Source,
 			Level:      "INFO",
 			Sourcetype: "mysql",
-			Raw:     raw,
+			Class:      "datastore_activity",
+			Raw:        raw,
 			Fields: map[string]any{
 				"conn_id":     connID,
 				"query":       query,
@@ -99,18 +100,19 @@ func (g *MysqlGenerator) Generate(target Target, inbound []event.Flow, ctx event
 				query,
 			)
 			entries = append(entries, event.LogEntry{
-				ID:      makeID(ctx.TickIndex, i*2+1),
-				TS:      ts.Format("2006-01-02T15:04:05.000Z07:00"),
+				ID:         makeID(ctx.TickIndex, i*2+1),
+				TS:         ts.Format("2006-01-02T15:04:05.000Z07:00"),
 				Source:     target.Source,
 				Level:      "WARN",
 				Sourcetype: "mysql",
-				Raw:     slowRaw,
+				Class:      "datastore_activity",
+				Raw:        slowRaw,
 				Fields: map[string]any{
-					"conn_id":          connID,
-					"query":            query,
-					"database":         database,
-					"query_time_ms":    latency,
-					"slow_query":       true,
+					"conn_id":           connID,
+					"query":             query,
+					"database":          database,
+					"query_time_ms":     latency,
+					"slow_query":        true,
 					"slow_threshold_ms": slowThresholdMs,
 				},
 			})

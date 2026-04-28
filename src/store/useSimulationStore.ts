@@ -1,6 +1,6 @@
 'use client'
 import { create } from 'zustand'
-import type { LogEntry, LogFilter } from '@/types/logs'
+import type { LogEntry, LogFilter, LogFormat } from '@/types/logs'
 import type { ConnectionActivity } from '@/types/connections'
 
 export type SimulationStatus = 'idle' | 'running'
@@ -20,6 +20,8 @@ interface SimulationState {
   /** When true, the editor-level auto-forward loop is paused.
    *  User is accumulating logs to forward on demand. */
   accumulateMode: boolean
+  /** Wire schema applied to log lines before they reach the UI. */
+  outputFormat: LogFormat
   // Actions
   setStatus: (status: SimulationStatus) => void
   setSpeed: (speed: number) => void
@@ -33,6 +35,7 @@ interface SimulationState {
   setAutoScroll: (autoScroll: boolean) => void
   setAccumulateMode: (accumulate: boolean) => void
   setWorker: (worker: Worker | null) => void
+  setOutputFormat: (format: LogFormat) => void
   reset: () => void
 }
 
@@ -53,6 +56,7 @@ export const useSimulationStore = create<SimulationState>()((set) => ({
   autoScroll: true,
   worker: null,
   accumulateMode: false,
+  outputFormat: 'native',
 
   setStatus: (status) => set({ status }),
   setSpeed: (speed) => set({ speed }),
@@ -91,6 +95,8 @@ export const useSimulationStore = create<SimulationState>()((set) => ({
   setAccumulateMode: (accumulateMode) => set({ accumulateMode }),
 
   setWorker: (worker) => set({ worker }),
+
+  setOutputFormat: (outputFormat) => set({ outputFormat, logBuffer: [] }),
 
   reset: () => set({
     status: 'idle',

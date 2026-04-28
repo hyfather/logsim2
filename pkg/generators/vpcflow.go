@@ -93,12 +93,13 @@ func (g *VpcFlowGenerator) Generate(target Target, _ []event.Flow, ctx event.Tic
 		)
 
 		entries = append(entries, event.LogEntry{
-			ID:      makeID(ctx.TickIndex, i),
-			TS:      tsStr,
+			ID:         makeID(ctx.TickIndex, i),
+			TS:         tsStr,
 			Source:     target.Source,
 			Level:      "INFO",
 			Sourcetype: "vpc-flow",
-			Raw:     raw,
+			Class:      "network_activity",
+			Raw:        raw,
 			Fields: map[string]any{
 				"src_ip":   f.SrcIP,
 				"dst_ip":   f.DstIP,

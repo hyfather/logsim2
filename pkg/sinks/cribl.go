@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nikhilm/logsim2/pkg/encoders"
 	"github.com/nikhilm/logsim2/pkg/event"
 )
 
@@ -20,6 +21,7 @@ type CriblSink struct {
 	token         string
 	batchSize     int
 	flushInterval time.Duration
+	format        Format
 
 	client *http.Client
 
@@ -32,11 +34,22 @@ type CriblSink struct {
 // NewCribl creates a CriblSink. If flushIntervalMs > 0 a background goroutine
 // flushes on the interval. Call Close() to stop it.
 func NewCribl(url, token string, batchSize, flushIntervalMs int) *CriblSink {
+	return NewCriblWithFormat(url, token, batchSize, flushIntervalMs, FormatJSONL)
+}
+
+// NewCriblWithFormat is like NewCribl but lets callers select the wire format
+// (ocsf, native jsonl, etc.). Use this when forwarding to a downstream that
+// expects a specific schema.
+func NewCriblWithFormat(url, token string, batchSize, flushIntervalMs int, format Format) *CriblSink {
+	if format == "" {
+		format = FormatJSONL
+	}
 	s := &CriblSink{
 		url:           url,
 		token:         token,
 		batchSize:     batchSize,
 		flushInterval: time.Duration(flushIntervalMs) * time.Millisecond,
+		format:        format,
 		client:        &http.Client{Timeout: 30 * time.Second},
 		stopCh:        make(chan struct{}),
 	}
@@ -108,7 +121,7 @@ func (s *CriblSink) Close() error {
 
 // send POSTs a batch to the HEC endpoint with 3-retry exponential backoff.
 func (s *CriblSink) send(batch []event.LogEntry) error {
-	body, err := encodeBatch(batch)
+	body, err := encodeBatch(batch, s.format)
 	if err != nil {
 		return fmt.Errorf("encode batch: %w", err)
 	}
@@ -160,18 +173,24 @@ func (s *CriblSink) post(body []byte) error {
 //
 // Envelope follows Splunk HEC conventions:
 //   - event:      the rendered log line (string) — so _raw in Splunk is the log
-//     itself, not a JSON blob
+//     itself, not a JSON blob. When format is OCSF/UDM/ASIM, this is replaced
+//     with the schema-mapped JSON object so the consumer sees structured data.
 //   - host:       the hierarchical channel (origin node path)
 //   - source:     same channel (overridable by a Cribl/Splunk pipeline)
 //   - sourcetype: mapped from the generator kind to vendor:product:type form
 //     (mysql → mysql:query, nginx → nginx:access, …) so Splunk
-//     picks the right parser per log family
+//     picks the right parser per log family. OCSF events use "ocsf:1.4:json"
+//     so Splunk routes them to a schema-aware index.
 //   - fields:     indexed metadata (id, level, channel, generator) — searchable
 //     without cluttering _raw
-func encodeBatch(batch []event.LogEntry) ([]byte, error) {
+func encodeBatch(batch []event.LogEntry, format Format) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
+
+	encoder := encoders.For(toEncoderFormat(format))
+	wantSchema := format == FormatOCSF || format == FormatUDM || format == FormatASIM
+
 	for i := range batch {
 		e := &batch[i]
 		fields := map[string]any{
@@ -183,13 +202,31 @@ func encodeBatch(batch []event.LogEntry) ([]byte, error) {
 		for k, v := range e.Fields {
 			fields[k] = v
 		}
+
+		var eventPayload any = e.Raw
+		sourcetype := splunkSourcetype(e.Sourcetype)
+		if wantSchema {
+			b, err := encoder.Encode(e)
+			if err != nil {
+				return nil, fmt.Errorf("encode entry %s: %w", e.ID, err)
+			}
+			// Decode back to a generic object so the HEC envelope nests it as
+			// structured JSON rather than a JSON-encoded string.
+			var obj any
+			if err := json.Unmarshal(b, &obj); err != nil {
+				return nil, fmt.Errorf("re-decode encoded entry: %w", err)
+			}
+			eventPayload = obj
+			sourcetype = schemaSourcetype(format)
+		}
+
 		env := map[string]any{
 			"time":       epochSeconds(e.TS),
 			"host":       e.Source,
 			"source":     e.Source,
-			"sourcetype": splunkSourcetype(e.Sourcetype),
+			"sourcetype": sourcetype,
 			"index":      "main",
-			"event":      e.Raw,
+			"event":      eventPayload,
 			"fields":     fields,
 		}
 		if err := enc.Encode(env); err != nil {
@@ -197,6 +234,21 @@ func encodeBatch(batch []event.LogEntry) ([]byte, error) {
 		}
 	}
 	return buf.Bytes(), nil
+}
+
+// schemaSourcetype returns the Splunk sourcetype that downstream pipelines use
+// to route schema-aware events to the right parser/index.
+func schemaSourcetype(f Format) string {
+	switch f {
+	case FormatOCSF:
+		return "ocsf:1.4:json"
+	case FormatUDM:
+		return "udm:json"
+	case FormatASIM:
+		return "asim:json"
+	default:
+		return "logsim:json"
+	}
 }
 
 // epochSeconds parses an RFC3339Nano timestamp to Splunk HEC's expected

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nikhilm/logsim2/pkg/encoders"
 	"github.com/nikhilm/logsim2/pkg/engine"
 	"github.com/nikhilm/logsim2/pkg/event"
 	"github.com/nikhilm/logsim2/pkg/sinks"
@@ -74,6 +75,8 @@ func (s *Server) handleBulk(w http.ResponseWriter, r *http.Request) {
 	if format == "" {
 		format = sinks.FormatJSONL
 	}
+	schemaFmt := encoders.Parse(req.Format)
+	encoder := encoders.For(schemaFmt)
 
 	for _, ch := range channels {
 		filename := sanitizeChannel(ch) + ".jsonl"
@@ -86,9 +89,16 @@ func (s *Server) handleBulk(w http.ResponseWriter, r *http.Request) {
 		lineCount := 0
 		for _, e := range entries {
 			var line string
-			if format == sinks.FormatRaw {
+			switch {
+			case schemaFmt != encoders.FormatNative:
+				b, err := encoder.Encode(&e)
+				if err != nil {
+					continue
+				}
+				line = string(b)
+			case format == sinks.FormatRaw:
 				line = e.Raw
-			} else {
+			default:
 				b, _ := json.Marshal(e)
 				line = string(b)
 			}

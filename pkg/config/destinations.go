@@ -25,6 +25,10 @@ type Destination struct {
 	Token         string          `yaml:"token"`
 	BatchSize     int             `yaml:"batch_size"`
 	FlushInterval int             `yaml:"flush_interval_ms"` // ms; 0 → flush each batch immediately
+	// Format selects the wire schema applied before forwarding. Empty (or
+	// "native"/"jsonl") preserves historical behavior; "ocsf" emits OCSF v1.x
+	// events; "udm" and "asim" are reserved (today they fall back to native).
+	Format string `yaml:"format,omitempty"`
 }
 
 // DestinationsConfig is the top-level structure of destinations.yaml.
@@ -98,6 +102,12 @@ func validate(cfg *DestinationsConfig) error {
 		}
 		if d.BatchSize < 1 || d.BatchSize > 500 {
 			return fmt.Errorf("destination %q: batch_size must be in [1,500], got %d", d.Name, d.BatchSize)
+		}
+
+		switch d.Format {
+		case "", "native", "jsonl", "raw", "ocsf", "udm", "asim":
+		default:
+			return fmt.Errorf("destination %q: unknown format %q (supported: native|jsonl|raw|ocsf|udm|asim)", d.Name, d.Format)
 		}
 	}
 	return nil

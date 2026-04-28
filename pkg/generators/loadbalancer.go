@@ -74,12 +74,13 @@ func (g *LoadBalancerGenerator) Generate(target Target, inbound []event.Flow, ct
 			ua[:min(len(ua), 80)], float64(latency)/1000.0)
 
 		entries = append(entries, event.LogEntry{
-			ID:      makeID(ctx.TickIndex, i),
-			TS:      tsStr,
+			ID:         makeID(ctx.TickIndex, i),
+			TS:         tsStr,
 			Source:     target.Source,
 			Level:      level,
 			Sourcetype: "nginx",
-			Raw:     raw,
+			Class:      "http_activity",
+			Raw:        raw,
 			Fields: map[string]any{
 				"client_ip":   clientIP,
 				"method":      method,

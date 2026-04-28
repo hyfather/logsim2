@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nikhilm/logsim2/pkg/apihelp"
+	"github.com/nikhilm/logsim2/pkg/encoders"
 	"github.com/nikhilm/logsim2/pkg/engine"
 	"github.com/nikhilm/logsim2/pkg/event"
 	"github.com/nikhilm/logsim2/pkg/scenario"
@@ -37,6 +38,10 @@ type Request struct {
 	// burns 8× faster, 0 means as fast as possible (no sleeping).
 	Rate  float64              `json:"rate,omitempty"`
 	Cribl *apihelp.CriblConfig `json:"cribl,omitempty"`
+	// Format selects the schema applied to each entry's Raw field before
+	// streaming. "native" (default) preserves the generator's own log line;
+	// "ocsf" replaces it with an OCSF v1.x JSON event.
+	Format string `json:"format,omitempty"`
 }
 
 // Handler streams NDJSON: one frame per tick plus a final summary frame.
@@ -131,6 +136,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		flusher: flusher,
 		start:   start,
 		tickMs:  tickInterval,
+		format:  encoders.Parse(req.Format),
 	}
 
 	if err := eng.Run(r.Context(), duration, []sinks.Sink{stream}); err != nil {
@@ -157,12 +163,16 @@ type streamSink struct {
 	tickMs    int
 	tick      int
 	total     int
+	format    encoders.Format
 	collected []event.LogEntry
 }
 
 func (s *streamSink) Write(entries []event.LogEntry) error {
 	tickIdx := s.tick
 	s.tick++
+	if s.format != encoders.FormatNative {
+		entries = encoders.ApplyToRaw(entries, s.format)
+	}
 	frame := map[string]any{
 		"tick": tickIdx,
 		"ts":   s.start.Add(time.Duration(tickIdx)*time.Duration(s.tickMs)*time.Millisecond).UnixMilli(),

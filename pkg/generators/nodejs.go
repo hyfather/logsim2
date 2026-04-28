@@ -131,13 +131,14 @@ func (g *NodejsGenerator) Generate(target Target, inbound []event.Flow, ctx even
 		}
 
 		entries = append(entries, event.LogEntry{
-			ID:      makeID(ctx.TickIndex, i),
-			TS:      tsStr,
+			ID:         makeID(ctx.TickIndex, i),
+			TS:         tsStr,
 			Source:     target.Source,
 			Level:      level,
 			Sourcetype: "nodejs",
-			Raw:     raw,
-			Fields:  fields,
+			Class:      "http_activity",
+			Raw:        raw,
+			Fields:     fields,
 		})
 	}
 
@@ -166,12 +167,14 @@ func (g *NodejsGenerator) startupLog(
 		raw = fmt.Sprintf("%s INFO [%s] Server listening on port %d", ts, framework, port)
 	}
 	return event.LogEntry{
-		ID:      makeID(ctx.TickIndex, 0),
-		TS:      ts,
+		ID:         makeID(ctx.TickIndex, 0),
+		TS:         ts,
 		Source:     target.Source,
 		Level:      "INFO",
 		Sourcetype: "nodejs",
-		Raw:     raw,
+		Class:      "application_lifecycle",
+		Raw:        raw,
+		Fields:     map[string]any{"port": port, "framework": framework},
 	}
 }
 
