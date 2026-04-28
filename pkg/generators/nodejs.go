@@ -19,7 +19,8 @@ func (g *NodejsGenerator) Generate(target Target, inbound []event.Flow, ctx even
 	if target.Service == nil {
 		return nil
 	}
-	cfg := &target.Service.Generator
+	effective := ctx.Override.ApplyToConfig(target.Service.Generator)
+	cfg := &effective
 	framework := "express"
 	logFormat := cfg.LogFormat
 	if logFormat == "" {

@@ -25,6 +25,7 @@ interface UIState {
   showBulkGenerateModal: boolean
   showKeyboardShortcuts: boolean
   describePanelOpen: boolean
+  hoveredServiceId: string | null
   // Actions
   selectNode: (id: string | null) => void
   selectEdge: (id: string | null) => void
@@ -43,6 +44,7 @@ interface UIState {
   setShowBulkGenerateModal: (show: boolean) => void
   setShowKeyboardShortcuts: (show: boolean) => void
   setDescribePanelOpen: (open: boolean) => void
+  setHoveredServiceId: (id: string | null) => void
 }
 
 export const useUIStore = create<UIState>()((set) => ({
@@ -63,6 +65,7 @@ export const useUIStore = create<UIState>()((set) => ({
   showBulkGenerateModal: false,
   showKeyboardShortcuts: false,
   describePanelOpen: false,
+  hoveredServiceId: null,
 
   selectNode: (id) => set({
     selectedNodeId: id,
@@ -92,4 +95,5 @@ export const useUIStore = create<UIState>()((set) => ({
   setShowBulkGenerateModal: (show) => set({ showBulkGenerateModal: show }),
   setShowKeyboardShortcuts: (show) => set({ showKeyboardShortcuts: show }),
   setDescribePanelOpen: (open) => set({ describePanelOpen: open }),
+  setHoveredServiceId: (id) => set({ hoveredServiceId: id }),
 }))

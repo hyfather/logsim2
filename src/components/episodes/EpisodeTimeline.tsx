@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Minus, Plus, X, ChevronUp } from 'lucide-react'
 import { useEpisodeStore } from '@/store/useEpisodeStore'
 import { useScenarioStore } from '@/store/useScenarioStore'
+import { useUIStore } from '@/store/useUIStore'
 import { BEHAVIOR_STATES, fmtTime, makeBlock } from '@/lib/episodeBehavior'
 import type { BehaviorBlock, BehaviorState, NarrativeBeat } from '@/types/episode'
 import { generateId } from '@/lib/id'
@@ -327,8 +328,8 @@ function BehaviorBlockView({
 
 // ---------- Service swim lane ----------
 function ServiceLane({
-  service, blocks, pxPerTick, episodeDuration, selectedBlockId, widthPx,
-  onSelectBlock, onMoveBlock, onResizeBlock, onAddBlock,
+  service, blocks, pxPerTick, episodeDuration, selectedBlockId, widthPx, hovered,
+  onSelectBlock, onMoveBlock, onResizeBlock, onAddBlock, onHoverChange,
 }: {
   service: ServiceRow
   blocks: BehaviorBlock[]
@@ -336,10 +337,12 @@ function ServiceLane({
   episodeDuration: number
   selectedBlockId: string | null
   widthPx: number
+  hovered: boolean
   onSelectBlock: (id: string) => void
   onMoveBlock: (id: string, newStart: number) => void
   onResizeBlock: (id: string, patch: { start: number; duration: number }) => void
   onAddBlock: (tick: number) => void
+  onHoverChange: (hovered: boolean) => void
 }) {
   const onLaneClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if ((e.target as HTMLElement).closest('[data-block]')) return
@@ -350,9 +353,14 @@ function ServiceLane({
   }
   return (
     <div
-      className="relative border-b border-slate-100 hover:bg-slate-50/40"
+      className={cn(
+        'relative border-b border-slate-100 transition-colors',
+        hovered ? 'bg-blue-50/50' : 'hover:bg-slate-50/40',
+      )}
       style={{ width: widthPx, height: LANE_HEIGHT }}
       onClick={onLaneClick}
+      onMouseEnter={() => onHoverChange(true)}
+      onMouseLeave={() => onHoverChange(false)}
     >
       {/* baseline healthy stripe */}
       <div className="pointer-events-none absolute left-0 right-0 top-1/2 h-px -translate-y-1/2 bg-emerald-100" />
@@ -424,6 +432,10 @@ export function EpisodeTimeline({ onCollapse }: { onCollapse?: () => void } = {}
   const deleteBeat = useEpisodeStore(s => s.deleteBeat)
 
   const services = useServices()
+  const hoveredServiceId = useUIStore(s => s.hoveredServiceId)
+  const setHoveredServiceId = useUIStore(s => s.setHoveredServiceId)
+  const selectNode = useUIStore(s => s.selectNode)
+  const setLogPanelOpen = useUIStore(s => s.setLogPanelOpen)
   const isMobile = useIsMobile()
   const labelCol = isMobile ? LABEL_COL_MOBILE : LABEL_COL_DESKTOP
   // Default to a slightly tighter zoom on mobile so a typical 20-minute episode
@@ -518,9 +530,15 @@ export function EpisodeTimeline({ onCollapse }: { onCollapse?: () => void } = {}
             {services.map(s => (
               <div
                 key={s.id}
-                className="flex items-center gap-2 border-b border-slate-100 px-2 sm:px-3"
+                className={cn(
+                  'flex cursor-pointer items-center gap-2 border-b border-slate-100 px-2 transition-colors sm:px-3',
+                  hoveredServiceId === s.id && 'bg-blue-50/50',
+                )}
                 style={{ height: LANE_HEIGHT }}
-                title={`${s.label} (${s.kind})`}
+                title={`${s.label} (${s.kind}) — click to open details`}
+                onMouseEnter={() => setHoveredServiceId(s.id)}
+                onMouseLeave={() => setHoveredServiceId(null)}
+                onClick={() => { selectNode(s.id); setLogPanelOpen(true) }}
               >
                 <span className="text-base leading-none">{s.emoji}</span>
                 <div className="min-w-0 flex-1">
@@ -568,10 +586,12 @@ export function EpisodeTimeline({ onCollapse }: { onCollapse?: () => void } = {}
                   episodeDuration={episode.duration}
                   selectedBlockId={selectedBlockId}
                   widthPx={widthPx}
+                  hovered={hoveredServiceId === s.id}
                   onSelectBlock={setSelectedBlock}
                   onMoveBlock={(id, start) => updateBlock(id, { start })}
                   onResizeBlock={(id, patch) => updateBlock(id, patch)}
                   onAddBlock={(t) => onAddBlock(s.id, t)}
+                  onHoverChange={(h) => setHoveredServiceId(h ? s.id : null)}
                 />
               ))}
             </div>

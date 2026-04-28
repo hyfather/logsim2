@@ -79,6 +79,7 @@ interface YamlTimelineBlock {
   log_vol_abs?: number
   template_weights?: Record<string, number>
   placeholders?: Record<string, YamlPlaceholder>
+  config_overrides?: Record<string, unknown>
   custom_log?: string
   note?: string
 }
@@ -271,6 +272,36 @@ const STATE_DEFAULTS: Record<string, { errorRate: number; latencyMul: number; lo
   compromised:  { errorRate: 0.2,  latencyMul: 2,   logVolMul: 2 },
 }
 
+// Map registry config-field keys (frontend) to YAML keys understood by the
+// Go backend's GeneratorConfig + ConfigOverrides merge. Returns null for
+// keys that have no engine effect (purely UI/identity fields).
+function mapConfigOverrideKey(key: string): string | null {
+  switch (key) {
+    case 'port': return 'port'
+    case 'logFormat': return 'log_format'
+    case 'logLevel': return 'log_level'
+    case 'errorRate': return 'error_rate'
+    case 'trafficRate': return 'traffic_rate'
+    case 'qps': return 'traffic_rate'
+    case 'opsRate': return 'traffic_rate'
+    case 'slowQueryThresholdMs': return 'slow_query_threshold'
+    case 'maxmemory': return 'max_memory'
+    case 'evictionPolicy': return 'eviction_policy'
+    default: return null
+  }
+}
+
+function toYamlConfigOverrides(overrides: Record<string, unknown>): Record<string, unknown> | undefined {
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined || value === null) continue
+    const yamlKey = mapConfigOverrideKey(key)
+    if (!yamlKey) continue
+    out[yamlKey] = value
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
 function toYamlTimelineBlock(b: import('@/types/episode').BehaviorBlock): YamlTimelineBlock {
   const out: YamlTimelineBlock = {
     from: b.start,
@@ -283,6 +314,10 @@ function toYamlTimelineBlock(b: import('@/types/episode').BehaviorBlock): YamlTi
   if (!d || b.errorRate !== d.errorRate) out.error_rate = b.errorRate
   if (!d || b.latencyMul !== d.latencyMul) out.latency_mul = b.latencyMul
   if (!d || b.logVolMul !== d.logVolMul) out.log_vol_mul = b.logVolMul
+  if (b.configOverrides) {
+    const co = toYamlConfigOverrides(b.configOverrides)
+    if (co) out.config_overrides = co
+  }
   if (b.customLog) out.custom_log = b.customLog
   if (b.note) out.note = b.note
   return out

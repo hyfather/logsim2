@@ -94,8 +94,12 @@ type TimelineBlock struct {
 	LogVolAbs       *float64               `yaml:"log_vol_abs,omitempty"`
 	TemplateWeights map[string]float64     `yaml:"template_weights,omitempty"`
 	Placeholders    map[string]Placeholder `yaml:"placeholders,omitempty"`
-	CustomLog       string                 `yaml:"custom_log,omitempty"`
-	Note            string                 `yaml:"note,omitempty"`
+	// ConfigOverrides supplies partial GeneratorConfig fields (YAML keys like
+	// "log_format", "traffic_rate", "slow_query_threshold") that replace the
+	// service's baseline generator config while this block is active.
+	ConfigOverrides map[string]any `yaml:"config_overrides,omitempty"`
+	CustomLog       string         `yaml:"custom_log,omitempty"`
+	Note            string         `yaml:"note,omitempty"`
 }
 
 // GeneratorConfig is the type-specific config block inside a service.

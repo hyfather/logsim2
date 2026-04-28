@@ -20,6 +20,9 @@ export function ServiceNode({ id, data, selected }: NodeProps<ScenarioFlowNode>)
   const [editLabel, setEditLabel] = useState(node.label)
   const { nodes, renameNode, updateNode } = useScenarioStore()
   const { selectNode, setLogPanelOpen } = useUIStore()
+  const hoveredServiceId = useUIStore(s => s.hoveredServiceId)
+  const setHoveredServiceId = useUIStore(s => s.setHoveredServiceId)
+  const isHovered = hoveredServiceId === id
 
   const emoji = getNodeEmoji(node)
   const allNodes = nodes.map(candidate => candidate.data)
@@ -81,11 +84,14 @@ export function ServiceNode({ id, data, selected }: NodeProps<ScenarioFlowNode>)
           : 'shadow-[0_14px_32px_-28px_rgba(15,23,42,0.3)] hover:shadow-[0_18px_38px_-26px_rgba(15,23,42,0.4)]',
       )}
       style={{
-        border: `1.5px solid ${selected ? '#3b82f6' : '#86efac'}`,
+        border: `1.5px solid ${selected ? '#3b82f6' : isHovered ? '#60a5fa' : '#86efac'}`,
+        boxShadow: isHovered && !selected ? '0 0 0 3px rgba(96,165,250,0.25)' : undefined,
       }}
       title={hoverText}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
+      onMouseEnter={() => setHoveredServiceId(id)}
+      onMouseLeave={() => setHoveredServiceId(null)}
     >
       <TileResizeControls
         selected={selected}

@@ -37,7 +37,8 @@
       "Bash(xargs sed *)",
       "Bash(go vet *)",
       "Bash(node scripts/build-example-episodes.mjs)",
-      "Bash(npm install *)"
+      "Bash(npm install *)",
+      "WebSearch"
     ]
   }
 }

@@ -11,6 +11,9 @@ type Override struct {
 	LogVolAbs       *float64
 	TemplateWeights map[string]float64 // override weights keyed by template id
 	Placeholders    map[string]Placeholder
+	// ConfigOverrides is the per-tick partial GeneratorConfig (YAML-keyed) to
+	// merge over the service's baseline generator config. nil/empty = no-op.
+	ConfigOverrides map[string]any
 	State           string
 	CustomLog       string
 	Note            string
@@ -112,6 +115,14 @@ func (s *Service) ResolveOverride(tick int) Override {
 				o.Placeholders[k] = v
 			}
 		}
+		if len(b.ConfigOverrides) > 0 {
+			if o.ConfigOverrides == nil {
+				o.ConfigOverrides = make(map[string]any, len(b.ConfigOverrides))
+			}
+			for k, v := range b.ConfigOverrides {
+				o.ConfigOverrides[k] = v
+			}
+		}
 		if b.CustomLog != "" {
 			o.CustomLog = b.CustomLog
 		}
@@ -119,5 +130,99 @@ func (s *Service) ResolveOverride(tick int) Override {
 			o.Note = b.Note
 		}
 	}
+	// If config_overrides supplies error_rate and the explicit override hasn't
+	// already been set (by state preset or block.error_rate), promote it so
+	// generators that route errors through Override.ErrorRate (nodejs, etc.)
+	// reflect the per-block edit.
+	if !o.HasErrorRate {
+		if v, ok := o.ConfigOverrides["error_rate"]; ok {
+			if f, ok := toFloat(v); ok {
+				o.HasErrorRate = true
+				o.ErrorRate = f
+			}
+		}
+	}
 	return o
+}
+
+// ApplyToConfig returns a copy of base with any ConfigOverrides applied.
+// Unrecognized keys are ignored. Wrong-typed values are skipped silently.
+func (o Override) ApplyToConfig(base GeneratorConfig) GeneratorConfig {
+	if len(o.ConfigOverrides) == 0 {
+		return base
+	}
+	out := base
+	for k, v := range o.ConfigOverrides {
+		switch k {
+		case "port":
+			if i, ok := toInt(v); ok {
+				out.Port = i
+			}
+		case "log_format":
+			if s, ok := v.(string); ok {
+				out.LogFormat = s
+			}
+		case "log_level":
+			if s, ok := v.(string); ok {
+				out.LogLevel = s
+			}
+		case "database":
+			if s, ok := v.(string); ok {
+				out.Database = s
+			}
+		case "slow_query_threshold":
+			if i, ok := toInt(v); ok {
+				out.SlowQueryThreshold = i
+			}
+		case "max_memory":
+			if s, ok := v.(string); ok {
+				out.MaxMemory = s
+			}
+		case "eviction_policy":
+			if s, ok := v.(string); ok {
+				out.EvictionPolicy = s
+			}
+		case "error_rate":
+			if f, ok := toFloat(v); ok {
+				out.ErrorRate = f
+			}
+		case "traffic_rate":
+			if f, ok := toFloat(v); ok {
+				out.TrafficRate = f
+			}
+		case "custom_type":
+			if s, ok := v.(string); ok {
+				out.CustomType = s
+			}
+		}
+	}
+	return out
+}
+
+func toFloat(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	}
+	return 0, false
+}
+
+func toInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	case float32:
+		return int(n), true
+	}
+	return 0, false
 }

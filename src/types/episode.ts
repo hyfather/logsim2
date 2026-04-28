@@ -15,6 +15,13 @@ export interface BehaviorBlock {
   errorRate: number
   latencyMul: number
   logVolMul: number
+  /**
+   * Per-block overrides for service generator config fields, keyed by the
+   * registry config-field key (e.g. `port`, `logFormat`, `trafficRate`).
+   * Serialized to YAML as `config_overrides` after key-mapping in
+   * canvasToScenarioYaml.
+   */
+  configOverrides?: Record<string, unknown>
   customLog?: string
   note?: string
 }
