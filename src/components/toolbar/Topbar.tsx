@@ -307,14 +307,14 @@ export function Topbar() {
     const cribl = pickCriblPayload(destinationsRef.current)
     const yaml = buildScenarioYaml()
     const ep = useEpisodeStore.getState().episode
-    const currentTick = Math.max(0, Math.floor(useEpisodeStore.getState().tick))
-    // Resume from the current scrubber position so Run-after-Pause (or
-    // Run-after-Step) doesn't visibly snap the scrubber back to 0.
-    const startTick = currentTick >= ep.duration ? 0 : currentTick
-    const simStart = Date.now() - startTick * 1000
-    simCursorRef.current = Date.now()
+    const simStart = Date.now()
+    simCursorRef.current = simStart
     seedRef.current = Math.floor(Math.random() * 1e9)
-    if (startTick === 0) clearLogs()
+    // Play always plays the scenario from the beginning. Reset the scrubber
+    // and clear accumulated logs so the panel fills as ticks emit.
+    clearLogs()
+    setTick(0)
+    setTickCount(0)
     setStatus('running')
     setRunStatus('running')
     if (enabledCribl) setDestStatus(enabledCribl.id, 'sending')
@@ -327,7 +327,7 @@ export function Topbar() {
       duration: ep.duration,
       tickIntervalMs: 1000,
       startTimeMs: simStart,
-      startTick,
+      startTick: 0,
       seed: seedRef.current,
       // Run the engine flat-out server-side and pace the scrubber on the
       // client. Vercel Functions buffer the streaming response, so a paced
