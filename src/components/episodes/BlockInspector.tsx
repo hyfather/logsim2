@@ -206,17 +206,20 @@ export function BlockInspector() {
 
   return (
     <div ref={panelRef} className="flex h-full flex-col overflow-hidden bg-white">
-      {/* Header */}
-      <div className="flex shrink-0 items-center gap-2 border-b border-slate-200 px-3.5 py-3">
-        <span className="text-[14px] leading-none" style={{ color: meta.color }}>{meta.glyph}</span>
-        <span className="min-w-0 flex-1 truncate text-[14px] font-semibold text-slate-900">
-          {meta.label}
-          <span className="ml-2 text-[12px] font-normal text-slate-500">on {nodeData.label}</span>
-        </span>
+      {/* Header — eyebrow makes this clearly a Behavior Block panel */}
+      <div className="flex shrink-0 items-start gap-2 border-b border-slate-200 px-3 py-2">
+        <span className="mt-0.5 text-[14px] leading-none" style={{ color: meta.color }}>{meta.glyph}</span>
+        <div className="min-w-0 flex-1">
+          <div className="text-[9.5px] font-semibold uppercase tracking-[0.1em] text-slate-400">Behavior block</div>
+          <div className="truncate text-[13px] font-semibold leading-tight text-slate-900">
+            {meta.label}
+            <span className="ml-1.5 text-[11px] font-normal text-slate-500">on {nodeData.label}</span>
+          </div>
+        </div>
         <button
           type="button"
           onClick={() => setSelectedBlock(null)}
-          className="inline-flex h-6 w-6 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
           title="Close inspector"
         >
           <X className="h-3.5 w-3.5" />
@@ -224,43 +227,35 @@ export function BlockInspector() {
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        {/* Block-specific: state + timing */}
-        <section className="flex flex-col gap-3 border-b border-slate-200 px-3.5 py-3.5">
+        {/* State + timing — collapsed into one compact section */}
+        <section className="flex flex-col gap-2 border-b border-slate-200 px-3 py-2.5">
           <div className="flex items-baseline justify-between">
-            <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-slate-500">Block</div>
-            <div className="text-[10px] text-slate-400">overrides while active</div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">Behavior</div>
+            <div className="text-[9.5px] text-slate-400">overrides while active</div>
           </div>
-          <div className="flex flex-col gap-1.5">
-            <label className="text-[11px] font-medium text-slate-500">State</label>
-            <Select value={block.state} onValueChange={(v) => onChangeState(v as BehaviorState)}>
-              <SelectTrigger className="h-7 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {STATE_KEYS.map(s => {
-                  const m = BEHAVIOR_STATES[s]
-                  return (
-                    <SelectItem key={s} value={s} className="text-xs">
-                      <span className="inline-flex items-center gap-2">
-                        <span style={{ color: m.color }}>{m.glyph}</span>
-                        <span>{m.label}</span>
-                      </span>
-                    </SelectItem>
-                  )
-                })}
-              </SelectContent>
-            </Select>
-          </div>
-        </section>
-
-        {/* Timing */}
-        <section className="flex flex-col gap-3 border-b border-slate-200 px-3.5 py-3.5">
-          <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-slate-500">Timing</div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1.5">
-              <label className="flex items-baseline justify-between text-[11px] font-medium text-slate-500">
+          <Select value={block.state} onValueChange={(v) => onChangeState(v as BehaviorState)}>
+            <SelectTrigger className="h-7 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {STATE_KEYS.map(s => {
+                const m = BEHAVIOR_STATES[s]
+                return (
+                  <SelectItem key={s} value={s} className="text-xs">
+                    <span className="inline-flex items-center gap-2">
+                      <span style={{ color: m.color }}>{m.glyph}</span>
+                      <span>{m.label}</span>
+                    </span>
+                  </SelectItem>
+                )
+              })}
+            </SelectContent>
+          </Select>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="flex flex-col gap-1">
+              <label className="flex items-baseline justify-between text-[10.5px] font-medium text-slate-500">
                 <span>Start</span>
-                <span className="font-mono text-[10px] text-slate-400">{fmtTime(block.start)}</span>
+                <span className="font-mono text-[9.5px] text-slate-400">{fmtTime(block.start)}</span>
               </label>
               <Input
                 type="number"
@@ -274,10 +269,10 @@ export function BlockInspector() {
                 className="h-7 font-mono text-xs"
               />
             </div>
-            <div className="flex flex-col gap-1.5">
-              <label className="flex items-baseline justify-between text-[11px] font-medium text-slate-500">
+            <div className="flex flex-col gap-1">
+              <label className="flex items-baseline justify-between text-[10.5px] font-medium text-slate-500">
                 <span>Duration</span>
-                <span className="font-mono text-[10px] text-slate-400">{fmtTime(block.duration)}</span>
+                <span className="font-mono text-[9.5px] text-slate-400">{fmtTime(block.duration)}</span>
               </label>
               <Input
                 type="number"
@@ -292,35 +287,34 @@ export function BlockInspector() {
               />
             </div>
           </div>
-          <div className="flex items-center justify-between text-[11px] text-slate-500">
+          <div className="flex items-center justify-between text-[10.5px] text-slate-500">
             <span>Ends at</span>
             <span className="font-mono text-slate-700">{fmtTime(Math.min(endTick, episode.duration))}</span>
           </div>
         </section>
 
-        {/* Identity (locked — service is fixed for the block) */}
-        <section className="flex flex-col gap-3 border-b border-slate-200 px-3.5 py-3.5 opacity-80">
-          <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-slate-500">Service (locked)</div>
-          <div className="flex flex-col gap-1.5">
-            <label className="text-[11px] font-medium text-slate-500">Label</label>
-            <Input value={nodeData.label} disabled className="h-7 cursor-not-allowed text-xs opacity-60" />
+        {/* Service identity (locked) — compact key/value rows; label is in the header */}
+        <section className="flex flex-col gap-1 border-b border-slate-200 px-3 py-2">
+          <div className="mb-0.5 flex items-center justify-between text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+            <span>Service</span>
+            <span className="text-[9px] font-semibold tracking-wider text-slate-400">Locked</span>
           </div>
-          <div className="flex flex-col gap-1.5">
-            <label className="text-[11px] font-medium text-slate-500">Address</label>
-            <Input value={addressValue} disabled className="h-7 cursor-not-allowed font-mono text-xs opacity-60" />
+          <div className="flex items-center justify-between gap-2 py-0.5 text-[11px]">
+            <span className="text-slate-500">Address</span>
+            <span className="truncate font-mono text-slate-700">{addressValue}</span>
           </div>
           {nodeData.channel && (
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[11px] font-medium text-slate-500">Channel</label>
-              <div className="font-mono text-[12px] text-slate-500">{nodeData.channel}</div>
+            <div className="flex items-center justify-between gap-2 py-0.5 text-[11px]">
+              <span className="text-slate-500">Channel</span>
+              <span className="truncate font-mono text-slate-700">{nodeData.channel}</span>
             </div>
           )}
         </section>
 
         {/* Config schema sections — locked keys greyed, others wired to overrides */}
         {Object.entries(sections).map(([section, fields]) => (
-          <section key={section} className="flex flex-col gap-3 border-b border-slate-200 px-3.5 py-3.5">
-            <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-slate-500">{section}</div>
+          <section key={section} className="flex flex-col gap-2 border-b border-slate-200 px-3 py-2.5">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">{section}</div>
             {fields.map(field => {
               const isLocked = LOCKED_FIELD_KEYS.has(field.key)
               const isErrorRate = field.key === 'errorRate'
@@ -352,8 +346,8 @@ export function BlockInspector() {
               }
 
               return (
-                <div key={field.key} className="flex flex-col gap-1.5">
-                  <label className="flex items-center justify-between text-[11px] font-medium text-slate-500">
+                <div key={field.key} className="flex flex-col gap-1">
+                  <label className="flex items-center justify-between text-[10.5px] font-medium text-slate-500">
                     <span className={cn(isLocked && 'text-slate-400')}>{field.label}</span>
                     <span className="flex items-center gap-1.5">
                       {isLocked && (
@@ -392,31 +386,31 @@ export function BlockInspector() {
         ))}
 
         {/* Custom log */}
-        <section className="flex flex-col gap-3 border-b border-slate-200 px-3.5 py-3.5">
-          <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-slate-500">Custom log</div>
+        <section className="flex flex-col gap-1.5 border-b border-slate-200 px-3 py-2.5">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">Custom log</div>
           <Textarea
             placeholder="e.g. ECONNRESET upstream"
             value={block.customLog || ''}
             onChange={e => updateBlock(block.id, { customLog: e.target.value })}
-            className="h-20 resize-none font-mono text-xs"
+            className="h-14 resize-none font-mono text-xs"
           />
-          <p className="text-[10px] text-slate-400">Overrides the state&rsquo;s log templates while this block is active.</p>
+          <p className="text-[9.5px] text-slate-400">Overrides the state&rsquo;s log templates while this block is active.</p>
         </section>
 
         {/* Designer note */}
-        <section className="flex flex-col gap-3 border-b border-slate-200 px-3.5 py-3.5">
-          <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-slate-500">Designer note</div>
+        <section className="flex flex-col gap-1.5 border-b border-slate-200 px-3 py-2.5">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">Designer note</div>
           <Textarea
             placeholder="Why this block exists"
             value={block.note || ''}
             onChange={e => updateBlock(block.id, { note: e.target.value })}
-            className="h-16 resize-none text-xs"
+            className="h-12 resize-none text-xs"
           />
         </section>
       </div>
 
       {/* Footer */}
-      <div className="shrink-0 px-3.5 py-3.5">
+      <div className="shrink-0 px-3 py-2">
         <button
           type="button"
           onClick={() => deleteBlock(block.id)}
