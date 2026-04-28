@@ -21,7 +21,6 @@ import { VirtualServerNode } from '@/components/nodes/VirtualServerNode'
 import { ServiceNode } from '@/components/nodes/ServiceNode'
 import { ConnectionEdge } from '@/components/edges/ConnectionEdge'
 import { PendingConnectionEdge } from '@/components/edges/PendingConnectionEdge'
-import { DescribeScenarioPanel } from '@/components/canvas/DescribeScenarioPanel'
 import type { Connection } from '@/types/connections'
 import type { NodeType, ServiceType } from '@/types/nodes'
 import { getDefaultConfig, getDefaultLabel } from '@/registry/nodeRegistry'
@@ -48,8 +47,6 @@ export function Canvas() {
   } = useScenarioStore()
   const loadCounter = useScenarioStore(s => s.loadCounter)
   const { selectNode, selectEdge, pendingConnection, hoveredConnectionTarget, clearPendingConnection } = useUIStore()
-  const describeOpen = useUIStore(s => s.describePanelOpen)
-  const setDescribeOpen = useUIStore(s => s.setDescribePanelOpen)
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition, fitView } = useReactFlow()
 
@@ -272,7 +269,7 @@ export function Canvas() {
             </div>
           </Panel>
         )}
-        {!describeOpen && nodes.length > 0 && (
+        {nodes.length > 0 && (
           <Panel position="top-right">
             <button
               onClick={handleOrganize}
@@ -286,7 +283,6 @@ export function Canvas() {
           </Panel>
         )}
       </ReactFlow>
-      <DescribeScenarioPanel open={describeOpen} onClose={() => setDescribeOpen(false)} />
     </div>
   )
 }

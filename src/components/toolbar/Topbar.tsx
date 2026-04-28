@@ -4,7 +4,6 @@ import Link from 'next/link'
 import {
   ChevronDown,
   Download,
-  FastForward,
   Pause,
   Pencil,
   Play,
@@ -29,8 +28,6 @@ import { useEpisodeStore } from '@/store/useEpisodeStore'
 import { useSimulationStore } from '@/store/useSimulationStore'
 import { useDestinationsStore } from '@/store/useDestinationsStore'
 import { DESTINATION_TYPE_META } from '@/types/destinations'
-import type { Episode, EpisodeFileV2 } from '@/types/episode'
-import { parseEpisodeFile } from '@/lib/episodeIO'
 import { serializeScenario, deserializeScenario, downloadJson } from '@/lib/serialization'
 import type { Connection } from '@/types/connections'
 import { asFlowEdgeData, asFlowNodeData } from '@/lib/flow-data'
@@ -41,14 +38,6 @@ import { runStream } from '@/lib/runStream'
 import { logsAt } from '@/lib/logsAt'
 import { materializeProposedScenarioJson } from '@/lib/scenarioPrompt'
 
-interface ExampleEpisodeManifestEntry {
-  file: string
-  title: string
-  description: string
-  segmentCount: number
-  totalTicks: number
-}
-
 interface PresetScenarioManifestEntry {
   file: string
   title: string
@@ -58,8 +47,6 @@ interface PresetScenarioManifestEntry {
   durationTicks: number
   serviceCount: number
 }
-
-const SPEED_OPTIONS = [1, 2, 4, 8] as const
 
 function LogoMark() {
   return (
@@ -74,8 +61,8 @@ function LogoMark() {
 
 export function Topbar() {
   const { nodes, edges, metadata, setMetadata, resetScenario, loadScenario } = useScenarioStore()
-  const { setShowBulkGenerateModal, setShowKeyboardShortcuts, setDescribePanelOpen } = useUIStore()
-  const { episode, setEpisode } = useEpisodeStore()
+  const setDescribePanelOpen = useUIStore(s => s.setDescribePanelOpen)
+  const setEpisode = useEpisodeStore(s => s.setEpisode)
   const setTick = useEpisodeStore(s => s.setTick)
   const setRunStatus = useEpisodeStore(s => s.setRunStatus)
   const {
@@ -83,7 +70,6 @@ export function Topbar() {
     speed,
     tickCount,
     setStatus,
-    setSpeed,
     setTickCount,
     setSimulatedTime,
     addLogs,
@@ -103,11 +89,8 @@ export function Topbar() {
   } = useDestinationsStore()
 
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const episodeFileInputRef = useRef<HTMLInputElement>(null)
   const titleInputRef = useRef<HTMLInputElement>(null)
 
-  const [examples, setExamples] = useState<ExampleEpisodeManifestEntry[]>([])
-  const [examplesLoaded, setExamplesLoaded] = useState(false)
   const [presets, setPresets] = useState<PresetScenarioManifestEntry[]>([])
   const [presetsLoaded, setPresetsLoaded] = useState(false)
   const [draftName, setDraftName] = useState(metadata.name)
@@ -199,29 +182,8 @@ export function Topbar() {
       if (!confirm('Create a new scenario? Unsaved changes will be lost.')) return
     }
     resetScenario()
-  }, [nodes.length, resetScenario])
-
-  // ── Episode I/O ─────────────────────────────────────────────────
-  const loadExamplesManifest = useCallback(async () => {
-    if (examplesLoaded) return
-    try {
-      const res = await fetch('/examples/episodes/index.json', { cache: 'no-cache' })
-      if (res.ok) setExamples(await res.json())
-    } catch { /* ignore */ }
-    setExamplesLoaded(true)
-  }, [examplesLoaded])
-
-  const loadExampleEpisode = useCallback(async (file: string) => {
-    try {
-      const res = await fetch(`/examples/episodes/${file}`, { cache: 'no-cache' })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const data = (await res.json()) as EpisodeFileV2 | Episode
-      const ep = parseEpisodeFile(data)
-      setEpisode(ep)
-    } catch (err) {
-      alert(`Failed to load example episode: ${String(err)}`)
-    }
-  }, [setEpisode])
+    setDescribePanelOpen(true)
+  }, [nodes.length, resetScenario, setDescribePanelOpen])
 
   // ── Example Scenarios (presets w/ embedded timelines) ───────────
   const loadPresetsManifest = useCallback(async () => {
@@ -251,36 +213,6 @@ export function Topbar() {
       alert(`Failed to load preset scenario: ${String(err)}`)
     }
   }, [loadScenario, setEpisode])
-
-  const handleEpisodeSave = useCallback(() => {
-    const payload: EpisodeFileV2 = { version: 2, episode }
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${episode.name.toLowerCase().replace(/\s+/g, '-')}.episode.json`
-    a.click()
-    URL.revokeObjectURL(url)
-  }, [episode])
-
-  const handleEpisodeOpen = useCallback(() => episodeFileInputRef.current?.click(), [])
-
-  const handleEpisodeFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = (evt) => {
-      try {
-        const data = JSON.parse(evt.target?.result as string) as EpisodeFileV2 | Episode
-        const ep = parseEpisodeFile(data)
-        setEpisode(ep)
-      } catch (err) {
-        alert('Failed to load episode: ' + String(err))
-      }
-    }
-    reader.readAsText(file)
-    e.target.value = ''
-  }, [setEpisode])
 
   // ── Simulation control ─────────────────────────────────────────
   // Build the timeline-baked scenario YAML so the backend applies per-tick
@@ -404,14 +336,6 @@ export function Topbar() {
     setRunStatus('idle')
   }, [clearActiveConnections, clearLogs, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, stopBackend])
 
-  const handleSpeedSelect = useCallback((nextSpeed: number) => {
-    setSpeed(nextSpeed)
-    if (status === 'running') {
-      stopBackend()
-      startPlayback(nextSpeed)
-    }
-  }, [setSpeed, startPlayback, status, stopBackend])
-
   useEffect(() => () => stopBackend(), [stopBackend])
 
   // ── Title editing ───────────────────────────────────────────────
@@ -456,36 +380,35 @@ export function Topbar() {
   })()
 
   // ── Render ──────────────────────────────────────────────────────
+  const destLabel =
+    enabledDests.length === 0
+      ? 'No destination'
+      : enabledDests.length === 1
+        ? enabledDests[0].name
+        : `${enabledDests.length} destinations`
+
   return (
-    <div className="flex h-12 shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-2 sm:gap-3 sm:px-3.5 sm:[display:grid] sm:[grid-template-columns:1fr_auto_1fr]">
-      {/* LEFT: logo + breadcrumbs */}
-      <div className="flex min-w-0 items-center gap-2 sm:gap-3.5">
+    <div className="flex h-12 shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-3 sm:px-4">
+      {/* LEFT: logo + scenario */}
+      <div className="flex min-w-0 flex-1 items-center gap-2.5">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              className="flex shrink-0 items-center gap-2 rounded-md px-1 py-1 transition-colors hover:bg-slate-100"
+              className="flex shrink-0 items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-slate-100"
               title="File menu"
             >
               <LogoMark />
-              <span className="hidden text-[14px] font-bold tracking-[-0.01em] text-slate-900 sm:inline">logsim</span>
-              <span className="hidden font-mono text-[11px] font-medium text-slate-500 sm:inline">v2</span>
+              <span className="hidden text-[13.5px] font-semibold tracking-[-0.01em] text-slate-900 sm:inline">logsim</span>
+              <span className="hidden rounded bg-slate-100 px-1 py-px font-mono text-[9.5px] font-semibold uppercase tracking-[0.08em] text-slate-500 sm:inline">v2</span>
               <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-56 text-xs">
             <DropdownMenuItem onClick={handleNewScenario} className="cursor-pointer text-xs">📄 New Scenario</DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() => setDescribePanelOpen(true)}
-              className="cursor-pointer text-xs text-violet-700 focus:text-violet-800"
-            >
-              ✨ Describe with AI…
-            </DropdownMenuItem>
             <DropdownMenuItem onClick={handleOpenScenario} className="cursor-pointer text-xs">📂 Open Scenario…</DropdownMenuItem>
             <DropdownMenuItem onClick={handleSaveScenario} className="cursor-pointer text-xs">💾 Save Scenario  ⌘S</DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={handleEpisodeOpen} className="cursor-pointer text-xs">🎬 Open Episode…</DropdownMenuItem>
-            <DropdownMenuItem onClick={handleEpisodeSave} className="cursor-pointer text-xs">🎬 Save Episode</DropdownMenuItem>
             <DropdownMenuSub>
               <DropdownMenuSubTrigger
                 onMouseEnter={loadPresetsManifest}
@@ -528,50 +451,18 @@ export function Topbar() {
                 )}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger
-                onMouseEnter={loadExamplesManifest}
-                onFocus={loadExamplesManifest}
-                className="cursor-pointer text-xs"
-              >
-                🎞️ Example Episodes
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="max-w-sm text-xs">
-                {!examplesLoaded ? (
-                  <div className="px-2 py-1.5 text-[11px] text-slate-400">Loading…</div>
-                ) : examples.length === 0 ? (
-                  <div className="px-2 py-1.5 text-[11px] text-slate-400">No examples found.</div>
-                ) : (
-                  examples.map(ex => (
-                    <DropdownMenuItem
-                      key={ex.file}
-                      onClick={() => loadExampleEpisode(ex.file)}
-                      className="flex cursor-pointer flex-col items-start gap-0.5 text-xs"
-                    >
-                      <span className="font-medium">{ex.title}</span>
-                      <span className="whitespace-normal text-[10px] leading-tight text-slate-500">{ex.description}</span>
-                      <span className="text-[10px] text-slate-400">{ex.segmentCount} segments · {ex.totalTicks} ticks</span>
-                    </DropdownMenuItem>
-                  ))
-                )}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => setShowBulkGenerateModal(true)} className="cursor-pointer text-xs">⚡ Generate Batch…</DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => setShowKeyboardShortcuts(true)} className="cursor-pointer text-xs">⌨️ Keyboard Shortcuts</DropdownMenuItem>
             <DropdownMenuItem asChild className="cursor-pointer text-xs">
               <Link href="/settings">⚙️ Settings…</Link>
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {/* Breadcrumbs */}
-        <div className="flex min-w-0 items-center gap-2 text-[12px] text-slate-500">
-          <span className="hidden md:inline">Workspace</span>
-          <span className="hidden opacity-40 md:inline">/</span>
-          <span className="hidden md:inline">Scenarios</span>
-          <span className="hidden opacity-40 md:inline">/</span>
+        {/* Subtle separator */}
+        <span className="hidden h-4 w-px bg-slate-200 sm:inline-block" aria-hidden />
+
+        {/* Scenario name */}
+        <div className="flex min-w-0 items-center">
           {editingTitle ? (
             <input
               ref={titleInputRef}
@@ -582,46 +473,39 @@ export function Topbar() {
                 if (e.key === 'Enter') commitName(draftName)
                 if (e.key === 'Escape') { setDraftName(metadata.name); setEditingTitle(false) }
               }}
-              className="min-w-0 rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[12px] font-medium text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              className="min-w-0 rounded-md border border-slate-300 bg-white px-2 py-1 text-[13px] font-medium text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
             />
           ) : (
             <button
               type="button"
               onClick={() => setEditingTitle(true)}
-              className="group/name flex min-w-0 items-center gap-1 truncate rounded px-1 py-0.5 text-[12px] font-medium text-slate-900 hover:bg-slate-100"
+              className="group/name flex min-w-0 items-center gap-1.5 truncate rounded-md px-2 py-1 text-[13px] font-medium text-slate-900 transition-colors hover:bg-slate-100"
               title="Rename scenario"
             >
               <span className="truncate">{metadata.name}</span>
-              <Pencil className="h-3 w-3 shrink-0 text-slate-400 opacity-0 group-hover/name:opacity-100" />
+              <Pencil className="h-3 w-3 shrink-0 text-slate-400 opacity-0 transition-opacity group-hover/name:opacity-100" />
             </button>
           )}
         </div>
       </div>
 
-      {/* CENTER: dataset shortcut (desktop only — accessible via File menu on mobile) */}
-      <div className="hidden shrink-0 items-center gap-0.5 rounded-md border border-slate-200 bg-slate-100 p-[3px] sm:flex">
-        <TabButton asLink href="/settings">Datasets</TabButton>
-      </div>
-
-      {/* RIGHT: status + speed + controls */}
-      <div className="flex min-w-0 items-center justify-end gap-2">
-        {/* Status pill */}
-        <div className="flex shrink-0 items-center gap-1.5 font-mono text-[11px] text-slate-500">
-          <span className={cn('ls-dot', isRunning ? 'ls-dot-live' : 'ls-dot-idle')} />
-          <span className="hidden sm:inline">{isRunning ? 'streaming' : 'paused'}</span>
-        </div>
-
-        {/* Destinations status chip — hide entirely on phones when nothing's configured */}
+      {/* RIGHT: destinations + format + transport tray + export */}
+      <div className="flex shrink-0 items-center gap-2">
+        {/* Destinations chip — refined pill, state-aware */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
               type="button"
               className={cn(
-                'h-7 shrink-0 items-center gap-1.5 rounded-md border px-2 text-[11px] font-medium transition-colors sm:inline-flex',
+                'group/dest h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-[11.5px] font-medium transition-colors sm:inline-flex',
                 destinations.length === 0 ? 'hidden sm:inline-flex' : 'inline-flex',
                 destOverall === 'error'
-                  ? 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100'
-                  : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
+                  ? 'bg-red-50 text-red-700 hover:bg-red-100'
+                  : destOverall === 'sending'
+                    ? 'bg-blue-50 text-blue-700 hover:bg-blue-100'
+                    : destOverall === 'ok'
+                      ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                      : 'text-slate-500 hover:bg-slate-100',
               )}
               title="Log forwarding destinations"
             >
@@ -629,12 +513,11 @@ export function Topbar() {
                 'h-1.5 w-1.5 rounded-full',
                 destOverall === 'none' ? 'bg-slate-300'
                   : destOverall === 'error' ? 'bg-red-500'
-                  : destOverall === 'sending' ? 'bg-blue-500 animate-pulse'
-                  : 'bg-green-500',
+                    : destOverall === 'sending' ? 'bg-blue-500 animate-pulse'
+                      : 'bg-emerald-500',
               )} />
-              <span className="hidden sm:inline">
-                {destinations.length === 0 ? 'No dest.' : `${enabledDests.length}/${destinations.length} dest.`}
-              </span>
+              <span className="max-w-[140px] truncate">{destLabel}</span>
+              <ChevronDown className="h-3 w-3 opacity-50 transition-opacity group-hover/dest:opacity-80" />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-72">
@@ -692,14 +575,14 @@ export function Topbar() {
             backend maps it to Native / OCSF / (later) UDM / ASIM before the
             line reaches the UI. Switching clears the buffer because formats
             don't mix cleanly. */}
-        <div className="hidden shrink-0 items-center gap-0.5 rounded-md border border-slate-200 bg-slate-100 p-[2px] sm:flex">
+        <div className="hidden h-8 shrink-0 items-center gap-0.5 rounded-lg border border-slate-200 bg-slate-50 p-[3px] sm:flex">
           {(['native', 'ocsf'] as const).map(f => (
             <button
               key={f}
               type="button"
               onClick={() => setOutputFormat(f)}
               className={cn(
-                'rounded-[3px] px-2 py-[3px] font-mono text-[10.5px] font-semibold uppercase transition-colors',
+                'rounded-[5px] px-2 py-[2px] font-mono text-[10.5px] font-semibold uppercase transition-colors',
                 outputFormat === f
                   ? 'bg-white text-slate-900 shadow-[0_1px_2px_rgba(15,23,42,0.05)]'
                   : 'text-slate-500 hover:text-slate-900',
@@ -709,93 +592,71 @@ export function Topbar() {
           ))}
         </div>
 
-        {/* Time multiplier — segmented on desktop, dropdown on mobile */}
-        <div className="hidden shrink-0 items-center gap-0.5 rounded-md border border-slate-200 bg-slate-100 p-[2px] sm:flex">
-          {SPEED_OPTIONS.map(s => (
-            <button
-              key={s}
-              type="button"
-              onClick={() => handleSpeedSelect(s)}
-              className={cn(
-                'rounded-[3px] px-2 py-[3px] font-mono text-[10.5px] font-semibold transition-colors',
-                speed === s
-                  ? 'bg-white text-slate-900 shadow-[0_1px_2px_rgba(15,23,42,0.05)]'
-                  : 'text-slate-500 hover:text-slate-900',
-              )}
-              title={`Speed ${s}×`}
-            >{s}×</button>
-          ))}
-        </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              className="inline-flex h-9 shrink-0 items-center justify-center rounded-md border border-slate-300 bg-white px-2 font-mono text-[12px] font-semibold text-slate-700 hover:bg-slate-50 sm:hidden"
-              title={`Simulation speed (${speed}×)`}
-            >
-              {speed}×
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-0">
-            {SPEED_OPTIONS.map(s => (
-              <DropdownMenuItem
-                key={s}
-                onClick={() => handleSpeedSelect(s)}
-                className={cn(
-                  'cursor-pointer justify-center font-mono text-xs',
-                  speed === s && 'font-bold text-blue-600',
-                )}
-              >
-                {s}×
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        {/* Step (desktop only — saved space matters more on phones) */}
-        <button
-          type="button"
-          onClick={handleStep}
-          disabled={isRunning}
-          className="hidden h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 sm:inline-flex"
-          title="Step one tick"
-        >
-          <StepForward className="h-3.5 w-3.5" />
-        </button>
-        <button
-          type="button"
-          onClick={handleReset}
-          disabled={!isRunning && tickCount === 0}
-          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 sm:h-7 sm:w-7"
-          title="Reset simulation"
-        >
-          <RotateCcw className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
-        </button>
-
-        {/* Pause/Run primary */}
-        <button
-          type="button"
-          onClick={handlePlayPause}
+        {/* Transport tray — unified container with subtle dividers */}
+        <div
           className={cn(
-            'inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium transition-colors sm:h-7',
-            'border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
+            'inline-flex h-8 shrink-0 items-center overflow-hidden rounded-lg border bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition-colors',
+            isRunning ? 'border-emerald-200' : 'border-slate-200',
           )}
-          title={isRunning ? 'Pause simulation' : 'Run simulation'}
         >
-          {isRunning ? <Pause className="h-4 w-4 sm:h-3.5 sm:w-3.5" /> : <Play className="h-4 w-4 sm:h-3.5 sm:w-3.5" />}
-          <span className="hidden sm:inline">{isRunning ? 'Pause' : 'Run'}</span>
-          {!isRunning && speed > 1 && <FastForward className="hidden h-3 w-3 text-slate-400 sm:inline" />}
-        </button>
+          <button
+            type="button"
+            onClick={handleReset}
+            disabled={!isRunning && tickCount === 0}
+            className="inline-flex h-full w-8 items-center justify-center text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-500"
+            title="Reset"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+          </button>
+          <span className="h-4 w-px bg-slate-200" aria-hidden />
+          <button
+            type="button"
+            onClick={handleStep}
+            disabled={isRunning}
+            className="inline-flex h-full w-8 items-center justify-center text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-500"
+            title="Step one tick"
+          >
+            <StepForward className="h-3.5 w-3.5" />
+          </button>
+          <span className="h-4 w-px bg-slate-200" aria-hidden />
+          <button
+            type="button"
+            onClick={handlePlayPause}
+            className={cn(
+              'inline-flex h-full items-center gap-1.5 px-3 text-[12px] font-medium transition-colors',
+              isRunning
+                ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                : 'text-slate-700 hover:bg-slate-50',
+            )}
+            title={isRunning ? 'Pause simulation' : 'Run simulation'}
+          >
+            {isRunning ? (
+              <>
+                <span className="relative flex h-2 w-2 items-center justify-center" aria-hidden>
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-60" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                </span>
+                <Pause className="h-3.5 w-3.5 fill-current" />
+                <span className="hidden sm:inline">Pause</span>
+              </>
+            ) : (
+              <>
+                <Play className="h-3.5 w-3.5 fill-current" />
+                <span className="hidden sm:inline">Run</span>
+              </>
+            )}
+          </button>
+        </div>
 
         {/* Export primary */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-blue-600 bg-blue-600 px-2.5 text-[12px] font-semibold text-white transition-colors hover:bg-blue-700 sm:h-7"
+              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 px-3 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(15,23,42,0.08)] transition-colors hover:bg-blue-700"
               title="Export dataset"
             >
-              <Download className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+              <Download className="h-3.5 w-3.5" />
               <span className="hidden md:inline">Export</span>
             </button>
           </DropdownMenuTrigger>
@@ -812,45 +673,13 @@ export function Topbar() {
               <span className="font-mono text-[11px] text-slate-400">.jsonl</span>
               <span className="ml-2">JSON lines</span>
             </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={handleSaveScenario} className="cursor-pointer text-xs">
-              <span className="font-mono text-[11px] text-slate-400">.json</span>
-              <span className="ml-2">Save scenario</span>
-            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
 
-      {/* hidden file inputs */}
+      {/* hidden file input */}
       <input ref={fileInputRef} type="file" accept=".json,.logsim.json" className="hidden" onChange={handleScenarioFileChange} />
-      <input ref={episodeFileInputRef} type="file" accept=".json,.episode.json" className="hidden" onChange={handleEpisodeFileChange} />
     </div>
   )
 }
 
-function TabButton({
-  active,
-  onClick,
-  children,
-  asLink,
-  href,
-}: {
-  active?: boolean
-  onClick?: () => void
-  children: React.ReactNode
-  asLink?: boolean
-  href?: string
-}) {
-  const className = cn(
-    'rounded-[4px] px-3 py-1 text-[12px] font-medium transition-colors',
-    active
-      ? 'bg-white text-slate-900 shadow-[0_1px_2px_rgba(15,23,42,0.05)]'
-      : 'bg-transparent text-slate-500 hover:text-slate-900',
-  )
-  if (asLink && href) {
-    return <Link href={href} className={className}>{children}</Link>
-  }
-  return (
-    <button type="button" onClick={onClick} className={className}>{children}</button>
-  )
-}

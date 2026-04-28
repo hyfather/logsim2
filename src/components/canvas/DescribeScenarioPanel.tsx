@@ -1,11 +1,12 @@
 'use client'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
-import { Sparkles, X, Loader2, AlertCircle, ExternalLink, ShieldCheck } from 'lucide-react'
+import { Sparkles, Loader2, AlertCircle, ExternalLink, ShieldCheck } from 'lucide-react'
 import { useReactFlow } from '@xyflow/react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 import { useAIKeysStore } from '@/store/useAIKeysStore'
 import { useScenarioStore } from '@/store/useScenarioStore'
@@ -81,8 +82,6 @@ export function DescribeScenarioPanel({ open, onClose }: DescribeScenarioPanelPr
     return () => abortRef.current?.abort()
   }, [])
 
-  if (!open) return null
-
   const handleGenerate = async () => {
     if (!selectedKey || !description.trim() || busy) return
     setError(null)
@@ -155,20 +154,19 @@ export function DescribeScenarioPanel({ open, onClose }: DescribeScenarioPanelPr
   const noKeys = hydrated && keys.length === 0
 
   return (
-    <div className="absolute right-3 top-3 z-30 w-[360px] overflow-hidden rounded-xl border border-gray-200 bg-white/95 shadow-xl backdrop-blur">
-      <div className="flex items-center gap-2 border-b border-gray-200 px-3 py-2">
-        <Sparkles className="h-4 w-4 text-violet-500" />
-        <h3 className="text-xs font-semibold text-gray-900">Describe scenario</h3>
-        <button
-          onClick={onClose}
-          title="Close"
-          className="ml-auto rounded p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
-      </div>
+    <Dialog open={open} onOpenChange={(next) => { if (!next) onClose() }}>
+      <DialogContent className="max-w-md gap-0 overflow-hidden p-0">
+        <DialogHeader className="border-b border-gray-200 px-4 py-3">
+          <DialogTitle className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+            <Sparkles className="h-4 w-4 text-violet-500" />
+            Describe with AI
+          </DialogTitle>
+          <DialogDescription className="text-[11px] text-gray-500">
+            Sketch your scenario in plain English and let the model draft a starting canvas. Or close this and build it from scratch.
+          </DialogDescription>
+        </DialogHeader>
 
-      <div className="space-y-3 p-3">
+        <div className="space-y-3 p-4">
         {noKeys ? (
           <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-[11px] text-amber-900">
             <div className="flex items-center gap-1.5 font-semibold">
@@ -275,7 +273,16 @@ export function DescribeScenarioPanel({ open, onClose }: DescribeScenarioPanelPr
               <p className="text-[10px] text-gray-400">
                 ⌘/Ctrl + Enter to generate
               </p>
-              <div className="flex gap-2">
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-[11px] text-gray-500 hover:text-gray-700"
+                  onClick={onClose}
+                  type="button"
+                >
+                  Skip
+                </Button>
                 {busy ? (
                   <Button
                     variant="outline"
@@ -310,7 +317,8 @@ export function DescribeScenarioPanel({ open, onClose }: DescribeScenarioPanelPr
             )}
           </>
         )}
-      </div>
-    </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }

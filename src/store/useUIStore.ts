@@ -22,8 +22,6 @@ interface UIState {
   canvasCollapsed: boolean
   isDraggingFromPalette: boolean
   paletteNodeType: string | null
-  showBulkGenerateModal: boolean
-  showKeyboardShortcuts: boolean
   describePanelOpen: boolean
   hoveredServiceId: string | null
   // Actions
@@ -41,8 +39,6 @@ interface UIState {
   setTimelineCollapsed: (collapsed: boolean) => void
   setCanvasCollapsed: (collapsed: boolean) => void
   setDraggingFromPalette: (isDragging: boolean, nodeType?: string) => void
-  setShowBulkGenerateModal: (show: boolean) => void
-  setShowKeyboardShortcuts: (show: boolean) => void
   setDescribePanelOpen: (open: boolean) => void
   setHoveredServiceId: (id: string | null) => void
 }
@@ -62,8 +58,6 @@ export const useUIStore = create<UIState>()((set) => ({
   canvasCollapsed: false,
   isDraggingFromPalette: false,
   paletteNodeType: null,
-  showBulkGenerateModal: false,
-  showKeyboardShortcuts: false,
   describePanelOpen: false,
   hoveredServiceId: null,
 
@@ -92,8 +86,6 @@ export const useUIStore = create<UIState>()((set) => ({
   setCanvasCollapsed: (collapsed) => set({ canvasCollapsed: collapsed }),
   setDraggingFromPalette: (isDragging, nodeType) =>
     set({ isDraggingFromPalette: isDragging, paletteNodeType: nodeType || null }),
-  setShowBulkGenerateModal: (show) => set({ showBulkGenerateModal: show }),
-  setShowKeyboardShortcuts: (show) => set({ showKeyboardShortcuts: show }),
   setDescribePanelOpen: (open) => set({ describePanelOpen: open }),
   setHoveredServiceId: (id) => set({ hoveredServiceId: id }),
 }))
