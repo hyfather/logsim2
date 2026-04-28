@@ -88,7 +88,7 @@ func (g *CustomGenerator) Generate(target Target, inbound []event.Flow, ctx even
 		raw := renderTemplate(tpl.Template, placeholders, ts, isError, tpl.Level, ctx.Rng)
 		level := normalizeLevel(tpl.Level, isError)
 		out = append(out, event.LogEntry{
-			ID:         makeID(ctx.TickIndex, i),
+			ID:         makeID(target, ctx.TickIndex, i),
 			TS:         ts.Format(time.RFC3339Nano),
 			Source:     target.Source,
 			Level:      level,

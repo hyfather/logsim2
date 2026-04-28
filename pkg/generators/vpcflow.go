@@ -93,7 +93,7 @@ func (g *VpcFlowGenerator) Generate(target Target, _ []event.Flow, ctx event.Tic
 		)
 
 		entries = append(entries, event.LogEntry{
-			ID:         makeID(ctx.TickIndex, i),
+			ID:         makeID(target, ctx.TickIndex, i),
 			TS:         tsStr,
 			Source:     target.Source,
 			Level:      "INFO",

@@ -70,7 +70,7 @@ func (g *MysqlGenerator) Generate(target Target, inbound []event.Flow, ctx event
 		raw := fmt.Sprintf("%s\t%d Query\t%s", tsStr, connID, query)
 
 		entries = append(entries, event.LogEntry{
-			ID:         makeID(ctx.TickIndex, i*2),
+			ID:         makeID(target, ctx.TickIndex, i*2),
 			TS:         ts.Format("2006-01-02T15:04:05.000Z07:00"),
 			Source:     target.Source,
 			Level:      "INFO",
@@ -100,7 +100,7 @@ func (g *MysqlGenerator) Generate(target Target, inbound []event.Flow, ctx event
 				query,
 			)
 			entries = append(entries, event.LogEntry{
-				ID:         makeID(ctx.TickIndex, i*2+1),
+				ID:         makeID(target, ctx.TickIndex, i*2+1),
 				TS:         ts.Format("2006-01-02T15:04:05.000Z07:00"),
 				Source:     target.Source,
 				Level:      "WARN",
