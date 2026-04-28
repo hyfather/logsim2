@@ -5,7 +5,7 @@ import { Canvas } from '@/components/canvas/Canvas'
 import { Palette } from '@/components/palette/Palette'
 import { NodeInspectorPanel } from '@/components/panels/NodeInspectorPanel'
 import { Topbar } from '@/components/toolbar/Topbar'
-import { BulkGenerateModal } from '@/components/panels/BulkGenerateModal'
+import { DescribeScenarioPanel } from '@/components/canvas/DescribeScenarioPanel'
 import { EpisodeTimeline } from '@/components/episodes/EpisodeTimeline'
 import { BlockInspector } from '@/components/episodes/BlockInspector'
 import { ScrubbedLogs } from '@/components/episodes/ScrubbedLogs'
@@ -34,7 +34,7 @@ export default function EditorPageClient() {
     timelineHeight, setTimelineHeight,
     timelineCollapsed, setTimelineCollapsed,
     canvasCollapsed, setCanvasCollapsed,
-    setDescribePanelOpen,
+    describePanelOpen, setDescribePanelOpen,
   } = useUIStore()
   const selectedBlockId = useEpisodeStore(s => s.selectedBlockId)
   const setEpisode = useEpisodeStore(s => s.setEpisode)
@@ -381,8 +381,7 @@ export default function EditorPageClient() {
         </div>
       </div>
 
-      {/* Modals */}
-      <BulkGenerateModal />
+      <DescribeScenarioPanel open={describePanelOpen} onClose={() => setDescribePanelOpen(false)} />
     </ReactFlowProvider>
   )
 }

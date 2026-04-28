@@ -61,7 +61,7 @@ function LogoMark() {
 
 export function Topbar() {
   const { nodes, edges, metadata, setMetadata, resetScenario, loadScenario } = useScenarioStore()
-  const { setShowBulkGenerateModal, setDescribePanelOpen } = useUIStore()
+  const setDescribePanelOpen = useUIStore(s => s.setDescribePanelOpen)
   const setEpisode = useEpisodeStore(s => s.setEpisode)
   const setTick = useEpisodeStore(s => s.setTick)
   const setRunStatus = useEpisodeStore(s => s.setRunStatus)
@@ -182,7 +182,8 @@ export function Topbar() {
       if (!confirm('Create a new scenario? Unsaved changes will be lost.')) return
     }
     resetScenario()
-  }, [nodes.length, resetScenario])
+    setDescribePanelOpen(true)
+  }, [nodes.length, resetScenario, setDescribePanelOpen])
 
   // ── Example Scenarios (presets w/ embedded timelines) ───────────
   const loadPresetsManifest = useCallback(async () => {
@@ -405,12 +406,6 @@ export function Topbar() {
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-56 text-xs">
             <DropdownMenuItem onClick={handleNewScenario} className="cursor-pointer text-xs">📄 New Scenario</DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() => setDescribePanelOpen(true)}
-              className="cursor-pointer text-xs text-violet-700 focus:text-violet-800"
-            >
-              ✨ Describe with AI…
-            </DropdownMenuItem>
             <DropdownMenuItem onClick={handleOpenScenario} className="cursor-pointer text-xs">📂 Open Scenario…</DropdownMenuItem>
             <DropdownMenuItem onClick={handleSaveScenario} className="cursor-pointer text-xs">💾 Save Scenario  ⌘S</DropdownMenuItem>
             <DropdownMenuSeparator />
@@ -456,8 +451,6 @@ export function Topbar() {
                 )}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => setShowBulkGenerateModal(true)} className="cursor-pointer text-xs">⚡ Generate Batch…</DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild className="cursor-pointer text-xs">
               <Link href="/settings">⚙️ Settings…</Link>
