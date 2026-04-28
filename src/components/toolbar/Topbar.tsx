@@ -4,7 +4,6 @@ import Link from 'next/link'
 import {
   ChevronDown,
   Download,
-  FastForward,
   Pause,
   Pencil,
   Play,
@@ -59,8 +58,6 @@ interface PresetScenarioManifestEntry {
   serviceCount: number
 }
 
-const SPEED_OPTIONS = [1, 2, 4, 8] as const
-
 function LogoMark() {
   return (
     <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden>
@@ -83,7 +80,6 @@ export function Topbar() {
     speed,
     tickCount,
     setStatus,
-    setSpeed,
     setTickCount,
     setSimulatedTime,
     addLogs,
@@ -404,14 +400,6 @@ export function Topbar() {
     setRunStatus('idle')
   }, [clearActiveConnections, clearLogs, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, stopBackend])
 
-  const handleSpeedSelect = useCallback((nextSpeed: number) => {
-    setSpeed(nextSpeed)
-    if (status === 'running') {
-      stopBackend()
-      startPlayback(nextSpeed)
-    }
-  }, [setSpeed, startPlayback, status, stopBackend])
-
   useEffect(() => () => stopBackend(), [stopBackend])
 
   // ── Title editing ───────────────────────────────────────────────
@@ -456,20 +444,27 @@ export function Topbar() {
   })()
 
   // ── Render ──────────────────────────────────────────────────────
+  const destLabel =
+    enabledDests.length === 0
+      ? 'No destination'
+      : enabledDests.length === 1
+        ? enabledDests[0].name
+        : `${enabledDests.length} destinations`
+
   return (
-    <div className="flex h-12 shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-2 sm:gap-3 sm:px-3.5 sm:[display:grid] sm:[grid-template-columns:1fr_auto_1fr]">
-      {/* LEFT: logo + breadcrumbs */}
-      <div className="flex min-w-0 items-center gap-2 sm:gap-3.5">
+    <div className="flex h-12 shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-3 sm:px-4">
+      {/* LEFT: logo + scenario */}
+      <div className="flex min-w-0 flex-1 items-center gap-2.5">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              className="flex shrink-0 items-center gap-2 rounded-md px-1 py-1 transition-colors hover:bg-slate-100"
+              className="flex shrink-0 items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-slate-100"
               title="File menu"
             >
               <LogoMark />
-              <span className="hidden text-[14px] font-bold tracking-[-0.01em] text-slate-900 sm:inline">logsim</span>
-              <span className="hidden font-mono text-[11px] font-medium text-slate-500 sm:inline">v2</span>
+              <span className="hidden text-[13.5px] font-semibold tracking-[-0.01em] text-slate-900 sm:inline">logsim</span>
+              <span className="hidden rounded bg-slate-100 px-1 py-px font-mono text-[9.5px] font-semibold uppercase tracking-[0.08em] text-slate-500 sm:inline">v2</span>
               <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
             </button>
           </DropdownMenuTrigger>
@@ -566,12 +561,11 @@ export function Topbar() {
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {/* Breadcrumbs */}
-        <div className="flex min-w-0 items-center gap-2 text-[12px] text-slate-500">
-          <span className="hidden md:inline">Workspace</span>
-          <span className="hidden opacity-40 md:inline">/</span>
-          <span className="hidden md:inline">Scenarios</span>
-          <span className="hidden opacity-40 md:inline">/</span>
+        {/* Subtle separator */}
+        <span className="hidden h-4 w-px bg-slate-200 sm:inline-block" aria-hidden />
+
+        {/* Scenario name */}
+        <div className="flex min-w-0 items-center">
           {editingTitle ? (
             <input
               ref={titleInputRef}
@@ -582,46 +576,39 @@ export function Topbar() {
                 if (e.key === 'Enter') commitName(draftName)
                 if (e.key === 'Escape') { setDraftName(metadata.name); setEditingTitle(false) }
               }}
-              className="min-w-0 rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[12px] font-medium text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              className="min-w-0 rounded-md border border-slate-300 bg-white px-2 py-1 text-[13px] font-medium text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
             />
           ) : (
             <button
               type="button"
               onClick={() => setEditingTitle(true)}
-              className="group/name flex min-w-0 items-center gap-1 truncate rounded px-1 py-0.5 text-[12px] font-medium text-slate-900 hover:bg-slate-100"
+              className="group/name flex min-w-0 items-center gap-1.5 truncate rounded-md px-2 py-1 text-[13px] font-medium text-slate-900 transition-colors hover:bg-slate-100"
               title="Rename scenario"
             >
               <span className="truncate">{metadata.name}</span>
-              <Pencil className="h-3 w-3 shrink-0 text-slate-400 opacity-0 group-hover/name:opacity-100" />
+              <Pencil className="h-3 w-3 shrink-0 text-slate-400 opacity-0 transition-opacity group-hover/name:opacity-100" />
             </button>
           )}
         </div>
       </div>
 
-      {/* CENTER: dataset shortcut (desktop only — accessible via File menu on mobile) */}
-      <div className="hidden shrink-0 items-center gap-0.5 rounded-md border border-slate-200 bg-slate-100 p-[3px] sm:flex">
-        <TabButton asLink href="/settings">Datasets</TabButton>
-      </div>
-
-      {/* RIGHT: status + speed + controls */}
-      <div className="flex min-w-0 items-center justify-end gap-2">
-        {/* Status pill */}
-        <div className="flex shrink-0 items-center gap-1.5 font-mono text-[11px] text-slate-500">
-          <span className={cn('ls-dot', isRunning ? 'ls-dot-live' : 'ls-dot-idle')} />
-          <span className="hidden sm:inline">{isRunning ? 'streaming' : 'paused'}</span>
-        </div>
-
-        {/* Destinations status chip — hide entirely on phones when nothing's configured */}
+      {/* RIGHT: destinations + format + transport tray + export */}
+      <div className="flex shrink-0 items-center gap-2">
+        {/* Destinations chip — refined pill, state-aware */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
               type="button"
               className={cn(
-                'h-7 shrink-0 items-center gap-1.5 rounded-md border px-2 text-[11px] font-medium transition-colors sm:inline-flex',
+                'group/dest h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-[11.5px] font-medium transition-colors sm:inline-flex',
                 destinations.length === 0 ? 'hidden sm:inline-flex' : 'inline-flex',
                 destOverall === 'error'
-                  ? 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100'
-                  : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
+                  ? 'bg-red-50 text-red-700 hover:bg-red-100'
+                  : destOverall === 'sending'
+                    ? 'bg-blue-50 text-blue-700 hover:bg-blue-100'
+                    : destOverall === 'ok'
+                      ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                      : 'text-slate-500 hover:bg-slate-100',
               )}
               title="Log forwarding destinations"
             >
@@ -629,12 +616,11 @@ export function Topbar() {
                 'h-1.5 w-1.5 rounded-full',
                 destOverall === 'none' ? 'bg-slate-300'
                   : destOverall === 'error' ? 'bg-red-500'
-                  : destOverall === 'sending' ? 'bg-blue-500 animate-pulse'
-                  : 'bg-green-500',
+                    : destOverall === 'sending' ? 'bg-blue-500 animate-pulse'
+                      : 'bg-emerald-500',
               )} />
-              <span className="hidden sm:inline">
-                {destinations.length === 0 ? 'No dest.' : `${enabledDests.length}/${destinations.length} dest.`}
-              </span>
+              <span className="max-w-[140px] truncate">{destLabel}</span>
+              <ChevronDown className="h-3 w-3 opacity-50 transition-opacity group-hover/dest:opacity-80" />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-72">
@@ -692,14 +678,14 @@ export function Topbar() {
             backend maps it to Native / OCSF / (later) UDM / ASIM before the
             line reaches the UI. Switching clears the buffer because formats
             don't mix cleanly. */}
-        <div className="hidden shrink-0 items-center gap-0.5 rounded-md border border-slate-200 bg-slate-100 p-[2px] sm:flex">
+        <div className="hidden h-8 shrink-0 items-center gap-0.5 rounded-lg border border-slate-200 bg-slate-50 p-[3px] sm:flex">
           {(['native', 'ocsf'] as const).map(f => (
             <button
               key={f}
               type="button"
               onClick={() => setOutputFormat(f)}
               className={cn(
-                'rounded-[3px] px-2 py-[3px] font-mono text-[10.5px] font-semibold uppercase transition-colors',
+                'rounded-[5px] px-2 py-[2px] font-mono text-[10.5px] font-semibold uppercase transition-colors',
                 outputFormat === f
                   ? 'bg-white text-slate-900 shadow-[0_1px_2px_rgba(15,23,42,0.05)]'
                   : 'text-slate-500 hover:text-slate-900',
@@ -709,93 +695,71 @@ export function Topbar() {
           ))}
         </div>
 
-        {/* Time multiplier — segmented on desktop, dropdown on mobile */}
-        <div className="hidden shrink-0 items-center gap-0.5 rounded-md border border-slate-200 bg-slate-100 p-[2px] sm:flex">
-          {SPEED_OPTIONS.map(s => (
-            <button
-              key={s}
-              type="button"
-              onClick={() => handleSpeedSelect(s)}
-              className={cn(
-                'rounded-[3px] px-2 py-[3px] font-mono text-[10.5px] font-semibold transition-colors',
-                speed === s
-                  ? 'bg-white text-slate-900 shadow-[0_1px_2px_rgba(15,23,42,0.05)]'
-                  : 'text-slate-500 hover:text-slate-900',
-              )}
-              title={`Speed ${s}×`}
-            >{s}×</button>
-          ))}
-        </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              className="inline-flex h-9 shrink-0 items-center justify-center rounded-md border border-slate-300 bg-white px-2 font-mono text-[12px] font-semibold text-slate-700 hover:bg-slate-50 sm:hidden"
-              title={`Simulation speed (${speed}×)`}
-            >
-              {speed}×
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-0">
-            {SPEED_OPTIONS.map(s => (
-              <DropdownMenuItem
-                key={s}
-                onClick={() => handleSpeedSelect(s)}
-                className={cn(
-                  'cursor-pointer justify-center font-mono text-xs',
-                  speed === s && 'font-bold text-blue-600',
-                )}
-              >
-                {s}×
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        {/* Step (desktop only — saved space matters more on phones) */}
-        <button
-          type="button"
-          onClick={handleStep}
-          disabled={isRunning}
-          className="hidden h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 sm:inline-flex"
-          title="Step one tick"
-        >
-          <StepForward className="h-3.5 w-3.5" />
-        </button>
-        <button
-          type="button"
-          onClick={handleReset}
-          disabled={!isRunning && tickCount === 0}
-          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 sm:h-7 sm:w-7"
-          title="Reset simulation"
-        >
-          <RotateCcw className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
-        </button>
-
-        {/* Pause/Run primary */}
-        <button
-          type="button"
-          onClick={handlePlayPause}
+        {/* Transport tray — unified container with subtle dividers */}
+        <div
           className={cn(
-            'inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium transition-colors sm:h-7',
-            'border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
+            'inline-flex h-8 shrink-0 items-center overflow-hidden rounded-lg border bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition-colors',
+            isRunning ? 'border-emerald-200' : 'border-slate-200',
           )}
-          title={isRunning ? 'Pause simulation' : 'Run simulation'}
         >
-          {isRunning ? <Pause className="h-4 w-4 sm:h-3.5 sm:w-3.5" /> : <Play className="h-4 w-4 sm:h-3.5 sm:w-3.5" />}
-          <span className="hidden sm:inline">{isRunning ? 'Pause' : 'Run'}</span>
-          {!isRunning && speed > 1 && <FastForward className="hidden h-3 w-3 text-slate-400 sm:inline" />}
-        </button>
+          <button
+            type="button"
+            onClick={handleReset}
+            disabled={!isRunning && tickCount === 0}
+            className="inline-flex h-full w-8 items-center justify-center text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-500"
+            title="Reset"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+          </button>
+          <span className="h-4 w-px bg-slate-200" aria-hidden />
+          <button
+            type="button"
+            onClick={handleStep}
+            disabled={isRunning}
+            className="inline-flex h-full w-8 items-center justify-center text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-500"
+            title="Step one tick"
+          >
+            <StepForward className="h-3.5 w-3.5" />
+          </button>
+          <span className="h-4 w-px bg-slate-200" aria-hidden />
+          <button
+            type="button"
+            onClick={handlePlayPause}
+            className={cn(
+              'inline-flex h-full items-center gap-1.5 px-3 text-[12px] font-medium transition-colors',
+              isRunning
+                ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                : 'text-slate-700 hover:bg-slate-50',
+            )}
+            title={isRunning ? 'Pause simulation' : 'Run simulation'}
+          >
+            {isRunning ? (
+              <>
+                <span className="relative flex h-2 w-2 items-center justify-center" aria-hidden>
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-60" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                </span>
+                <Pause className="h-3.5 w-3.5 fill-current" />
+                <span className="hidden sm:inline">Pause</span>
+              </>
+            ) : (
+              <>
+                <Play className="h-3.5 w-3.5 fill-current" />
+                <span className="hidden sm:inline">Run</span>
+              </>
+            )}
+          </button>
+        </div>
 
         {/* Export primary */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-blue-600 bg-blue-600 px-2.5 text-[12px] font-semibold text-white transition-colors hover:bg-blue-700 sm:h-7"
+              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 px-3 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(15,23,42,0.08)] transition-colors hover:bg-blue-700"
               title="Export dataset"
             >
-              <Download className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+              <Download className="h-3.5 w-3.5" />
               <span className="hidden md:inline">Export</span>
             </button>
           </DropdownMenuTrigger>
@@ -828,29 +792,3 @@ export function Topbar() {
   )
 }
 
-function TabButton({
-  active,
-  onClick,
-  children,
-  asLink,
-  href,
-}: {
-  active?: boolean
-  onClick?: () => void
-  children: React.ReactNode
-  asLink?: boolean
-  href?: string
-}) {
-  const className = cn(
-    'rounded-[4px] px-3 py-1 text-[12px] font-medium transition-colors',
-    active
-      ? 'bg-white text-slate-900 shadow-[0_1px_2px_rgba(15,23,42,0.05)]'
-      : 'bg-transparent text-slate-500 hover:text-slate-900',
-  )
-  if (asLink && href) {
-    return <Link href={href} className={className}>{children}</Link>
-  }
-  return (
-    <button type="button" onClick={onClick} className={className}>{children}</button>
-  )
-}
