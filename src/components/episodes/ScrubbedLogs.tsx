@@ -186,7 +186,6 @@ export function ScrubbedLogs() {
                     'group relative flex w-full items-center gap-2 rounded px-1 py-0.5 text-left text-[10px] transition-colors hover:bg-slate-100',
                     !active && 'opacity-40',
                   )}
-                  title={`${s.channel} — ${s.total} entries (click to filter)`}
                 >
                   <span className="w-32 shrink-0 truncate font-mono text-slate-700">{distinct}</span>
                   <Sparkline buckets={s.buckets} max={s.max} />
