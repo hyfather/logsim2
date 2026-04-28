@@ -42,6 +42,10 @@ type Request struct {
 	// streaming. "native" (default) preserves the generator's own log line;
 	// "ocsf" replaces it with an OCSF v1.x JSON event.
 	Format string `json:"format,omitempty"`
+	// StartTick lets the client resume playback mid-episode. Frames are
+	// emitted starting at this tick index; if it's >= duration the run
+	// completes immediately with no logs.
+	StartTick int `json:"start_tick,omitempty"`
 }
 
 // Handler streams NDJSON: one frame per tick plus a final summary frame.
@@ -123,9 +127,18 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
 
+	startTick := req.StartTick
+	if startTick < 0 {
+		startTick = 0
+	}
+	if startTick > duration {
+		startTick = duration
+	}
+
 	eng := engine.New(sc, engine.Config{
 		Seed:           req.Seed,
 		StartTime:      start,
+		StartTick:      startTick,
 		TickIntervalMs: tickInterval,
 		Rate:           req.Rate,
 		SourceFilter:   req.SourceFilter,
@@ -136,6 +149,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		flusher: flusher,
 		start:   start,
 		tickMs:  tickInterval,
+		tick:    startTick,
 		format:  encoders.Parse(req.Format),
 	}
 

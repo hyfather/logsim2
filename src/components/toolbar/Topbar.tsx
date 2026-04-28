@@ -307,10 +307,14 @@ export function Topbar() {
     const cribl = pickCriblPayload(destinationsRef.current)
     const yaml = buildScenarioYaml()
     const ep = useEpisodeStore.getState().episode
-    const simStart = Date.now()
-    simCursorRef.current = simStart
+    const currentTick = Math.max(0, Math.floor(useEpisodeStore.getState().tick))
+    // Resume from the current scrubber position so Run-after-Pause (or
+    // Run-after-Step) doesn't visibly snap the scrubber back to 0.
+    const startTick = currentTick >= ep.duration ? 0 : currentTick
+    const simStart = Date.now() - startTick * 1000
+    simCursorRef.current = Date.now()
     seedRef.current = Math.floor(Math.random() * 1e9)
-    clearLogs()
+    if (startTick === 0) clearLogs()
     setStatus('running')
     setRunStatus('running')
     if (enabledCribl) setDestStatus(enabledCribl.id, 'sending')
@@ -323,6 +327,7 @@ export function Topbar() {
       duration: ep.duration,
       tickIntervalMs: 1000,
       startTimeMs: simStart,
+      startTick,
       seed: seedRef.current,
       rate: nextSpeed,
       cribl,

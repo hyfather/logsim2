@@ -13,6 +13,8 @@ export interface RunStreamOpts {
   cribl?: CriblPayload
   /** Wire schema applied per log entry. Defaults to "native" on the backend. */
   format?: LogFormat
+  /** Resume playback at this tick index instead of starting at 0. */
+  startTick?: number
   signal?: AbortSignal
   onTick: (frame: { tick: number; ts: number; logs: LogEntry[] }) => void
   onDone: (summary: { totalLogs: number }) => void
@@ -67,6 +69,7 @@ export async function runStream(opts: RunStreamOpts): Promise<void> {
       rate: opts.rate,
       cribl: opts.cribl,
       format: opts.format ?? 'native',
+      start_tick: opts.startTick ?? 0,
     }),
     signal: opts.signal,
   })
