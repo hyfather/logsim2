@@ -17,10 +17,16 @@ import { cn } from '@/lib/utils'
 
 const STATE_KEYS = Object.keys(BEHAVIOR_STATES) as BehaviorState[]
 
-// Identity / static fields the user shouldn't change per-beat — service name,
-// address, port, runtime framework, and version are fixed for the lifetime of
-// the service.
-const LOCKED_FIELD_KEYS = new Set(['port', 'framework', 'version'])
+// Identity / structural fields the user shouldn't change per-beat. These are
+// service-wide properties — runtime, port, log structure — that belong on the
+// swimlane (service) panel, not on a behavior block. They render as compact,
+// read-only rows inside the top "Service" section here.
+const LOCKED_FIELD_KEYS = new Set([
+  'port', 'framework', 'version',
+  // Log structure / schema decisions — same shape across the whole episode.
+  'logFormat', 'accessLogFormat', 'flowLogFormat',
+  'logStatement', 'slowQueryLog', 'slowQueryThresholdMs',
+])
 
 function groupBySection(fields: ConfigField[]): Record<string, ConfigField[]> {
   const groups: Record<string, ConfigField[]> = {}
@@ -30,6 +36,16 @@ function groupBySection(fields: ConfigField[]): Record<string, ConfigField[]> {
     groups[section].push(field)
   }
   return groups
+}
+
+function displayValue(field: ConfigField, value: unknown): string {
+  if (value === undefined || value === null || value === '') return '—'
+  if (field.type === 'select') {
+    const match = field.options?.find(o => o.value === String(value))
+    return match?.label ?? String(value)
+  }
+  if (field.type === 'boolean') return value ? 'On' : 'Off'
+  return String(value)
 }
 
 function FieldRenderer({
@@ -192,7 +208,10 @@ export function BlockInspector() {
   const configSchema: ConfigField[] = getRegistryEntry(nodeData.type, nodeData.serviceType)?.configSchema || []
   const baselineConfig = (nodeData.config as Record<string, unknown>) || {}
   const overrides = block.configOverrides ?? {}
-  const sections = groupBySection(configSchema)
+  // Locked, service-wide fields render once at the top under "Service".
+  // Per-beat editable fields render in their schema sections below.
+  const lockedFields = configSchema.filter(f => LOCKED_FIELD_KEYS.has(f.key))
+  const sections = groupBySection(configSchema.filter(f => !LOCKED_FIELD_KEYS.has(f.key)))
 
   const allNodes = nodes.map(n => n.data as ScenarioNode)
   const address = getNodeAddress(nodeData, allNodes)
@@ -293,7 +312,8 @@ export function BlockInspector() {
           </div>
         </section>
 
-        {/* Service identity (locked) — compact key/value rows; label is in the header */}
+        {/* Service (locked) — service-wide identity + structural fields. Edit
+            these on the swimlane panel; here they're read-only. */}
         <section className="flex flex-col gap-1 border-b border-slate-200 px-3 py-2">
           <div className="mb-0.5 flex items-center justify-between text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
             <span>Service</span>
@@ -309,27 +329,31 @@ export function BlockInspector() {
               <span className="truncate font-mono text-slate-700">{nodeData.channel}</span>
             </div>
           )}
+          {lockedFields.map(field => (
+            <div key={field.key} className="flex items-center justify-between gap-2 py-0.5 text-[11px]">
+              <span className="text-slate-500">{field.label}</span>
+              <span className="truncate font-mono text-slate-700">
+                {displayValue(field, baselineConfig[field.key] ?? field.defaultValue)}
+              </span>
+            </div>
+          ))}
         </section>
 
-        {/* Config schema sections — locked keys greyed, others wired to overrides */}
+        {/* Per-beat editable fields, grouped by their schema section. */}
         {Object.entries(sections).map(([section, fields]) => (
           <section key={section} className="flex flex-col gap-2 border-b border-slate-200 px-3 py-2.5">
             <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">{section}</div>
             {fields.map(field => {
-              const isLocked = LOCKED_FIELD_KEYS.has(field.key)
               const isErrorRate = field.key === 'errorRate'
               const baselineValue = baselineConfig[field.key] ?? field.defaultValue
               const hasOverride = isErrorRate
                 ? block.errorRate !== baselineValue
                 : Object.prototype.hasOwnProperty.call(overrides, field.key)
-              const effectiveValue = isLocked
-                ? baselineValue
-                : isErrorRate
-                  ? block.errorRate
-                  : (hasOverride ? overrides[field.key] : baselineValue)
+              const effectiveValue = isErrorRate
+                ? block.errorRate
+                : (hasOverride ? overrides[field.key] : baselineValue)
 
               const handleChange = (val: unknown) => {
-                if (isLocked) return
                 if (isErrorRate) {
                   updateBlock(block.id, { errorRate: Number(val) })
                   return
@@ -348,36 +372,28 @@ export function BlockInspector() {
               return (
                 <div key={field.key} className="flex flex-col gap-1">
                   <label className="flex items-center justify-between text-[10.5px] font-medium text-slate-500">
-                    <span className={cn(isLocked && 'text-slate-400')}>{field.label}</span>
-                    <span className="flex items-center gap-1.5">
-                      {isLocked && (
-                        <span className="text-[9.5px] font-semibold uppercase tracking-wider text-slate-400">Locked</span>
-                      )}
-                      {!isLocked && hasOverride && (
-                        <>
-                          <span className="text-[9.5px] font-semibold uppercase tracking-wider text-blue-600">Override</span>
-                          <button
-                            type="button"
-                            onClick={handleReset}
-                            title="Reset to baseline"
-                            className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                          >
-                            <RotateCcw className="h-3 w-3" />
-                          </button>
-                        </>
-                      )}
-                    </span>
+                    <span>{field.label}</span>
+                    {hasOverride && (
+                      <span className="flex items-center gap-1.5">
+                        <span className="text-[9.5px] font-semibold uppercase tracking-wider text-blue-600">Override</span>
+                        <button
+                          type="button"
+                          onClick={handleReset}
+                          title="Reset to baseline"
+                          className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                        >
+                          <RotateCcw className="h-3 w-3" />
+                        </button>
+                      </span>
+                    )}
                   </label>
                   <FieldRenderer
                     field={field}
                     value={effectiveValue}
-                    disabled={isLocked}
                     onChange={handleChange}
                   />
                   {field.description && (
-                    <p className={cn('text-[10px]', isLocked ? 'text-slate-400' : 'text-slate-500')}>
-                      {field.description}
-                    </p>
+                    <p className="text-[10px] text-slate-500">{field.description}</p>
                   )}
                 </div>
               )
