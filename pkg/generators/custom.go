@@ -37,7 +37,8 @@ func (g *CustomGenerator) Generate(target Target, inbound []event.Flow, ctx even
 	if g == nil || g.customType == nil || target.Service == nil {
 		return nil
 	}
-	cfg := &target.Service.Generator
+	effective := ctx.Override.ApplyToConfig(target.Service.Generator)
+	cfg := &effective
 
 	// Inbound flows take precedence so a custom service downstream of a load
 	// balancer reflects upstream traffic. Otherwise fall back to the

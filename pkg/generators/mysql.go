@@ -33,7 +33,8 @@ func (g *MysqlGenerator) Generate(target Target, inbound []event.Flow, ctx event
 	if target.Service == nil {
 		return nil
 	}
-	cfg := &target.Service.Generator
+	effective := ctx.Override.ApplyToConfig(target.Service.Generator)
+	cfg := &effective
 	database := cfg.Database
 	if database == "" {
 		database = "app"
