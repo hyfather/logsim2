@@ -328,7 +328,7 @@ function BehaviorBlockView({
 
 // ---------- Service swim lane ----------
 function ServiceLane({
-  service, blocks, pxPerTick, episodeDuration, selectedBlockId, widthPx, hovered,
+  service, blocks, pxPerTick, episodeDuration, selectedBlockId, widthPx, hovered, active,
   onSelectBlock, onMoveBlock, onResizeBlock, onAddBlock, onHoverChange,
 }: {
   service: ServiceRow
@@ -338,6 +338,7 @@ function ServiceLane({
   selectedBlockId: string | null
   widthPx: number
   hovered: boolean
+  active: boolean
   onSelectBlock: (id: string) => void
   onMoveBlock: (id: string, newStart: number) => void
   onResizeBlock: (id: string, patch: { start: number; duration: number }) => void
@@ -355,7 +356,7 @@ function ServiceLane({
     <div
       className={cn(
         'relative border-b border-slate-100 transition-colors',
-        hovered ? 'bg-blue-50/50' : 'hover:bg-slate-50/40',
+        active ? 'bg-blue-50/70 ring-1 ring-inset ring-blue-200' : hovered ? 'bg-blue-50/50' : 'hover:bg-slate-50/40',
       )}
       style={{ width: widthPx, height: LANE_HEIGHT }}
       onClick={onLaneClick}
@@ -435,7 +436,22 @@ export function EpisodeTimeline({ onCollapse }: { onCollapse?: () => void } = {}
   const hoveredServiceId = useUIStore(s => s.hoveredServiceId)
   const setHoveredServiceId = useUIStore(s => s.setHoveredServiceId)
   const selectNode = useUIStore(s => s.selectNode)
+  const selectedNodeId = useUIStore(s => s.selectedNodeId)
   const setLogPanelOpen = useUIStore(s => s.setLogPanelOpen)
+
+  // The "active" service is the one whose details panel is currently open —
+  // either because that lane (node) was clicked, or because a behavior block
+  // on that lane is selected. We highlight the lane (and the canvas node)
+  // persistently so the user keeps their visual anchor while editing.
+  const activeServiceId = useMemo(() => {
+    if (selectedBlockId) {
+      for (const [sid, blocks] of Object.entries(episode.lanes)) {
+        if (blocks.some(b => b.id === selectedBlockId)) return sid
+      }
+    }
+    if (selectedNodeId && services.some(s => s.id === selectedNodeId)) return selectedNodeId
+    return null
+  }, [selectedBlockId, selectedNodeId, episode.lanes, services])
   const isMobile = useIsMobile()
   const labelCol = isMobile ? LABEL_COL_MOBILE : LABEL_COL_DESKTOP
   // Default to a slightly tighter zoom on mobile so a typical 20-minute episode
@@ -532,7 +548,9 @@ export function EpisodeTimeline({ onCollapse }: { onCollapse?: () => void } = {}
                 key={s.id}
                 className={cn(
                   'flex cursor-pointer items-center gap-2 border-b border-slate-100 px-2 transition-colors sm:px-3',
-                  hoveredServiceId === s.id && 'bg-blue-50/50',
+                  activeServiceId === s.id
+                    ? 'bg-blue-50/70 ring-1 ring-inset ring-blue-200'
+                    : hoveredServiceId === s.id && 'bg-blue-50/50',
                 )}
                 style={{ height: LANE_HEIGHT }}
                 title={`${s.label} (${s.kind}) — click to open details`}
@@ -587,6 +605,7 @@ export function EpisodeTimeline({ onCollapse }: { onCollapse?: () => void } = {}
                   selectedBlockId={selectedBlockId}
                   widthPx={widthPx}
                   hovered={hoveredServiceId === s.id}
+                  active={activeServiceId === s.id}
                   onSelectBlock={setSelectedBlock}
                   onMoveBlock={(id, start) => updateBlock(id, { start })}
                   onResizeBlock={(id, patch) => updateBlock(id, patch)}

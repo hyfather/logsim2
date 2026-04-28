@@ -7,6 +7,7 @@ import type { ScenarioNode } from '@/types/nodes'
 import type { ScenarioFlowNode } from '@/types/flow'
 import { useScenarioStore } from '@/store/useScenarioStore'
 import { useUIStore } from '@/store/useUIStore'
+import { useEpisodeStore } from '@/store/useEpisodeStore'
 import { cn } from '@/lib/utils'
 import { getNodeAddress, getNodeHoverDetails } from '@/lib/network'
 import { NodeAnchors } from '@/components/nodes/NodeAnchors'
@@ -22,7 +23,18 @@ export function ServiceNode({ id, data, selected }: NodeProps<ScenarioFlowNode>)
   const { selectNode, setLogPanelOpen } = useUIStore()
   const hoveredServiceId = useUIStore(s => s.hoveredServiceId)
   const setHoveredServiceId = useUIStore(s => s.setHoveredServiceId)
+  const selectedNodeId = useUIStore(s => s.selectedNodeId)
+  const selectedBlockId = useEpisodeStore(s => s.selectedBlockId)
+  const lanes = useEpisodeStore(s => s.episode.lanes)
   const isHovered = hoveredServiceId === id
+
+  // Keep the node visually selected whenever its inspector is open — either
+  // because the swimlane (this node) is selected directly, or because a
+  // behavior block on this service's lane is selected.
+  const blockBelongsToThisService = selectedBlockId
+    ? (lanes[id]?.some(b => b.id === selectedBlockId) ?? false)
+    : false
+  const isActive = selected || selectedNodeId === id || blockBelongsToThisService
 
   const emoji = getNodeEmoji(node)
   const allNodes = nodes.map(candidate => candidate.data)
@@ -79,13 +91,17 @@ export function ServiceNode({ id, data, selected }: NodeProps<ScenarioFlowNode>)
     <div
       className={cn(
         'group/node relative flex min-h-[64px] min-w-[220px] cursor-pointer flex-col overflow-visible rounded-md bg-white transition-all',
-        selected
+        isActive
           ? 'shadow-[0_18px_40px_-24px_rgba(37,99,235,0.3)]'
           : 'shadow-[0_14px_32px_-28px_rgba(15,23,42,0.3)] hover:shadow-[0_18px_38px_-26px_rgba(15,23,42,0.4)]',
       )}
       style={{
-        border: `1.5px solid ${selected ? '#3b82f6' : isHovered ? '#60a5fa' : '#86efac'}`,
-        boxShadow: isHovered && !selected ? '0 0 0 3px rgba(96,165,250,0.25)' : undefined,
+        border: `1.5px solid ${isActive ? '#3b82f6' : isHovered ? '#60a5fa' : '#86efac'}`,
+        boxShadow: isActive
+          ? '0 0 0 3px rgba(59,130,246,0.18)'
+          : isHovered
+            ? '0 0 0 3px rgba(96,165,250,0.25)'
+            : undefined,
       }}
       title={hoverText}
       onClick={handleClick}
@@ -146,7 +162,7 @@ export function ServiceNode({ id, data, selected }: NodeProps<ScenarioFlowNode>)
         <div className="mt-1 truncate font-mono text-[11px] text-slate-500">{node.channel}</div>
       </div>
 
-      <NodeAnchors nodeId={id} selected={selected} accentColor={selected ? '#3b82f6' : '#22c55e'} />
+      <NodeAnchors nodeId={id} selected={isActive} accentColor={isActive ? '#3b82f6' : '#22c55e'} />
     </div>
   )
 }

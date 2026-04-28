@@ -176,16 +176,22 @@ export function NodeInspectorPanel({ nodeData }: { nodeData: ScenarioNode }) {
         ? (nodeData.privateIp?.trim() || address)
         : String((nodeData.config as { privateIp?: string }).privateIp ?? '')
 
+  const isService = nodeData.type === 'service'
+  const eyebrow = isService ? 'Service swimlane' : nodeData.type.replace('_', ' ')
+
   return (
     <div className="flex h-full flex-col overflow-hidden bg-white">
-      {/* Header */}
-      <div className="flex shrink-0 items-center gap-2 border-b border-slate-200 px-3.5 py-3">
-        <span className="text-[14px] leading-none">{emoji}</span>
-        <span className="min-w-0 flex-1 truncate text-[14px] font-semibold text-slate-900">{nodeData.label}</span>
+      {/* Header — eyebrow makes this clearly a service-wide (swimlane) panel */}
+      <div className="flex shrink-0 items-start gap-2 border-b border-slate-200 px-3 py-2">
+        <span className="mt-0.5 text-[14px] leading-none">{emoji}</span>
+        <div className="min-w-0 flex-1">
+          <div className="text-[9.5px] font-semibold uppercase tracking-[0.1em] text-slate-400">{eyebrow}</div>
+          <div className="truncate text-[13px] font-semibold leading-tight text-slate-900">{nodeData.label}</div>
+        </div>
         <button
           type="button"
           onClick={() => selectNode(null)}
-          className="inline-flex h-6 w-6 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
           title="Close inspector"
         >
           <X className="h-3.5 w-3.5" />
@@ -194,9 +200,9 @@ export function NodeInspectorPanel({ nodeData }: { nodeData: ScenarioNode }) {
 
       <div className="flex-1 overflow-y-auto">
         {/* Identity */}
-        <section className="flex flex-col gap-3 border-b border-slate-200 px-3.5 py-3.5">
-          <div className="flex flex-col gap-1.5">
-            <label className="text-[11px] font-medium text-slate-500">Label</label>
+        <section className="flex flex-col gap-2 border-b border-slate-200 px-3 py-2.5">
+          <div className="flex flex-col gap-1">
+            <label className="text-[10.5px] font-medium text-slate-500">Label</label>
             <Input
               value={labelDraft}
               onChange={e => setLabelDraft(e.target.value)}
@@ -205,8 +211,8 @@ export function NodeInspectorPanel({ nodeData }: { nodeData: ScenarioNode }) {
               className="h-7 text-xs"
             />
           </div>
-          <div className="flex flex-col gap-1.5">
-            <label className="text-[11px] font-medium text-slate-500">{addressLabel}</label>
+          <div className="flex flex-col gap-1">
+            <label className="text-[10.5px] font-medium text-slate-500">{addressLabel}</label>
             <Input
               value={addressValue}
               onChange={e => handleAddressChange(e.target.value)}
@@ -214,28 +220,28 @@ export function NodeInspectorPanel({ nodeData }: { nodeData: ScenarioNode }) {
             />
           </div>
           {nodeData.channel && (
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[11px] font-medium text-slate-500">Channel</label>
-              <div className="font-mono text-[12px] text-slate-700">{nodeData.channel}</div>
+            <div className="flex items-center justify-between gap-2 py-0.5 text-[11px]">
+              <span className="text-slate-500">Channel</span>
+              <span className="truncate font-mono text-slate-700">{nodeData.channel}</span>
             </div>
           )}
-          <div className="flex flex-col gap-1.5">
-            <label className="text-[11px] font-medium text-slate-500">Resource</label>
-            <div className="text-[12px] capitalize text-slate-700">
+          <div className="flex items-center justify-between gap-2 py-0.5 text-[11px]">
+            <span className="text-slate-500">Resource</span>
+            <span className="truncate capitalize text-slate-700">
               {nodeData.serviceType ?? nodeData.type.replace('_', ' ')}
-            </div>
+            </span>
           </div>
         </section>
 
         {/* Config schema sections (Log generation, etc.) */}
         {Object.entries(sections).map(([section, fields]) => (
-          <section key={section} className="flex flex-col gap-3 border-b border-slate-200 px-3.5 py-3.5">
-            <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+          <section key={section} className="flex flex-col gap-2 border-b border-slate-200 px-3 py-2.5">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
               {section}
             </div>
             {fields.map(field => (
-              <div key={field.key} className="flex flex-col gap-1.5">
-                <label className="flex items-center justify-between text-[11px] font-medium text-slate-500">
+              <div key={field.key} className="flex flex-col gap-1">
+                <label className="flex items-center justify-between text-[10.5px] font-medium text-slate-500">
                   <span>{field.label}</span>
                 </label>
                 <FieldRenderer
@@ -244,7 +250,7 @@ export function NodeInspectorPanel({ nodeData }: { nodeData: ScenarioNode }) {
                   onChange={handleConfigChange}
                 />
                 {field.description && (
-                  <p className="text-[10px] text-slate-400">{field.description}</p>
+                  <p className="text-[9.5px] text-slate-400">{field.description}</p>
                 )}
               </div>
             ))}
@@ -252,8 +258,8 @@ export function NodeInspectorPanel({ nodeData }: { nodeData: ScenarioNode }) {
         ))}
 
         {/* Connections */}
-        <section className="flex flex-col gap-2 border-b border-slate-200 px-3.5 py-3.5">
-          <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+        <section className="flex flex-col gap-1.5 border-b border-slate-200 px-3 py-2.5">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
             Connections ({connections.length})
           </div>
           {connections.length === 0 ? (
@@ -280,7 +286,7 @@ export function NodeInspectorPanel({ nodeData }: { nodeData: ScenarioNode }) {
       </div>
 
       {/* Footer */}
-      <div className="shrink-0 px-3.5 py-3.5">
+      <div className="shrink-0 px-3 py-2">
         <button
           type="button"
           onClick={handleDelete}
