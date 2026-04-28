@@ -28,8 +28,6 @@ import { useEpisodeStore } from '@/store/useEpisodeStore'
 import { useSimulationStore } from '@/store/useSimulationStore'
 import { useDestinationsStore } from '@/store/useDestinationsStore'
 import { DESTINATION_TYPE_META } from '@/types/destinations'
-import type { Episode, EpisodeFileV2 } from '@/types/episode'
-import { parseEpisodeFile } from '@/lib/episodeIO'
 import { serializeScenario, deserializeScenario, downloadJson } from '@/lib/serialization'
 import type { Connection } from '@/types/connections'
 import { asFlowEdgeData, asFlowNodeData } from '@/lib/flow-data'
@@ -39,14 +37,6 @@ import { canvasToScenarioYaml } from '@/lib/canvasToScenarioYaml'
 import { runStream } from '@/lib/runStream'
 import { logsAt } from '@/lib/logsAt'
 import { materializeProposedScenarioJson } from '@/lib/scenarioPrompt'
-
-interface ExampleEpisodeManifestEntry {
-  file: string
-  title: string
-  description: string
-  segmentCount: number
-  totalTicks: number
-}
 
 interface PresetScenarioManifestEntry {
   file: string
@@ -71,8 +61,8 @@ function LogoMark() {
 
 export function Topbar() {
   const { nodes, edges, metadata, setMetadata, resetScenario, loadScenario } = useScenarioStore()
-  const { setShowBulkGenerateModal, setShowKeyboardShortcuts, setDescribePanelOpen } = useUIStore()
-  const { episode, setEpisode } = useEpisodeStore()
+  const { setShowBulkGenerateModal, setDescribePanelOpen } = useUIStore()
+  const setEpisode = useEpisodeStore(s => s.setEpisode)
   const setTick = useEpisodeStore(s => s.setTick)
   const setRunStatus = useEpisodeStore(s => s.setRunStatus)
   const {
@@ -99,11 +89,8 @@ export function Topbar() {
   } = useDestinationsStore()
 
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const episodeFileInputRef = useRef<HTMLInputElement>(null)
   const titleInputRef = useRef<HTMLInputElement>(null)
 
-  const [examples, setExamples] = useState<ExampleEpisodeManifestEntry[]>([])
-  const [examplesLoaded, setExamplesLoaded] = useState(false)
   const [presets, setPresets] = useState<PresetScenarioManifestEntry[]>([])
   const [presetsLoaded, setPresetsLoaded] = useState(false)
   const [draftName, setDraftName] = useState(metadata.name)
@@ -197,28 +184,6 @@ export function Topbar() {
     resetScenario()
   }, [nodes.length, resetScenario])
 
-  // ── Episode I/O ─────────────────────────────────────────────────
-  const loadExamplesManifest = useCallback(async () => {
-    if (examplesLoaded) return
-    try {
-      const res = await fetch('/examples/episodes/index.json', { cache: 'no-cache' })
-      if (res.ok) setExamples(await res.json())
-    } catch { /* ignore */ }
-    setExamplesLoaded(true)
-  }, [examplesLoaded])
-
-  const loadExampleEpisode = useCallback(async (file: string) => {
-    try {
-      const res = await fetch(`/examples/episodes/${file}`, { cache: 'no-cache' })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const data = (await res.json()) as EpisodeFileV2 | Episode
-      const ep = parseEpisodeFile(data)
-      setEpisode(ep)
-    } catch (err) {
-      alert(`Failed to load example episode: ${String(err)}`)
-    }
-  }, [setEpisode])
-
   // ── Example Scenarios (presets w/ embedded timelines) ───────────
   const loadPresetsManifest = useCallback(async () => {
     if (presetsLoaded) return
@@ -247,36 +212,6 @@ export function Topbar() {
       alert(`Failed to load preset scenario: ${String(err)}`)
     }
   }, [loadScenario, setEpisode])
-
-  const handleEpisodeSave = useCallback(() => {
-    const payload: EpisodeFileV2 = { version: 2, episode }
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${episode.name.toLowerCase().replace(/\s+/g, '-')}.episode.json`
-    a.click()
-    URL.revokeObjectURL(url)
-  }, [episode])
-
-  const handleEpisodeOpen = useCallback(() => episodeFileInputRef.current?.click(), [])
-
-  const handleEpisodeFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = (evt) => {
-      try {
-        const data = JSON.parse(evt.target?.result as string) as EpisodeFileV2 | Episode
-        const ep = parseEpisodeFile(data)
-        setEpisode(ep)
-      } catch (err) {
-        alert('Failed to load episode: ' + String(err))
-      }
-    }
-    reader.readAsText(file)
-    e.target.value = ''
-  }, [setEpisode])
 
   // ── Simulation control ─────────────────────────────────────────
   // Build the timeline-baked scenario YAML so the backend applies per-tick
@@ -479,8 +414,6 @@ export function Topbar() {
             <DropdownMenuItem onClick={handleOpenScenario} className="cursor-pointer text-xs">📂 Open Scenario…</DropdownMenuItem>
             <DropdownMenuItem onClick={handleSaveScenario} className="cursor-pointer text-xs">💾 Save Scenario  ⌘S</DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={handleEpisodeOpen} className="cursor-pointer text-xs">🎬 Open Episode…</DropdownMenuItem>
-            <DropdownMenuItem onClick={handleEpisodeSave} className="cursor-pointer text-xs">🎬 Save Episode</DropdownMenuItem>
             <DropdownMenuSub>
               <DropdownMenuSubTrigger
                 onMouseEnter={loadPresetsManifest}
@@ -523,38 +456,9 @@ export function Topbar() {
                 )}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger
-                onMouseEnter={loadExamplesManifest}
-                onFocus={loadExamplesManifest}
-                className="cursor-pointer text-xs"
-              >
-                🎞️ Example Episodes
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="max-w-sm text-xs">
-                {!examplesLoaded ? (
-                  <div className="px-2 py-1.5 text-[11px] text-slate-400">Loading…</div>
-                ) : examples.length === 0 ? (
-                  <div className="px-2 py-1.5 text-[11px] text-slate-400">No examples found.</div>
-                ) : (
-                  examples.map(ex => (
-                    <DropdownMenuItem
-                      key={ex.file}
-                      onClick={() => loadExampleEpisode(ex.file)}
-                      className="flex cursor-pointer flex-col items-start gap-0.5 text-xs"
-                    >
-                      <span className="font-medium">{ex.title}</span>
-                      <span className="whitespace-normal text-[10px] leading-tight text-slate-500">{ex.description}</span>
-                      <span className="text-[10px] text-slate-400">{ex.segmentCount} segments · {ex.totalTicks} ticks</span>
-                    </DropdownMenuItem>
-                  ))
-                )}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => setShowBulkGenerateModal(true)} className="cursor-pointer text-xs">⚡ Generate Batch…</DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => setShowKeyboardShortcuts(true)} className="cursor-pointer text-xs">⌨️ Keyboard Shortcuts</DropdownMenuItem>
             <DropdownMenuItem asChild className="cursor-pointer text-xs">
               <Link href="/settings">⚙️ Settings…</Link>
             </DropdownMenuItem>
@@ -776,18 +680,12 @@ export function Topbar() {
               <span className="font-mono text-[11px] text-slate-400">.jsonl</span>
               <span className="ml-2">JSON lines</span>
             </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={handleSaveScenario} className="cursor-pointer text-xs">
-              <span className="font-mono text-[11px] text-slate-400">.json</span>
-              <span className="ml-2">Save scenario</span>
-            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
 
-      {/* hidden file inputs */}
+      {/* hidden file input */}
       <input ref={fileInputRef} type="file" accept=".json,.logsim.json" className="hidden" onChange={handleScenarioFileChange} />
-      <input ref={episodeFileInputRef} type="file" accept=".json,.episode.json" className="hidden" onChange={handleEpisodeFileChange} />
     </div>
   )
 }

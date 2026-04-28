@@ -21,44 +21,9 @@ import { deserializeScenario } from '@/lib/serialization'
 import { asFlowEdgeData, asFlowNodeData } from '@/lib/flow-data'
 import { materializeProposedScenarioJson } from '@/lib/scenarioPrompt'
 import { cn } from '@/lib/utils'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Button } from '@/components/ui/button'
 import { useUrlSync } from '@/hooks/useUrlSync'
 import { useIsMobile } from '@/hooks/useMediaQuery'
 import { startPointerDrag } from '@/lib/pointerDrag'
-
-function KeyboardShortcutsDialog() {
-  const { showKeyboardShortcuts, setShowKeyboardShortcuts } = useUIStore()
-  return (
-    <Dialog open={showKeyboardShortcuts} onOpenChange={setShowKeyboardShortcuts}>
-      <DialogContent className="max-w-sm">
-        <DialogHeader>
-          <DialogTitle className="text-sm">Keyboard Shortcuts</DialogTitle>
-        </DialogHeader>
-        <div className="text-xs space-y-1">
-          {[
-            ['Ctrl+S', 'Save scenario'],
-            ['Ctrl+Z', 'Undo'],
-            ['Delete/Backspace', 'Delete selected'],
-            ['Ctrl+A', 'Select all'],
-            ['Ctrl+0', 'Fit view'],
-            ['1', 'Step one tick'],
-            ['2', 'Play/Stop simulation'],
-            ['Escape', 'Deselect / close panel'],
-          ].map(([key, desc]) => (
-            <div key={key} className="flex justify-between">
-              <kbd className="font-mono bg-gray-100 px-1 rounded text-[10px]">{key}</kbd>
-              <span className="text-gray-600">{desc}</span>
-            </div>
-          ))}
-        </div>
-        <Button variant="outline" size="sm" className="text-xs w-full" onClick={() => setShowKeyboardShortcuts(false)}>
-          Close
-        </Button>
-      </DialogContent>
-    </Dialog>
-  )
-}
 
 export default function EditorPageClient() {
   useUrlSync()
@@ -418,7 +383,6 @@ export default function EditorPageClient() {
 
       {/* Modals */}
       <BulkGenerateModal />
-      <KeyboardShortcutsDialog />
     </ReactFlowProvider>
   )
 }
