@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nikhilm/logsim2/pkg/encoders"
 	"github.com/nikhilm/logsim2/pkg/engine"
 	"github.com/nikhilm/logsim2/pkg/event"
 	"github.com/nikhilm/logsim2/pkg/scenario"
@@ -79,7 +80,12 @@ func (s *Server) handleSimulate(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	sseSink := &sseBatchSink{w: w, flusher: flusher, format: sinks.Format(req.Format)}
+	sseSink := &sseBatchSink{
+		w:          w,
+		flusher:    flusher,
+		format:     sinks.Format(req.Format),
+		schemaFmt:  encoders.Parse(req.Format),
+	}
 	ctx := r.Context()
 	_ = eng.Run(ctx, req.Ticks, []sinks.Sink{sseSink})
 
@@ -90,15 +96,23 @@ func (s *Server) handleSimulate(w http.ResponseWriter, r *http.Request) {
 
 // sseBatchSink emits one SSE `event: batch` per Write call.
 type sseBatchSink struct {
-	w       http.ResponseWriter
-	flusher http.Flusher
-	format  sinks.Format
+	w         http.ResponseWriter
+	flusher   http.Flusher
+	format    sinks.Format
+	schemaFmt encoders.Format
 }
 
 func (s *sseBatchSink) Write(entries []event.LogEntry) error {
 	if len(entries) == 0 {
 		return nil
 	}
+	// Apply schema mapping in-place when the request asked for one. Each
+	// entry's Raw becomes the schema-mapped JSON line so the client renders
+	// OCSF/UDM/ASIM lines without a separate code path.
+	if s.schemaFmt != encoders.FormatNative {
+		entries = encoders.ApplyToRaw(entries, s.schemaFmt)
+	}
+
 	var data string
 	if s.format == sinks.FormatRaw {
 		var sb strings.Builder

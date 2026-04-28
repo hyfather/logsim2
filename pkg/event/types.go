@@ -15,8 +15,13 @@ type LogEntry struct {
 	Source     string         `json:"source"`     // e.g. "web-service.vpc.subnet.host.svc"
 	Level      string         `json:"level"`      // DEBUG | INFO | WARN | ERROR | FATAL
 	Sourcetype string         `json:"sourcetype"` // "nodejs" | "mysql" | "vpc-flow" | ...
-	Raw        string         `json:"raw"`        // the rendered log line
-	Fields     map[string]any `json:"fields,omitempty"` // structured form of Raw
+	// Class is a generator-supplied hint that classifies the event for
+	// schema-aware encoders (OCSF/UDM/ASIM). Empty means "unclassified" and
+	// encoders fall back to a generic shape. Values are defined in
+	// pkg/encoders to avoid an import cycle from generators.
+	Class  string         `json:"class,omitempty"`
+	Raw    string         `json:"raw"`              // the rendered log line
+	Fields map[string]any `json:"fields,omitempty"` // structured form of Raw
 }
 
 // Flow represents synthesized network traffic on one connection for one tick.

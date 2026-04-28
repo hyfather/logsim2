@@ -1,4 +1,4 @@
-import type { LogEntry } from '@/types/logs'
+import type { LogEntry, LogFormat } from '@/types/logs'
 
 export interface LogsAtOpts {
   scenarioYaml: string
@@ -8,6 +8,8 @@ export interface LogsAtOpts {
   startTimeMs?: number
   seed?: number
   sourceFilter?: string
+  /** Wire schema applied per log entry. Defaults to "native" on the backend. */
+  format?: LogFormat
   signal?: AbortSignal
 }
 
@@ -46,6 +48,7 @@ export async function logsAt(opts: LogsAtOpts): Promise<LogEntry[]> {
       start_time_ms: opts.startTimeMs,
       seed: opts.seed ?? 0,
       source_filter: opts.sourceFilter ?? '*',
+      format: opts.format ?? 'native',
     }),
     signal: opts.signal,
   })

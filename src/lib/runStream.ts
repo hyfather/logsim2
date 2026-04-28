@@ -1,4 +1,4 @@
-import type { LogEntry } from '@/types/logs'
+import type { LogEntry, LogFormat } from '@/types/logs'
 import type { CriblPayload } from '@/lib/backendClient'
 
 export interface RunStreamOpts {
@@ -11,6 +11,8 @@ export interface RunStreamOpts {
   /** 1.0 = simulated wall-clock speed; 8.0 = 8× faster; 0 = as fast as possible. */
   rate?: number
   cribl?: CriblPayload
+  /** Wire schema applied per log entry. Defaults to "native" on the backend. */
+  format?: LogFormat
   signal?: AbortSignal
   onTick: (frame: { tick: number; ts: number; logs: LogEntry[] }) => void
   onDone: (summary: { totalLogs: number }) => void
@@ -64,6 +66,7 @@ export async function runStream(opts: RunStreamOpts): Promise<void> {
       source_filter: opts.sourceFilter ?? '*',
       rate: opts.rate,
       cribl: opts.cribl,
+      format: opts.format ?? 'native',
     }),
     signal: opts.signal,
   })

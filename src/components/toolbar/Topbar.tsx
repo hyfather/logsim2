@@ -90,6 +90,8 @@ export function Topbar() {
     clearActiveConnections,
     clearLogs,
     logBuffer,
+    outputFormat,
+    setOutputFormat,
   } = useSimulationStore()
   const {
     destinations,
@@ -324,6 +326,7 @@ export function Topbar() {
       seed: seedRef.current,
       rate: nextSpeed,
       cribl,
+      format: outputFormat,
       signal: ctrl.signal,
       onTick: ({ tick: t, logs }) => {
         setTick(t + 1)
@@ -348,7 +351,7 @@ export function Topbar() {
         setRunStatus('idle')
       },
     })
-  }, [addLogs, buildScenarioYaml, clearLogs, recordSent, setDestStatus, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, status])
+  }, [addLogs, buildScenarioYaml, clearLogs, outputFormat, recordSent, setDestStatus, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, status])
 
   const stopPlayback = useCallback(() => {
     stopBackend()
@@ -377,6 +380,7 @@ export function Topbar() {
         tickIntervalMs: 1000,
         startTimeMs: startMs,
         seed: (seedRef.current ||= Math.floor(Math.random() * 1e9)) + 1,
+        format: outputFormat,
       })
       simCursorRef.current = startMs + 1000
       if (result.length) addLogs(result)
@@ -386,7 +390,7 @@ export function Topbar() {
     } catch (err) {
       console.error('step failed:', err)
     }
-  }, [addLogs, buildScenarioYaml, setSimulatedTime, setTick, setTickCount, status])
+  }, [addLogs, buildScenarioYaml, outputFormat, setSimulatedTime, setTick, setTickCount, status])
 
   const handleReset = useCallback(() => {
     stopBackend()
@@ -683,6 +687,27 @@ export function Topbar() {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+
+        {/* Output schema toggle — generators emit a canonical event, the
+            backend maps it to Native / OCSF / (later) UDM / ASIM before the
+            line reaches the UI. Switching clears the buffer because formats
+            don't mix cleanly. */}
+        <div className="hidden shrink-0 items-center gap-0.5 rounded-md border border-slate-200 bg-slate-100 p-[2px] sm:flex">
+          {(['native', 'ocsf'] as const).map(f => (
+            <button
+              key={f}
+              type="button"
+              onClick={() => setOutputFormat(f)}
+              className={cn(
+                'rounded-[3px] px-2 py-[3px] font-mono text-[10.5px] font-semibold uppercase transition-colors',
+                outputFormat === f
+                  ? 'bg-white text-slate-900 shadow-[0_1px_2px_rgba(15,23,42,0.05)]'
+                  : 'text-slate-500 hover:text-slate-900',
+              )}
+              title={f === 'native' ? 'Generator-native log lines' : 'OCSF v1.x JSON events'}
+            >{f}</button>
+          ))}
+        </div>
 
         {/* Time multiplier — segmented on desktop, dropdown on mobile */}
         <div className="hidden shrink-0 items-center gap-0.5 rounded-md border border-slate-200 bg-slate-100 p-[2px] sm:flex">

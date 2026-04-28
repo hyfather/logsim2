@@ -24,6 +24,7 @@ export function ScrubbedLogs() {
   const edges = useScenarioStore(s => s.edges)
   const metadata = useScenarioStore(s => s.metadata)
   const liveLogs = useSimulationStore(s => s.logBuffer)
+  const outputFormat = useSimulationStore(s => s.outputFormat)
 
   const [scrubLogs, setScrubLogs] = useState<LogEntry[]>([])
   const [filter, setFilter] = useState('')
@@ -57,6 +58,7 @@ export function ScrubbedLogs() {
           to,
           tickIntervalMs: 1000,
           seed: 0,
+          format: outputFormat,
           signal: ctrl.signal,
         })
         setScrubLogs(logs)
@@ -69,7 +71,7 @@ export function ScrubbedLogs() {
       clearTimeout(handle)
       ctrl.abort()
     }
-  }, [tick, episode, nodes, edges, metadata, isRunning])
+  }, [tick, episode, nodes, edges, metadata, isRunning, outputFormat])
 
   const logs = isRunning ? liveLogs.slice(-MAX_DISPLAY) : scrubLogs.slice(-MAX_DISPLAY)
 
