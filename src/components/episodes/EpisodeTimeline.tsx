@@ -1,6 +1,6 @@
 'use client'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Minus, Plus, X, ChevronUp } from 'lucide-react'
+import { Minus, Plus, Trash2, ChevronUp, GripVertical } from 'lucide-react'
 import { useEpisodeStore } from '@/store/useEpisodeStore'
 import { useScenarioStore } from '@/store/useScenarioStore'
 import { useUIStore } from '@/store/useUIStore'
@@ -10,12 +10,22 @@ import { generateId } from '@/lib/id'
 import { startPointerDrag } from '@/lib/pointerDrag'
 import { useIsMobile } from '@/hooks/useMediaQuery'
 import { cn } from '@/lib/utils'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
+import { Textarea } from '@/components/ui/textarea'
 
 const LANE_HEIGHT = 44
 const LABEL_COL_DESKTOP = 160
 const LABEL_COL_MOBILE = 108
-const NARR_TRACK_H = 32
+const COMMENTS_TRACK_H = 32
 const RULER_H = 22
+const SCRUBBER_H = 22
 
 const ZOOM_MIN = 0.2
 const ZOOM_MAX = 4
@@ -81,142 +91,195 @@ function Ruler({ totalTicks, pxPerTick, onSeek }: {
   )
 }
 
-// ---------- Narrative track ----------
-function NarrativeTrack({ widthPx, pxPerTick, beats, duration, onSeek, onUpsert, onDelete }: {
+// ---------- Comment edit modal ----------
+type CommentEditState =
+  | { mode: 'add'; tick: number }
+  | { mode: 'edit'; beat: NarrativeBeat }
+
+function CommentEditDialog({
+  state, duration, onClose, onSave, onDelete,
+}: {
+  state: CommentEditState | null
+  duration: number
+  onClose: () => void
+  onSave: (b: NarrativeBeat) => void
+  onDelete: (id: string) => void
+}) {
+  const [text, setText] = useState('')
+  const [tick, setTick] = useState(0)
+
+  useEffect(() => {
+    if (!state) return
+    if (state.mode === 'edit') {
+      setText(state.beat.text)
+      setTick(state.beat.tick)
+    } else {
+      setText('')
+      setTick(state.tick)
+    }
+  }, [state])
+
+  const open = state !== null
+  const isEdit = state?.mode === 'edit'
+
+  const save = () => {
+    if (!state) return
+    const trimmed = text.trim()
+    if (!trimmed) return
+    const clampedTick = Math.max(0, Math.min(duration, Math.round(tick)))
+    if (state.mode === 'edit') {
+      onSave({ ...state.beat, tick: clampedTick, text: trimmed })
+    } else {
+      onSave({ id: generateId(), tick: clampedTick, text: trimmed })
+    }
+    onClose()
+  }
+
+  const remove = () => {
+    if (state?.mode === 'edit') {
+      onDelete(state.beat.id)
+      onClose()
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={v => { if (!v) onClose() }}>
+      <DialogContent className="max-w-sm gap-3 p-4 sm:p-5">
+        <DialogHeader className="space-y-1">
+          <DialogTitle className="text-sm font-semibold">
+            {isEdit ? 'Edit comment' : 'Add comment'}
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-2">
+          <label className="block">
+            <span className="mb-1 block text-[10.5px] font-semibold uppercase tracking-wider text-slate-500">
+              Time
+            </span>
+            <div className="flex items-center gap-2">
+              <span className="rounded bg-indigo-100 px-2 py-1 font-mono text-[11px] font-semibold text-indigo-700">
+                {fmtTime(Math.max(0, Math.min(duration, Math.round(tick))))}
+              </span>
+              <input
+                type="number"
+                min={0}
+                max={duration}
+                step={1}
+                value={tick}
+                onChange={e => setTick(Number(e.target.value))}
+                className="w-24 rounded border border-slate-200 bg-white px-2 py-1 font-mono text-[11px] text-slate-700 outline-none focus:border-indigo-400"
+              />
+              <span className="font-mono text-[10.5px] text-slate-400">s</span>
+            </div>
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[10.5px] font-semibold uppercase tracking-wider text-slate-500">
+              Comment
+            </span>
+            <Textarea
+              autoFocus
+              rows={3}
+              value={text}
+              onChange={e => setText(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save() }
+                if (e.key === 'Escape') { e.preventDefault(); onClose() }
+              }}
+              placeholder="What's happening at this moment?"
+              className="min-h-[72px] resize-none text-[12px]"
+            />
+          </label>
+        </div>
+        <DialogFooter className="flex-row items-center justify-between gap-2 sm:justify-between">
+          <div>
+            {isEdit && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={remove}
+                className="h-8 gap-1 px-2 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+              >
+                <Trash2 className="size-3.5" />
+                Delete
+              </Button>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button type="button" variant="outline" size="sm" onClick={onClose} className="h-8">
+              Cancel
+            </Button>
+            <Button type="button" size="sm" onClick={save} disabled={!text.trim()} className="h-8">
+              Save
+            </Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ---------- Comments track ----------
+function CommentsTrack({ widthPx, pxPerTick, beats, duration, onAdd, onEdit }: {
   widthPx: number
   pxPerTick: number
   beats: NarrativeBeat[]
   duration: number
-  onSeek: (t: number) => void
-  onUpsert: (b: NarrativeBeat) => void
-  onDelete: (id: string) => void
+  onAdd: (tick: number) => void
+  onEdit: (beat: NarrativeBeat) => void
 }) {
-  const [editing, setEditing] = useState<string | null>(null)
-  const [editText, setEditText] = useState('')
-  const [adding, setAdding] = useState<{ tick: number } | null>(null)
-
   const onTrackClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement
-    if (target.closest('[data-narr-marker]') || target.closest('input')) return
+    if (target.closest('[data-comment-marker]')) return
     const rect = e.currentTarget.getBoundingClientRect()
     const x = e.clientX - rect.left
     const tick = Math.max(0, Math.min(duration, Math.round(x / pxPerTick)))
-    setAdding({ tick })
-    setEditText('')
-  }
-
-  const commit = () => {
-    if (adding) {
-      if (editText.trim()) {
-        onUpsert({ id: generateId(), tick: adding.tick, text: editText.trim() })
-      }
-      setAdding(null); setEditText('')
-    } else if (editing) {
-      const beat = beats.find(b => b.id === editing)
-      if (beat && editText.trim()) onUpsert({ ...beat, text: editText.trim() })
-      setEditing(null); setEditText('')
-    }
+    onAdd(tick)
   }
 
   return (
     <div
       className="relative cursor-crosshair border-b border-slate-200 bg-gradient-to-b from-slate-50 to-slate-100/50 hover:bg-indigo-50/30"
-      style={{ width: widthPx, height: NARR_TRACK_H }}
+      style={{ width: widthPx, height: COMMENTS_TRACK_H }}
       onClick={onTrackClick}
     >
       {beats.map((m, i) => (
         <div
           key={m.id}
-          data-narr-marker
+          data-comment-marker
           className="group pointer-events-none absolute top-0 bottom-0 flex -translate-x-1/2 flex-col items-center"
           style={{ left: m.tick * pxPerTick, zIndex: 10 + i }}
         >
-          {editing === m.id ? (
-            <div className="pointer-events-auto mt-1.5 flex items-center overflow-hidden rounded-full border-[1.5px] border-indigo-500 bg-white shadow-[0_0_0_3px_rgba(99,102,241,0.15)]">
-              <span className="bg-indigo-100 px-2 py-0.5 font-mono text-[10.5px] font-semibold text-indigo-700">
+          <button
+            onClick={e => { e.stopPropagation(); onEdit(m) }}
+            title={`${m.text} @ ${fmtTime(m.tick)} — click to edit`}
+            className="pointer-events-auto mt-1.5 inline-flex h-5 items-center gap-1 rounded-full border border-indigo-300 bg-white/95 px-1.5 font-mono text-[10px] font-semibold text-indigo-700 shadow-sm transition-colors hover:border-indigo-500 hover:bg-indigo-50 hover:shadow group-hover:z-50"
+          >
+            <span className="size-1.5 rounded-full bg-indigo-500" />
+            {fmtTime(m.tick)}
+          </button>
+          <div className="pointer-events-none absolute left-1/2 top-7 z-50 hidden -translate-x-1/2 group-hover:block">
+            <div className="flex max-w-[260px] items-center gap-2 whitespace-nowrap rounded-lg border border-indigo-200 bg-white px-2.5 py-1.5 shadow-[0_8px_24px_-12px_rgba(15,23,42,0.4)]">
+              <span className="shrink-0 rounded bg-indigo-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-indigo-700">
                 {fmtTime(m.tick)}
               </span>
-              <input
-                autoFocus
-                className="w-32 bg-transparent px-2 py-0.5 text-[11px] outline-none sm:w-44"
-                value={editText}
-                onChange={e => setEditText(e.target.value)}
-                onBlur={commit}
-                onKeyDown={e => {
-                  if (e.key === 'Enter') commit()
-                  if (e.key === 'Escape') { setEditing(null); setEditText('') }
-                }}
-                onClick={e => e.stopPropagation()}
-              />
+              <span className="overflow-hidden text-ellipsis text-[11px] font-medium text-indigo-900">
+                {m.text}
+              </span>
             </div>
-          ) : (
-            <>
-              <button
-                onClick={e => { e.stopPropagation(); onSeek(m.tick) }}
-                onDoubleClick={e => { e.stopPropagation(); setEditing(m.id); setEditText(m.text) }}
-                title={`${m.text} @ ${fmtTime(m.tick)} — double-click to edit`}
-                className="pointer-events-auto mt-1.5 inline-flex h-5 items-center gap-1 rounded-full border border-indigo-300 bg-white/95 px-1.5 font-mono text-[10px] font-semibold text-indigo-700 shadow-sm transition-colors hover:border-indigo-500 hover:bg-indigo-50 hover:shadow group-hover:z-50"
-              >
-                <span className="size-1.5 rounded-full bg-indigo-500" />
-                {fmtTime(m.tick)}
-              </button>
-              <div className="pointer-events-none absolute left-1/2 top-7 z-50 hidden -translate-x-1/2 group-hover:block">
-                <div className="flex max-w-[260px] items-center gap-2 whitespace-nowrap rounded-lg border border-indigo-200 bg-white px-2.5 py-1.5 shadow-[0_8px_24px_-12px_rgba(15,23,42,0.4)]">
-                  <span className="shrink-0 rounded bg-indigo-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-indigo-700">
-                    {fmtTime(m.tick)}
-                  </span>
-                  <span className="overflow-hidden text-ellipsis text-[11px] font-medium text-indigo-900">
-                    {m.text}
-                  </span>
-                </div>
-              </div>
-              <button
-                onClick={e => { e.stopPropagation(); onDelete(m.id) }}
-                className="pointer-events-auto absolute top-0.5 -right-4 hidden size-4 items-center justify-center rounded-full border border-slate-300 bg-white text-[11px] leading-none text-slate-500 hover:border-red-300 hover:bg-red-50 hover:text-red-600 group-hover:flex"
-                title="Delete beat"
-              >
-                <X className="size-2.5" />
-              </button>
-            </>
-          )}
-        </div>
-      ))}
-      {adding && (
-        <div
-          className="absolute top-0 bottom-0 z-10 flex -translate-x-1/2 flex-col items-center"
-          style={{ left: adding.tick * pxPerTick }}
-        >
-          <div className="mt-1.5 flex items-center overflow-hidden rounded-full border-[1.5px] border-emerald-500 bg-white shadow-[0_0_0_3px_rgba(34,197,94,0.15)]">
-            <span className="bg-emerald-100 px-2 py-0.5 font-mono text-[10.5px] font-semibold text-emerald-700">
-              {fmtTime(adding.tick)}
-            </span>
-            <input
-              autoFocus
-              placeholder="Type a narrative beat…"
-              className="w-32 bg-transparent px-2 py-0.5 text-[11px] outline-none sm:w-44"
-              value={editText}
-              onChange={e => setEditText(e.target.value)}
-              onBlur={commit}
-              onKeyDown={e => {
-                if (e.key === 'Enter') commit()
-                if (e.key === 'Escape') { setAdding(null); setEditText('') }
-              }}
-              onClick={e => e.stopPropagation()}
-            />
           </div>
         </div>
-      )}
-      {beats.length === 0 && !adding && (
+      ))}
+      {beats.length === 0 && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[10.5px] italic text-slate-400">
-          Click to drop a narrative beat
+          Click to drop a comment
         </div>
       )}
     </div>
   )
 }
 
-// ---------- Narrative guides overlay (dashed verticals over all lanes) ----------
-function NarrativeGuides({ beats, pxPerTick, height, widthPx }: {
+// ---------- Comment guides overlay (dashed verticals over all lanes) ----------
+function CommentGuides({ beats, pxPerTick, height, widthPx }: {
   beats: NarrativeBeat[]
   pxPerTick: number
   height: number
@@ -381,41 +444,73 @@ function ServiceLane({
   )
 }
 
-// ---------- Playhead ----------
-function Playhead({ tick, pxPerTick, height, onScrub }: {
+// ---------- Playhead vertical line (spans all lanes) ----------
+function PlayheadLine({ tick, pxPerTick, height }: {
   tick: number
   pxPerTick: number
   height: number
-  onScrub: (t: number) => void
 }) {
-  const onPointerDown = (e: React.PointerEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    const startTick = tick
-    startPointerDrag(e, {
-      onMove: ({ dx }) => onScrub(startTick + dx / pxPerTick),
-    })
-  }
   return (
     <div
       className="pointer-events-none absolute top-0 z-20"
       style={{ left: tick * pxPerTick, height }}
     >
-      <div className="absolute left-1/2 -translate-x-1/2 -top-0 z-30 -mt-0.5 rounded bg-blue-600 px-1.5 py-0.5 font-mono text-[10px] text-white shadow">
-        {fmtTime(Math.round(tick))}
+      <div className="absolute left-0 top-0 -ml-px h-full w-0.5 bg-blue-500" />
+    </div>
+  )
+}
+
+// ---------- Dedicated scrubber swimlane (handle lives here) ----------
+function ScrubberLane({ tick, pxPerTick, widthPx, duration, onScrub }: {
+  tick: number
+  pxPerTick: number
+  widthPx: number
+  duration: number
+  onScrub: (t: number) => void
+}) {
+  const seekFromClientX = (clientX: number, rect: DOMRect) => {
+    const x = clientX - rect.left
+    onScrub(Math.max(0, Math.min(duration, x / pxPerTick)))
+  }
+  const onLanePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if ((e.target as HTMLElement).closest('[data-scrubber-handle]')) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    seekFromClientX(e.clientX, rect)
+    startPointerDrag(e, {
+      onMove: ({ event: ev }) => seekFromClientX(ev.clientX, rect),
+    })
+  }
+  const onHandlePointerDown = (e: React.PointerEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const startTick = tick
+    startPointerDrag(e, {
+      onMove: ({ dx }) => onScrub(Math.max(0, Math.min(duration, startTick + dx / pxPerTick))),
+    })
+  }
+  return (
+    <div
+      className="relative cursor-pointer touch-none border-b border-slate-200 bg-gradient-to-b from-blue-50/60 to-blue-100/40"
+      style={{ width: widthPx, height: SCRUBBER_H }}
+      onPointerDown={onLanePointerDown}
+      title="Drag to scrub"
+    >
+      {/* Subtle baseline groove */}
+      <div className="pointer-events-none absolute left-0 right-0 top-1/2 h-px -translate-y-1/2 bg-blue-200/70" />
+      {/* Handle */}
+      <div
+        data-scrubber-handle
+        onPointerDown={onHandlePointerDown}
+        className="absolute top-0 bottom-0 z-10 flex -translate-x-1/2 items-center"
+        style={{ left: tick * pxPerTick }}
+      >
+        <div className="pointer-events-auto flex h-[18px] cursor-ew-resize items-center gap-0.5 rounded-md border border-blue-600 bg-blue-600 px-1 text-white shadow-sm transition-colors hover:bg-blue-700">
+          <GripVertical className="size-3 opacity-90" />
+          <span className="font-mono text-[10px] font-semibold tabular-nums">
+            {fmtTime(Math.round(tick))}
+          </span>
+        </div>
       </div>
-      <div className="absolute left-0 top-4 -ml-px h-[calc(100%-1rem)] w-0.5 bg-blue-500" />
-      {/* Visible handle (small, cosmetic) */}
-      <div
-        aria-hidden
-        className="pointer-events-none absolute left-0 top-0 -ml-2 size-4 rounded-full border-2 border-blue-500 bg-white shadow"
-      />
-      {/* Larger transparent hit area so the scrubber is grabbable on touch */}
-      <div
-        onPointerDown={onPointerDown}
-        title="Drag to scrub"
-        className="pointer-events-auto absolute left-0 top-0 -ml-5 -mt-1 h-10 w-10 cursor-ew-resize touch-none"
-      />
     </div>
   )
 }
@@ -438,6 +533,8 @@ export function EpisodeTimeline({ onCollapse }: { onCollapse?: () => void } = {}
   const selectNode = useUIStore(s => s.selectNode)
   const selectedNodeId = useUIStore(s => s.selectedNodeId)
   const setLogPanelOpen = useUIStore(s => s.setLogPanelOpen)
+
+  const [commentEdit, setCommentEdit] = useState<CommentEditState | null>(null)
 
   // The "active" service is the one whose details panel is currently open —
   // either because that lane (node) was clicked, or because a behavior block
@@ -537,11 +634,15 @@ export function EpisodeTimeline({ onCollapse }: { onCollapse?: () => void } = {}
         <div className="relative flex" style={{ width: labelCol + widthPx, minWidth: '100%' }}>
           {/* Sticky left labels column */}
           <div className="sticky left-0 z-20 shrink-0 border-r border-slate-200 bg-slate-50" style={{ width: labelCol }}>
-            <div className="border-b border-slate-200 px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500" style={{ height: NARR_TRACK_H, lineHeight: `${NARR_TRACK_H}px` }}>
-              Narrative
+            <div className="border-b border-slate-200 px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500" style={{ height: COMMENTS_TRACK_H, lineHeight: `${COMMENTS_TRACK_H}px` }}>
+              Comments
             </div>
             <div className="border-b border-slate-200 px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500" style={{ height: RULER_H, lineHeight: `${RULER_H}px` }}>
               Time
+            </div>
+            <div className="flex items-center gap-1.5 border-b border-slate-200 px-3 text-[10px] font-semibold uppercase tracking-wider text-blue-600" style={{ height: SCRUBBER_H }}>
+              <GripVertical className="size-3 text-blue-500" />
+              Scrubber
             </div>
             {services.map(s => (
               <div
@@ -574,22 +675,28 @@ export function EpisodeTimeline({ onCollapse }: { onCollapse?: () => void } = {}
 
           {/* Right timeline content — natural width = widthPx */}
           <div className="relative" style={{ width: widthPx }}>
-            <NarrativeTrack
+            <CommentsTrack
               widthPx={widthPx}
               pxPerTick={pxPerTick}
               beats={episode.narrative}
               duration={episode.duration}
-              onSeek={setTick}
-              onUpsert={upsertBeat}
-              onDelete={deleteBeat}
+              onAdd={(t) => setCommentEdit({ mode: 'add', tick: t })}
+              onEdit={(b) => setCommentEdit({ mode: 'edit', beat: b })}
             />
             <Ruler
               totalTicks={episode.duration}
               pxPerTick={pxPerTick}
               onSeek={setTick}
             />
+            <ScrubberLane
+              tick={tick}
+              pxPerTick={pxPerTick}
+              widthPx={widthPx}
+              duration={episode.duration}
+              onScrub={setTick}
+            />
             <div className="relative" style={{ width: widthPx }}>
-              <NarrativeGuides
+              <CommentGuides
                 beats={episode.narrative}
                 pxPerTick={pxPerTick}
                 height={lanesHeight}
@@ -614,15 +721,22 @@ export function EpisodeTimeline({ onCollapse }: { onCollapse?: () => void } = {}
                 />
               ))}
             </div>
-            <Playhead
+            <PlayheadLine
               tick={tick}
               pxPerTick={pxPerTick}
-              height={NARR_TRACK_H + RULER_H + lanesHeight}
-              onScrub={setTick}
+              height={COMMENTS_TRACK_H + RULER_H + SCRUBBER_H + lanesHeight}
             />
           </div>
         </div>
       </div>
+
+      <CommentEditDialog
+        state={commentEdit}
+        duration={episode.duration}
+        onClose={() => setCommentEdit(null)}
+        onSave={upsertBeat}
+        onDelete={deleteBeat}
+      />
     </div>
   )
 }
