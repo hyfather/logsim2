@@ -1,5 +1,6 @@
 'use client'
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Minus, Plus, Trash2, ChevronUp, GripVertical } from 'lucide-react'
 import { useEpisodeStore } from '@/store/useEpisodeStore'
 import { useScenarioStore } from '@/store/useScenarioStore'
@@ -10,13 +11,6 @@ import { generateId } from '@/lib/id'
 import { startPointerDrag } from '@/lib/pointerDrag'
 import { useIsMobile } from '@/hooks/useMediaQuery'
 import { cn } from '@/lib/utils'
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 
@@ -91,12 +85,17 @@ function Ruler({ totalTicks, pxPerTick, onSeek }: {
   )
 }
 
-// ---------- Comment edit modal ----------
-type CommentEditState =
-  | { mode: 'add'; tick: number }
-  | { mode: 'edit'; beat: NarrativeBeat }
+// ---------- Comment edit popover ----------
+interface AnchorRect { left: number; top: number; right: number; bottom: number; width: number; height: number }
 
-function CommentEditDialog({
+type CommentEditState =
+  | { mode: 'add'; tick: number; anchor: AnchorRect }
+  | { mode: 'edit'; beat: NarrativeBeat; anchor: AnchorRect }
+
+const POPOVER_WIDTH = 280
+const POPOVER_GAP = 6
+
+function CommentEditPopover({
   state, duration, onClose, onSave, onDelete,
 }: {
   state: CommentEditState | null
@@ -107,6 +106,8 @@ function CommentEditDialog({
 }) {
   const [text, setText] = useState('')
   const [tick, setTick] = useState(0)
+  const popoverRef = useRef<HTMLDivElement | null>(null)
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
 
   useEffect(() => {
     if (!state) return
@@ -119,11 +120,53 @@ function CommentEditDialog({
     }
   }, [state])
 
-  const open = state !== null
-  const isEdit = state?.mode === 'edit'
+  // Position the popover near the anchor, clamped within the viewport.
+  useLayoutEffect(() => {
+    if (!state || typeof window === 'undefined') return
+    const a = state.anchor
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    const node = popoverRef.current
+    const height = node?.offsetHeight ?? 220
+    const anchorCenter = a.left + a.width / 2
+    let left = anchorCenter - POPOVER_WIDTH / 2
+    left = Math.max(8, Math.min(vw - POPOVER_WIDTH - 8, left))
+    let top = a.bottom + POPOVER_GAP
+    if (top + height > vh - 8) {
+      // Flip above if there isn't room below.
+      top = Math.max(8, a.top - POPOVER_GAP - height)
+    }
+    setPos({ left, top })
+  }, [state])
+
+  // Outside-click dismissal.
+  useEffect(() => {
+    if (!state) return
+    const onPointer = (e: PointerEvent) => {
+      const target = e.target as Node | null
+      if (popoverRef.current && target && !popoverRef.current.contains(target)) {
+        onClose()
+      }
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    // Defer one tick so the click that opened the popover doesn't immediately close it.
+    const id = window.setTimeout(() => {
+      document.addEventListener('pointerdown', onPointer, true)
+    }, 0)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      window.clearTimeout(id)
+      document.removeEventListener('pointerdown', onPointer, true)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [state, onClose])
+
+  if (!state || typeof document === 'undefined') return null
+  const isEdit = state.mode === 'edit'
 
   const save = () => {
-    if (!state) return
     const trimmed = text.trim()
     if (!trimmed) return
     const clampedTick = Math.max(0, Math.min(duration, Math.round(tick)))
@@ -136,86 +179,89 @@ function CommentEditDialog({
   }
 
   const remove = () => {
-    if (state?.mode === 'edit') {
+    if (state.mode === 'edit') {
       onDelete(state.beat.id)
       onClose()
     }
   }
 
-  return (
-    <Dialog open={open} onOpenChange={v => { if (!v) onClose() }}>
-      <DialogContent className="max-w-sm gap-3 p-4 sm:p-5">
-        <DialogHeader className="space-y-1">
-          <DialogTitle className="text-sm font-semibold">
-            {isEdit ? 'Edit comment' : 'Add comment'}
-          </DialogTitle>
-        </DialogHeader>
-        <div className="space-y-2">
-          <label className="block">
-            <span className="mb-1 block text-[10.5px] font-semibold uppercase tracking-wider text-slate-500">
-              Time
-            </span>
-            <div className="flex items-center gap-2">
-              <span className="rounded bg-indigo-100 px-2 py-1 font-mono text-[11px] font-semibold text-indigo-700">
-                {fmtTime(Math.max(0, Math.min(duration, Math.round(tick))))}
-              </span>
-              <input
-                type="number"
-                min={0}
-                max={duration}
-                step={1}
-                value={tick}
-                onChange={e => setTick(Number(e.target.value))}
-                className="w-24 rounded border border-slate-200 bg-white px-2 py-1 font-mono text-[11px] text-slate-700 outline-none focus:border-indigo-400"
-              />
-              <span className="font-mono text-[10.5px] text-slate-400">s</span>
-            </div>
-          </label>
-          <label className="block">
-            <span className="mb-1 block text-[10.5px] font-semibold uppercase tracking-wider text-slate-500">
-              Comment
-            </span>
-            <Textarea
-              autoFocus
-              rows={3}
-              value={text}
-              onChange={e => setText(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save() }
-                if (e.key === 'Escape') { e.preventDefault(); onClose() }
-              }}
-              placeholder="What's happening at this moment?"
-              className="min-h-[72px] resize-none text-[12px]"
-            />
-          </label>
+  return createPortal(
+    <div
+      ref={popoverRef}
+      role="dialog"
+      aria-label={isEdit ? 'Edit comment' : 'Add comment'}
+      className="fixed z-50 flex flex-col gap-2.5 rounded-lg border border-slate-200 bg-white p-3 shadow-[0_12px_32px_-12px_rgba(15,23,42,0.35)]"
+      style={{
+        left: pos?.left ?? -9999,
+        top: pos?.top ?? -9999,
+        width: POPOVER_WIDTH,
+        visibility: pos ? 'visible' : 'hidden',
+      }}
+      onPointerDown={e => e.stopPropagation()}
+    >
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+          {isEdit ? 'Edit comment' : 'Add comment'}
+        </span>
+        <div className="flex items-center gap-1">
+          <span className="rounded bg-indigo-100 px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-indigo-700">
+            {fmtTime(Math.max(0, Math.min(duration, Math.round(tick))))}
+          </span>
+          <input
+            type="number"
+            min={0}
+            max={duration}
+            step={1}
+            value={tick}
+            onChange={e => setTick(Number(e.target.value))}
+            className="w-14 rounded border border-slate-200 bg-white px-1.5 py-0.5 font-mono text-[10.5px] text-slate-700 outline-none focus:border-indigo-400"
+            title="Tick"
+          />
         </div>
-        <DialogFooter className="flex-row items-center justify-between gap-2 sm:justify-between">
-          <div>
-            {isEdit && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={remove}
-                className="h-8 gap-1 px-2 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
-              >
-                <Trash2 className="size-3.5" />
-                Delete
-              </Button>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={onClose} className="h-8">
-              Cancel
+      </div>
+      <Textarea
+        autoFocus
+        rows={3}
+        value={text}
+        onChange={e => setText(e.target.value)}
+        onKeyDown={e => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save() }
+          if (e.key === 'Escape') { e.preventDefault(); onClose() }
+        }}
+        placeholder="What's happening at this moment?"
+        className="min-h-[68px] resize-none text-[12px]"
+      />
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          {isEdit && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={remove}
+              className="h-7 gap-1 px-2 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+            >
+              <Trash2 className="size-3.5" />
+              Delete
             </Button>
-            <Button type="button" size="sm" onClick={save} disabled={!text.trim()} className="h-8">
-              Save
-            </Button>
-          </div>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Button type="button" variant="outline" size="sm" onClick={onClose} className="h-7">
+            Cancel
+          </Button>
+          <Button type="button" size="sm" onClick={save} disabled={!text.trim()} className="h-7">
+            Save
+          </Button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   )
+}
+
+function rectToAnchor(r: DOMRect): AnchorRect {
+  return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }
 }
 
 // ---------- Comments track ----------
@@ -224,8 +270,8 @@ function CommentsTrack({ widthPx, pxPerTick, beats, duration, onAdd, onEdit }: {
   pxPerTick: number
   beats: NarrativeBeat[]
   duration: number
-  onAdd: (tick: number) => void
-  onEdit: (beat: NarrativeBeat) => void
+  onAdd: (tick: number, anchor: AnchorRect) => void
+  onEdit: (beat: NarrativeBeat, anchor: AnchorRect) => void
 }) {
   const onTrackClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement
@@ -233,7 +279,16 @@ function CommentsTrack({ widthPx, pxPerTick, beats, duration, onAdd, onEdit }: {
     const rect = e.currentTarget.getBoundingClientRect()
     const x = e.clientX - rect.left
     const tick = Math.max(0, Math.min(duration, Math.round(x / pxPerTick)))
-    onAdd(tick)
+    // Anchor a thin vertical slice at the clicked position so the popover lines up.
+    const anchor: AnchorRect = {
+      left: e.clientX - 1,
+      right: e.clientX + 1,
+      top: rect.top,
+      bottom: rect.bottom,
+      width: 2,
+      height: rect.height,
+    }
+    onAdd(tick, anchor)
   }
 
   return (
@@ -250,7 +305,11 @@ function CommentsTrack({ widthPx, pxPerTick, beats, duration, onAdd, onEdit }: {
           style={{ left: m.tick * pxPerTick, zIndex: 10 + i }}
         >
           <button
-            onClick={e => { e.stopPropagation(); onEdit(m) }}
+            onClick={e => {
+              e.stopPropagation()
+              const r = (e.currentTarget as HTMLButtonElement).getBoundingClientRect()
+              onEdit(m, rectToAnchor(r))
+            }}
             title={`${m.text} @ ${fmtTime(m.tick)} — click to edit`}
             className="pointer-events-auto mt-1.5 inline-flex h-5 items-center gap-1 rounded-full border border-indigo-300 bg-white/95 px-1.5 font-mono text-[10px] font-semibold text-indigo-700 shadow-sm transition-colors hover:border-indigo-500 hover:bg-indigo-50 hover:shadow group-hover:z-50"
           >
@@ -497,12 +556,15 @@ function ScrubberLane({ tick, pxPerTick, widthPx, duration, onScrub }: {
     >
       {/* Subtle baseline groove */}
       <div className="pointer-events-none absolute left-0 right-0 top-1/2 h-px -translate-y-1/2 bg-blue-200/70" />
-      {/* Handle */}
+      {/* Handle — clamped so it stays fully visible at the 0:00 edge */}
       <div
         data-scrubber-handle
         onPointerDown={onHandlePointerDown}
-        className="absolute top-0 bottom-0 z-10 flex -translate-x-1/2 items-center"
-        style={{ left: tick * pxPerTick }}
+        className="absolute top-0 bottom-0 z-10 flex items-center"
+        style={{
+          left: tick * pxPerTick,
+          transform: `translateX(max(-50%, ${-tick * pxPerTick}px))`,
+        }}
       >
         <div className="pointer-events-auto flex h-[18px] cursor-ew-resize items-center gap-0.5 rounded-md border border-blue-600 bg-blue-600 px-1 text-white shadow-sm transition-colors hover:bg-blue-700">
           <GripVertical className="size-3 opacity-90" />
@@ -680,8 +742,8 @@ export function EpisodeTimeline({ onCollapse }: { onCollapse?: () => void } = {}
               pxPerTick={pxPerTick}
               beats={episode.narrative}
               duration={episode.duration}
-              onAdd={(t) => setCommentEdit({ mode: 'add', tick: t })}
-              onEdit={(b) => setCommentEdit({ mode: 'edit', beat: b })}
+              onAdd={(t, anchor) => setCommentEdit({ mode: 'add', tick: t, anchor })}
+              onEdit={(b, anchor) => setCommentEdit({ mode: 'edit', beat: b, anchor })}
             />
             <Ruler
               totalTicks={episode.duration}
@@ -730,7 +792,7 @@ export function EpisodeTimeline({ onCollapse }: { onCollapse?: () => void } = {}
         </div>
       </div>
 
-      <CommentEditDialog
+      <CommentEditPopover
         state={commentEdit}
         duration={episode.duration}
         onClose={() => setCommentEdit(null)}
