@@ -120,6 +120,11 @@ export function ScrubbedLogs() {
 
   const sparklines = useMemo(() => buildSparklines(logs, allChannels), [logs, allChannels])
 
+  const commonAffixes = useMemo(
+    () => computeCommonAffixes(sparklines.map(s => s.channel)),
+    [sparklines],
+  )
+
   useEffect(() => {
     if (follow && bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight
   }, [filtered, follow])
@@ -156,22 +161,41 @@ export function ScrubbedLogs() {
             <span>Volume by source</span>
             <span className="font-mono">{sparklines.length} {sparklines.length === 1 ? 'source' : 'sources'}</span>
           </div>
+          {(commonAffixes.prefix || commonAffixes.suffix) && (
+            <div
+              className="mb-1 truncate font-mono text-[9px] text-slate-400"
+              title={`Shared by all sources: ${commonAffixes.prefix}…${commonAffixes.suffix}`}
+            >
+              {commonAffixes.prefix && <span>{commonAffixes.prefix}</span>}
+              <span className="text-slate-300">…</span>
+              {commonAffixes.suffix && <span>{commonAffixes.suffix}</span>}
+            </div>
+          )}
           <div className="space-y-0.5">
             {sparklines.map(s => {
               const active = selectedChannels.size === 0 || selectedChannels.has(s.channel)
+              const distinct = s.channel.slice(
+                commonAffixes.prefix.length,
+                s.channel.length - commonAffixes.suffix.length,
+              ) || s.channel
               return (
                 <button
                   key={s.channel}
                   onClick={() => toggleChannel(s.channel)}
                   className={cn(
-                    'flex w-full items-center gap-2 rounded px-1 py-0.5 text-left text-[10px] transition-colors hover:bg-slate-100',
+                    'group relative flex w-full items-center gap-2 rounded px-1 py-0.5 text-left text-[10px] transition-colors hover:bg-slate-100',
                     !active && 'opacity-40',
                   )}
                   title={`${s.channel} — ${s.total} entries (click to filter)`}
                 >
-                  <span className="w-32 shrink-0 truncate font-mono text-slate-700">{s.channel}</span>
+                  <span className="w-32 shrink-0 truncate font-mono text-slate-700">{distinct}</span>
                   <Sparkline buckets={s.buckets} max={s.max} />
                   <span className="w-10 shrink-0 text-right font-mono tabular-nums text-slate-500">{s.total}</span>
+                  {distinct !== s.channel && (
+                    <span className="pointer-events-none absolute left-1 top-full z-10 hidden whitespace-nowrap rounded border border-slate-200 bg-white px-1.5 py-0.5 font-mono text-[10px] text-slate-700 shadow-sm group-hover:block">
+                      {s.channel}
+                    </span>
+                  )}
                 </button>
               )
             })}
@@ -311,6 +335,33 @@ interface SparkSeries {
   buckets: number[]
   total: number
   max: number
+}
+
+const AFFIX_DELIMS = '.-_:/'
+
+function computeCommonAffixes(channels: string[]): { prefix: string; suffix: string } {
+  if (channels.length < 2) return { prefix: '', suffix: '' }
+  let prefix = channels[0]
+  let suffix = channels[0]
+  for (let i = 1; i < channels.length; i++) {
+    const c = channels[i]
+    while (prefix && !c.startsWith(prefix)) prefix = prefix.slice(0, -1)
+    while (suffix && !c.endsWith(suffix)) suffix = suffix.slice(1)
+    if (!prefix && !suffix) break
+  }
+  // Snap to delimiter boundaries so we don't cut mid-segment.
+  let pi = prefix.length
+  while (pi > 0 && !AFFIX_DELIMS.includes(prefix[pi - 1])) pi--
+  prefix = prefix.slice(0, pi)
+  let si = 0
+  while (si < suffix.length && !AFFIX_DELIMS.includes(suffix[si])) si++
+  suffix = suffix.slice(si)
+  // Bail out if stripping would empty any label or the saving is trivial.
+  if (prefix.length + suffix.length < 4) return { prefix: '', suffix: '' }
+  for (const c of channels) {
+    if (c.length - prefix.length - suffix.length <= 0) return { prefix: '', suffix: '' }
+  }
+  return { prefix, suffix }
 }
 
 function buildSparklines(logs: LogEntry[], channels: string[]): SparkSeries[] {
