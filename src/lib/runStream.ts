@@ -52,35 +52,48 @@ interface ErrorFrame {
 
 type Frame = TickFrame | DoneFrame | ErrorFrame
 
+// Tick window per /api/run request. Vercel's Lambda runtime collects the full
+// response before posting it back and rejects payloads above ~6 MB with a 413.
+// 30 ticks of OCSF-formatted logs comfortably fits; smaller windows just mean
+// more (still cheap) requests.
+const CHUNK_TICKS = 30
+// Pause fetching new chunks once the dispatch queue gets this far ahead of the
+// scrubber, so we don't pile up megabytes of buffered frames at slow paces.
+const QUEUE_HIGH_WATERMARK = CHUNK_TICKS * 4
+
 /**
- * Streams an entire episode from POST /api/run as NDJSON. One frame per tick
- * arrives, plus a final {done:true,total_logs:N} or {error:"..."}.
+ * Plays an episode by fetching small `[start_tick, end)` windows from
+ * /api/run and dispatching the frames on a client-paced timer. Chunking
+ * keeps each response well below Vercel's 6 MB Lambda payload cap, which a
+ * single full-episode response can exceed for log-heavy scenarios.
  *
  * The backend already applies all timeline overrides server-side based on the
  * scenario YAML's `timeline:` blocks — the client just needs to forward the
- * scenario once, then render frames as they arrive.
+ * scenario once per chunk, then render the frames it gets back.
  */
 export async function runStream(opts: RunStreamOpts): Promise<void> {
-  // Client-side pacing queue. We always run the backend at rate=0 (or whatever
-  // opts.rate says) and optionally space onTick callbacks here so playback
-  // looks smooth on platforms that buffer the streaming response.
   type DispatchFrame = { tick: number; ts: number; logs: LogEntry[] }
   const queue: DispatchFrame[] = []
   let totalLogs = 0
-  let serverDone = false
   let cancelled = false
   let timer: ReturnType<typeof setInterval> | null = null
+  let fetchDone = false
+  let finished = false
 
   const stopTimer = () => {
     if (timer !== null) { clearInterval(timer); timer = null }
   }
   const finish = () => {
+    if (finished || cancelled) return
+    finished = true
     stopTimer()
-    if (!cancelled) opts.onDone({ totalLogs })
+    opts.onDone({ totalLogs })
   }
-  const dispatch = (frame: DispatchFrame) => {
-    if (cancelled) return
-    opts.onTick(frame)
+  const fail = (err: Error) => {
+    if (finished || cancelled) return
+    finished = true
+    stopTimer()
+    opts.onError(err)
   }
 
   if (opts.signal) {
@@ -94,8 +107,8 @@ export async function runStream(opts: RunStreamOpts): Promise<void> {
       if (cancelled) { stopTimer(); return }
       const next = queue.shift()
       if (next) {
-        dispatch(next)
-      } else if (serverDone) {
+        opts.onTick(next)
+      } else if (fetchDone) {
         finish()
       }
     }, paceMs)
@@ -103,14 +116,11 @@ export async function runStream(opts: RunStreamOpts): Promise<void> {
 
   const handleFrame = (frame: Frame) => {
     if ('error' in frame) {
-      stopTimer()
-      if (!cancelled) opts.onError(new Error(frame.error))
+      fail(new Error(frame.error))
       return
     }
     if ('done' in frame) {
-      totalLogs = frame.total_logs ?? totalLogs
-      serverDone = true
-      if (paceMs === 0 || queue.length === 0) finish()
+      totalLogs += frame.total_logs ?? 0
       return
     }
     const out: DispatchFrame = {
@@ -119,45 +129,41 @@ export async function runStream(opts: RunStreamOpts): Promise<void> {
       logs: (frame.logs ?? []).map(mapLog),
     }
     if (paceMs > 0) queue.push(out)
-    else dispatch(out)
+    else opts.onTick(out)
   }
 
-  let res: Response
-  try {
-    res = await fetch('/api/run', {
+  const totalDuration = Math.max(0, opts.duration ?? 0)
+  let cursor = Math.max(0, opts.startTick ?? 0)
+  const startTimeMs = opts.startTimeMs ?? Date.now()
+  const seed = opts.seed ?? Math.floor(Math.random() * 1e9)
+
+  // Cribl forwarding only makes sense for the final chunk so we don't double-
+  // forward or fragment a batch — keep it on the request that closes the run.
+  const fetchChunk = async (chunkStart: number, chunkEnd: number, isLast: boolean) => {
+    const res = await fetch('/api/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         scenario_yaml: opts.scenarioYaml,
-        duration: opts.duration,
+        duration: chunkEnd,
         tick_interval_ms: opts.tickIntervalMs,
-        start_time_ms: opts.startTimeMs ?? Date.now(),
-        seed: opts.seed ?? Math.floor(Math.random() * 1e9),
+        start_time_ms: startTimeMs,
+        seed,
         source_filter: opts.sourceFilter ?? '*',
-        rate: opts.rate,
-        cribl: opts.cribl,
+        rate: opts.rate ?? 0,
+        cribl: isLast ? opts.cribl : undefined,
         format: opts.format ?? 'native',
-        start_tick: opts.startTick ?? 0,
+        start_tick: chunkStart,
       }),
       signal: opts.signal,
     })
-  } catch (err) {
-    if ((err as Error).name === 'AbortError') return
-    stopTimer()
-    opts.onError(err instanceof Error ? err : new Error(String(err)))
-    return
-  }
-  if (!res.ok || !res.body) {
-    const body = await res.text().catch(() => '')
-    stopTimer()
-    opts.onError(new Error(`run ${res.status}: ${body.slice(0, 300)}`))
-    return
-  }
-
-  const reader = res.body.getReader()
-  const decoder = new TextDecoder()
-  let buf = ''
-  try {
+    if (!res.ok || !res.body) {
+      const body = await res.text().catch(() => '')
+      throw new Error(`run ${res.status}: ${body.slice(0, 300)}`)
+    }
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buf = ''
     for (;;) {
       const { value, done } = await reader.read()
       if (done) break
@@ -177,17 +183,37 @@ export async function runStream(opts: RunStreamOpts): Promise<void> {
       const frame = parseLine(buf.trim())
       if (frame) handleFrame(frame)
     }
-    if (!serverDone) {
-      // Connection ended without a {"done":...} frame — treat as done so the
-      // client doesn't stall waiting forever.
-      serverDone = true
-      if (paceMs === 0 || queue.length === 0) finish()
+  }
+
+  try {
+    while (!cancelled && cursor < totalDuration) {
+      // Backpressure: wait for the dispatch queue to drain before queuing more.
+      // Without this, slow pacing causes the queue (and memory) to grow without
+      // bound while fetches finish back-to-back.
+      while (!cancelled && paceMs > 0 && queue.length >= QUEUE_HIGH_WATERMARK) {
+        await sleep(Math.max(50, paceMs))
+      }
+      if (cancelled) break
+
+      const chunkEnd = Math.min(cursor + CHUNK_TICKS, totalDuration)
+      const isLast = chunkEnd >= totalDuration
+      await fetchChunk(cursor, chunkEnd, isLast)
+      cursor = chunkEnd
     }
   } catch (err) {
     if ((err as Error).name === 'AbortError') return
-    stopTimer()
-    opts.onError(err instanceof Error ? err : new Error(String(err)))
+    fail(err instanceof Error ? err : new Error(String(err)))
+    return
   }
+
+  fetchDone = true
+  // If pacing isn't enabled or the queue's already drained, finish immediately.
+  // Otherwise the timer drains the queue and finishes itself.
+  if (paceMs === 0 || queue.length === 0) finish()
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
 }
 
 function parseLine(line: string): Frame | null {
