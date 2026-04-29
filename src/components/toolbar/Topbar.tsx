@@ -242,7 +242,11 @@ export function Topbar() {
     const simStart = Date.now()
     simCursorRef.current = simStart
     seedRef.current = Math.floor(Math.random() * 1e9)
+    // Play always plays the scenario from the beginning. Reset the scrubber
+    // and clear accumulated logs so the panel fills as ticks emit.
     clearLogs()
+    setTick(0)
+    setTickCount(0)
     setStatus('running')
     setRunStatus('running')
     if (enabledCribl) setDestStatus(enabledCribl.id, 'sending')
@@ -255,8 +259,14 @@ export function Topbar() {
       duration: ep.duration,
       tickIntervalMs: 1000,
       startTimeMs: simStart,
+      startTick: 0,
       seed: seedRef.current,
-      rate: nextSpeed,
+      // Run the engine flat-out server-side and pace the scrubber on the
+      // client. Vercel Functions buffer the streaming response, so a paced
+      // server run would produce no visible motion until the function ends —
+      // and at rate=1 that's hundreds of seconds, well past maxDuration.
+      rate: 0,
+      paceMs: nextSpeed > 0 ? Math.max(16, Math.round(1000 / nextSpeed)) : 0,
       cribl,
       format: outputFormat,
       signal: ctrl.signal,

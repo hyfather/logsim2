@@ -16,6 +16,7 @@ import (
 type Config struct {
 	Seed           int64
 	StartTime      time.Time
+	StartTick      int     // first tick index to emit (default 0; lets Run resume mid-episode)
 	TickIntervalMs int     // simulated milliseconds per tick (default 1000)
 	Rate           float64 // wall-clock pacing: 0 = instant, 1.0 = real-time
 	SourceFilter   string  // glob on the source path; "" or "*" means all
@@ -121,7 +122,20 @@ func (e *Engine) Run(ctx context.Context, totalTicks int, sinkList []sinks.Sink)
 		sleepDur = time.Duration(float64(tickInterval) / e.cfg.Rate)
 	}
 
-	for tick := 0; tick < totalTicks; tick++ {
+	startTick := e.cfg.StartTick
+	if startTick < 0 {
+		startTick = 0
+	}
+	if startTick >= totalTicks {
+		// Nothing to do — current tick is past end of episode.
+		for _, s := range sinkList {
+			if err := s.Flush(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for tick := startTick; tick < totalTicks; tick++ {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

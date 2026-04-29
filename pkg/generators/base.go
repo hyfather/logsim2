@@ -2,6 +2,7 @@ package generators
 
 import (
 	"fmt"
+	"hash/fnv"
 	"math"
 	"time"
 
@@ -69,11 +70,19 @@ func sampleLatency(meanMs int, rng interface{ Float64() float64 }) int {
 	return int(math.Round(v))
 }
 
-// makeID returns a short tick-scoped event ID.
-var idCounter uint64
-
-func makeID(tickIndex, idx int) string {
-	return fmt.Sprintf("t%d-%d", tickIndex, idx)
+// makeID returns an event ID that's unique across all generators emitting on
+// the same tick. Without the source-derived suffix, two services produce
+// "t0-0", "t0-1", … in parallel — those collide as React keys in the log
+// panel and cause rows to flicker, drop, or render against the wrong data.
+// The hash keeps the ID short and deterministic for a given (tick, source).
+func makeID(target Target, tickIndex, idx int) string {
+	src := target.Source
+	if src == "" {
+		src = target.Name()
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(src))
+	return fmt.Sprintf("t%d-%x-%d", tickIndex, h.Sum32(), idx)
 }
 
 // applyVolumeAndError applies the timeline override on TickContext to a

@@ -9,7 +9,6 @@ import { fmtTime } from '@/lib/episodeBehavior'
 import type { LogEntry } from '@/types/logs'
 import { cn } from '@/lib/utils'
 
-const SCRUB_WINDOW_TICKS = 30
 const DEBOUNCE_MS = 120
 const MAX_DISPLAY = 200
 const SPARK_BUCKETS = 30
@@ -42,19 +41,21 @@ export function ScrubbedLogs() {
     const ctrl = new AbortController()
     const handle = setTimeout(async () => {
       try {
-        const to = Math.max(1, Math.floor(tick))
-        const from = Math.max(0, to - SCRUB_WINDOW_TICKS)
-        if (to <= from) {
+        const to = Math.max(0, Math.floor(tick))
+        if (to <= 0) {
           setScrubLogs([])
           return
         }
+        // Fetch the cumulative log prefix [0, to) so the panel shows
+        // everything that would have been emitted up to the scrubber's
+        // current position — not just the trailing 30 ticks.
         const scenarioYaml = canvasToScenarioYaml(nodes, edges, metadata, {
           episode,
           tickIntervalMs: 1000,
         })
         const logs = await logsAt({
           scenarioYaml,
-          from,
+          from: 0,
           to,
           tickIntervalMs: 1000,
           seed: 0,
