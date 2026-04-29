@@ -4,6 +4,8 @@ import Link from 'next/link'
 import {
   ChevronDown,
   Download,
+  ExternalLink,
+  Info,
   Pause,
   Pencil,
   Play,
@@ -21,6 +23,13 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Switch } from '@/components/ui/switch'
 import { useScenarioStore } from '@/store/useScenarioStore'
 import { useUIStore } from '@/store/useUIStore'
@@ -55,6 +64,19 @@ function LogoMark() {
       <rect x="10" y="0" width="8" height="8" rx="1.5" fill="#2563eb" opacity="0.4" />
       <rect x="0" y="10" width="8" height="8" rx="1.5" fill="#2563eb" opacity="0.4" />
       <rect x="10" y="10" width="8" height="8" rx="1.5" fill="#2563eb" />
+    </svg>
+  )
+}
+
+function GithubMark({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden
+      className={className}
+    >
+      <path d="M12 .5C5.65.5.5 5.65.5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.7 0-1.26.45-2.29 1.18-3.1-.12-.29-.51-1.46.11-3.04 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.79 0c2.21-1.49 3.18-1.18 3.18-1.18.62 1.58.23 2.75.11 3.04.74.81 1.18 1.84 1.18 3.1 0 4.43-2.69 5.4-5.25 5.69.41.36.78 1.06.78 2.13v3.16c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z" />
     </svg>
   )
 }
@@ -95,6 +117,7 @@ export function Topbar() {
   const [presetsLoaded, setPresetsLoaded] = useState(false)
   const [draftName, setDraftName] = useState(metadata.name)
   const [editingTitle, setEditingTitle] = useState(false)
+  const [aboutOpen, setAboutOpen] = useState(false)
 
   // Backend polling refs (mirrors SimulationControls)
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -399,19 +422,56 @@ export function Topbar() {
 
   return (
     <div className="flex h-12 shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-3 sm:px-4">
-      {/* LEFT: logo + scenario */}
+      {/* LEFT: brand + scenarios menu + scenario name */}
       <div className="flex min-w-0 flex-1 items-center gap-2.5">
+        {/* Brand: LogSim2 — opens About / GitHub menu */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
               type="button"
               className="flex shrink-0 items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-slate-100"
-              title="File menu"
+              title="About LogSim2"
             >
               <LogoMark />
-              <span className="hidden text-[13.5px] font-semibold tracking-[-0.01em] text-slate-900 sm:inline">logsim</span>
-              <span className="hidden rounded bg-slate-100 px-1 py-px font-mono text-[9.5px] font-semibold uppercase tracking-[0.08em] text-slate-500 sm:inline">v2</span>
+              <span className="hidden text-[13.5px] font-semibold tracking-[-0.01em] text-slate-900 sm:inline">LogSim2</span>
               <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-44 text-xs">
+            <DropdownMenuItem
+              onClick={() => setAboutOpen(true)}
+              className="cursor-pointer text-xs"
+            >
+              <Info className="mr-2 h-3.5 w-3.5 text-slate-500" />
+              About
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild className="cursor-pointer text-xs">
+              <a
+                href="https://github.com/hyfather/logsim2"
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                <GithubMark className="mr-2 h-3.5 w-3.5 text-slate-600" />
+                GitHub
+                <ExternalLink className="ml-auto h-3 w-3 text-slate-400" />
+              </a>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        {/* Subtle separator */}
+        <span className="hidden h-4 w-px bg-slate-200 sm:inline-block" aria-hidden />
+
+        {/* Scenarios: top-level menu with New / Open / Save / Examples / Settings */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="group/scenarios flex shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[12px] font-medium text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition-colors hover:bg-slate-50 hover:text-slate-900 data-[state=open]:bg-slate-50 data-[state=open]:text-slate-900"
+              title="Scenarios menu"
+            >
+              <span>Scenarios</span>
+              <ChevronDown className="h-3.5 w-3.5 text-slate-400 transition-transform group-data-[state=open]/scenarios:rotate-180" />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-56 text-xs">
@@ -689,6 +749,58 @@ export function Topbar() {
 
       {/* hidden file input */}
       <input ref={fileInputRef} type="file" accept=".json,.logsim.json" className="hidden" onChange={handleScenarioFileChange} />
+
+      {/* About modal */}
+      <Dialog open={aboutOpen} onOpenChange={setAboutOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <div className="flex items-center gap-2">
+              <LogoMark />
+              <DialogTitle>LogSim2</DialogTitle>
+            </div>
+            <DialogDescription>
+              A drag-and-drop infrastructure log simulator for designing realistic
+              telemetry scenarios in the browser.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 text-[13px] leading-relaxed text-slate-700">
+            <p>
+              Compose services on a canvas, define incident timelines, and stream
+              the resulting logs to your observability pipeline. A Go simulation
+              engine runs the scenario; the editor stays entirely in your browser.
+            </p>
+            <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+              <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+                Open source
+              </p>
+              <p className="text-[12.5px] text-slate-600">
+                LogSim2 is open source under the Apache 2.0 license. Issues, ideas,
+                and pull requests are welcome on{' '}
+                <a
+                  href="https://github.com/hyfather/logsim2"
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="font-medium text-blue-600 underline-offset-2 hover:underline"
+                >
+                  GitHub
+                </a>
+                .
+              </p>
+            </div>
+            <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+              <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+                Your AI keys stay local
+              </p>
+              <p className="text-[12.5px] text-slate-600">
+                Any API keys you supply (OpenAI, Anthropic, etc.) are stored only in
+                your browser&apos;s local storage and sent directly to the model
+                provider. They are never transmitted to a LogSim server, logged, or
+                shared with third parties.
+              </p>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
