@@ -766,36 +766,28 @@ export function Topbar() {
           <div className="space-y-3 text-[13px] leading-relaxed text-slate-700">
             <p>
               Compose services on a canvas, define incident timelines, and stream
-              the resulting logs to your observability pipeline. A Go simulation
-              engine runs the scenario; the editor stays entirely in your browser.
+              the resulting logs to your observability pipeline.
             </p>
             <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
               <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
                 Open source
               </p>
               <p className="text-[12.5px] text-slate-600">
-                LogSim2 is open source under the Apache 2.0 license. Issues, ideas,
-                and pull requests are welcome on{' '}
-                <a
-                  href="https://github.com/hyfather/logsim2"
-                  target="_blank"
-                  rel="noreferrer noopener"
-                  className="font-medium text-blue-600 underline-offset-2 hover:underline"
-                >
-                  GitHub
-                </a>
-                .
+                LogSim2 is open source under the Apache 2.0 license, so you can
+                confidently use real-world production logs to simulate services
+                without those logs being stored on the LogSim2 backend. Your logs
+                are sent only to the LLM via the model provider API key you provide.
               </p>
             </div>
             <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
               <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-                Your AI keys stay local
+                Your API keys stay in your browser
               </p>
               <p className="text-[12.5px] text-slate-600">
-                Any API keys you supply (OpenAI, Anthropic, etc.) are stored only in
-                your browser&apos;s local storage and sent directly to the model
-                provider. They are never transmitted to a LogSim server, logged, or
-                shared with third parties.
+                Any API keys you supply (OpenAI, Anthropic, Gemini, etc.) are
+                stored only in your browser&apos;s local storage and sent directly
+                to the model provider. They are never transmitted to a LogSim2,
+                logged, or shared with third parties.
               </p>
             </div>
           </div>
