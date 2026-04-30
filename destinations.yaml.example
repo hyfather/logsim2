@@ -6,9 +6,10 @@ destinations:
     token: your-hec-token-here
     batch_size: 100
     flush_interval_ms: 2000
-    # format: native | ocsf | udm | asim
+    # format: native | ocsf | otel | udm | asim
     # Default is native (the generator's own log line). Set to "ocsf" to
-    # forward OCSF v1.x JSON events instead.
+    # forward OCSF v1.x JSON events, or "otel" for OpenTelemetry OTLP/JSON
+    # LogRecord envelopes.
     format: native
 
   - name: staging-cribl-ocsf

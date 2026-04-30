@@ -105,9 +105,9 @@ func validate(cfg *DestinationsConfig) error {
 		}
 
 		switch d.Format {
-		case "", "native", "jsonl", "raw", "ocsf", "udm", "asim":
+		case "", "native", "jsonl", "raw", "ocsf", "otel", "udm", "asim":
 		default:
-			return fmt.Errorf("destination %q: unknown format %q (supported: native|jsonl|raw|ocsf|udm|asim)", d.Name, d.Format)
+			return fmt.Errorf("destination %q: unknown format %q (supported: native|jsonl|raw|ocsf|otel|udm|asim)", d.Name, d.Format)
 		}
 	}
 	return nil

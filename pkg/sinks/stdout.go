@@ -19,6 +19,7 @@ const (
 	FormatJSONL Format = "jsonl" // full LogEntry as JSON per line
 	FormatRaw   Format = "raw"   // only the Raw field, one per line
 	FormatOCSF  Format = "ocsf"  // encoders.OCSF JSON per line
+	FormatOTEL  Format = "otel"  // OpenTelemetry OTLP/JSON LogRecord per line
 	FormatUDM   Format = "udm"   // reserved (falls back to native JSONL today)
 	FormatASIM  Format = "asim"  // reserved (falls back to native JSONL today)
 )
@@ -63,7 +64,7 @@ func (s *WriterSink) writeOne(e *event.LogEntry) error {
 	case FormatRaw:
 		_, err := fmt.Fprintln(s.w, e.Raw)
 		return err
-	case FormatOCSF, FormatUDM, FormatASIM:
+	case FormatOCSF, FormatOTEL, FormatUDM, FormatASIM:
 		b, err := s.encoder.Encode(e)
 		if err != nil {
 			return err
@@ -85,6 +86,8 @@ func toEncoderFormat(f Format) encoders.Format {
 	switch f {
 	case FormatOCSF:
 		return encoders.FormatOCSF
+	case FormatOTEL:
+		return encoders.FormatOTEL
 	case FormatUDM:
 		return encoders.FormatUDM
 	case FormatASIM:

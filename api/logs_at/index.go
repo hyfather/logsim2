@@ -34,7 +34,8 @@ type Request struct {
 	SourceFilter   string `json:"source_filter"`
 	// Format selects the schema applied to each entry's Raw field before
 	// returning. Empty/"native" keeps the generator's log line; "ocsf"
-	// replaces it with an OCSF JSON event.
+	// replaces it with an OCSF JSON event; "otel" emits an OpenTelemetry
+	// OTLP/JSON LogRecord envelope.
 	Format string `json:"format,omitempty"`
 }
 

@@ -119,7 +119,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&configPath, "config", "", "destinations YAML (when --output=destination)")
 	cmd.Flags().StringVar(&sourceFilter, "source-filter", "*", "source path glob filter")
 	cmd.Flags().Int64Var(&seed, "seed", 0, "RNG seed (0 = random)")
-	cmd.Flags().StringVar(&format, "format", "jsonl", "line format: jsonl | raw | ocsf | udm | asim")
+	cmd.Flags().StringVar(&format, "format", "jsonl", "line format: jsonl | raw | ocsf | otel | udm | asim")
 
 	return cmd
 }

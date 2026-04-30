@@ -4,9 +4,10 @@ export type LogSource = 'vpc-flow' | 'nodejs' | 'golang' | 'postgres' | 'mysql' 
 
 // LogFormat selects the wire schema applied before logs reach the UI.
 // "native" preserves the generator's own log line; "ocsf" replaces it with an
-// OCSF v1.x JSON event. udm/asim are reserved and currently fall back to
-// native on the backend.
-export type LogFormat = 'native' | 'ocsf' | 'udm' | 'asim'
+// OCSF v1.x JSON event; "otel" emits an OpenTelemetry OTLP/JSON LogRecord
+// envelope. udm/asim are reserved and currently fall back to native on the
+// backend.
+export type LogFormat = 'native' | 'ocsf' | 'otel' | 'udm' | 'asim'
 
 export interface LogEntry {
   id: string

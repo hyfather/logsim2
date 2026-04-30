@@ -189,7 +189,7 @@ func encodeBatch(batch []event.LogEntry, format Format) ([]byte, error) {
 	enc.SetEscapeHTML(false)
 
 	encoder := encoders.For(toEncoderFormat(format))
-	wantSchema := format == FormatOCSF || format == FormatUDM || format == FormatASIM
+	wantSchema := format == FormatOCSF || format == FormatOTEL || format == FormatUDM || format == FormatASIM
 
 	for i := range batch {
 		e := &batch[i]
@@ -242,6 +242,8 @@ func schemaSourcetype(f Format) string {
 	switch f {
 	case FormatOCSF:
 		return "ocsf:1.4:json"
+	case FormatOTEL:
+		return "otel:logs:json"
 	case FormatUDM:
 		return "udm:json"
 	case FormatASIM:
