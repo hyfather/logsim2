@@ -21,6 +21,7 @@ type Format string
 const (
 	FormatNative Format = "native"
 	FormatOCSF   Format = "ocsf"
+	FormatOTEL   Format = "otel"
 	// Reserved for future additions.
 	FormatUDM  Format = "udm"
 	FormatASIM Format = "asim"
@@ -51,6 +52,8 @@ func For(f Format) Encoder {
 	switch f {
 	case FormatOCSF:
 		return ocsfEncoder{}
+	case FormatOTEL:
+		return otelEncoder{}
 	case FormatUDM, FormatASIM:
 		// Stubs until those mappings land — return native so output is still
 		// usable rather than empty. The format ride-along signals intent.
@@ -65,6 +68,8 @@ func Parse(s string) Format {
 	switch Format(s) {
 	case FormatOCSF:
 		return FormatOCSF
+	case FormatOTEL:
+		return FormatOTEL
 	case FormatUDM:
 		return FormatUDM
 	case FormatASIM:

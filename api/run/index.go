@@ -40,7 +40,8 @@ type Request struct {
 	Cribl *apihelp.CriblConfig `json:"cribl,omitempty"`
 	// Format selects the schema applied to each entry's Raw field before
 	// streaming. "native" (default) preserves the generator's own log line;
-	// "ocsf" replaces it with an OCSF v1.x JSON event.
+	// "ocsf" replaces it with an OCSF v1.x JSON event; "otel" emits an
+	// OpenTelemetry OTLP/JSON LogRecord envelope.
 	Format string `json:"format,omitempty"`
 	// StartTick lets the client resume playback mid-episode. Frames are
 	// emitted starting at this tick index; if it's >= duration the run
