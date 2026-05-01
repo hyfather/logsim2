@@ -242,54 +242,80 @@ export async function listModels(provider: AIProvider, apiKey: string): Promise<
 // tier of the latest version, ignoring small/cheap variants and non-text
 // modalities (audio, image, embedding, moderation, etc.).
 
-function versionNum(id: string): number {
-  const m = id.match(/(\d+)[-.](\d+)/)
-  if (!m) {
-    const single = id.match(/(\d+)/)
-    return single ? parseInt(single[1]) * 100 : 0
-  }
-  return parseInt(m[1]) * 100 + parseInt(m[2])
+// Strip provider-style date suffixes ("-20250514", "-2025-08-07", "-latest")
+// so version extraction below doesn't mistake a date for a minor version.
+function stripDateSuffix(id: string): string {
+  return id
+    .replace(/-\d{4}-\d{2}-\d{2}$/, '')
+    .replace(/-\d{8}$/, '')
+    .replace(/-latest$/, '')
+}
+
+// Parse a "major.minor" or "major-minor" version pair, e.g. "4-7" → 407.
+// Returns 0 when no version is present.
+function parseVersion(id: string): number {
+  const mm = id.match(/(\d+)[.-](\d+)(?!\d)/)
+  if (mm) return parseInt(mm[1]) * 100 + parseInt(mm[2])
+  const single = id.match(/-(\d+)\b/)
+  return single ? parseInt(single[1]) * 100 : 0
 }
 
 function rankAnthropic(id: string): number {
-  if (!id.startsWith('claude')) return -1
-  const tier = id.includes('opus') ? 3000 : id.includes('sonnet') ? 2000 : id.includes('haiku') ? 1000 : 0
+  const lower = id.toLowerCase()
+  if (!lower.startsWith('claude')) return -1
+  const tier = lower.includes('opus') ? 3 : lower.includes('sonnet') ? 2 : lower.includes('haiku') ? 1 : 0
   if (!tier) return -1
-  const ver = versionNum(id)
+  const stripped = stripDateSuffix(lower)
+  const ver = parseVersion(stripped)
   // Prefer aliases (no trailing date) over date-pinned snapshots.
-  const dated = /-\d{8}$/.test(id) ? 0 : 1
-  return tier + ver + dated * 0.1
+  const dated = stripped !== lower ? 0 : 1
+  // Tier dominates, then version, then date preference.
+  return tier * 10000 + ver + dated * 0.1
 }
 
 function rankOpenAI(id: string): number {
   const lower = id.toLowerCase()
-  const blocked = ['embed', 'audio', 'image', 'moderation', 'whisper', 'tts', 'dall', 'realtime', 'instruct', 'transcribe', 'search', 'computer-use']
+  const blocked = ['embed', 'audio', 'image', 'moderation', 'whisper', 'tts', 'dall', 'realtime', 'instruct', 'transcribe', 'search', 'computer-use', 'davinci', 'babbage', 'curie']
   if (blocked.some(b => lower.includes(b))) return -1
   if (lower.includes('mini') || lower.includes('nano')) return -1
-  // Family scores: o-series reasoning > gpt-5 > gpt-4.5 > gpt-4o > gpt-4-turbo > gpt-4 > gpt-3.5
-  let family = 0
-  if (/^o\d+/.test(lower)) family = 6000 + versionNum(lower)
-  else if (lower.startsWith('gpt-5')) family = 5000
-  else if (lower.startsWith('gpt-4.5')) family = 4500
-  else if (lower.startsWith('gpt-4o')) family = 4000
-  else if (lower.startsWith('gpt-4-turbo')) family = 3500
-  else if (lower.startsWith('gpt-4')) family = 3000
-  else if (lower.startsWith('gpt-3.5')) family = 2000
-  else return -1
-  // Prefer aliases over date-pinned snapshots.
-  const dated = /-\d{4}-\d{2}-\d{2}|-\d{4}/.test(lower) ? 0 : 1
-  return family + dated * 0.1
+
+  const stripped = stripDateSuffix(lower)
+  const dated = stripped !== lower ? 0 : 1
+
+  // Modern flagship: gpt-5.x family. Use minor version so 5.5 > 5.0.
+  if (stripped.startsWith('gpt-5')) {
+    const minor = stripped.match(/^gpt-5[.-](\d+)/)
+    const minorVal = minor ? parseInt(minor[1]) : 0
+    return 6000 + minorVal * 10 + dated
+  }
+  // Newer reasoning models (o3, o4, ...). o1 / o2 are explicitly legacy below.
+  const oNew = stripped.match(/^o([3-9]|\d{2,})\b/)
+  if (oNew) {
+    return 5000 + parseInt(oNew[1]) * 10 + dated
+  }
+  // Older flagships kept as fallbacks if nothing newer is available.
+  if (stripped.startsWith('gpt-4.5')) return 4500 + dated * 0.1
+  if (stripped.startsWith('gpt-4o')) return 4000 + dated * 0.1
+  if (stripped.startsWith('gpt-4-turbo')) return 3500 + dated * 0.1
+  if (stripped.startsWith('gpt-4')) return 3000 + dated * 0.1
+  // Legacy reasoning (o1, o2) — kept above gpt-3.5 but below any modern model.
+  if (/^o[12]\b/.test(stripped)) return 2500 + dated * 0.1
+  if (stripped.startsWith('gpt-3.5')) return 2000 + dated * 0.1
+  return -1
 }
 
 function rankGemini(id: string): number {
   const lower = id.toLowerCase()
   if (!lower.startsWith('gemini')) return -1
   if (lower.includes('embedding') || lower.includes('aqa') || lower.includes('image') || lower.includes('tts') || lower.includes('audio')) return -1
-  const ver = versionNum(lower)
-  const tier = lower.includes('pro') ? 300 : lower.includes('flash-lite') ? 100 : lower.includes('flash') ? 200 : 0
+  const stripped = stripDateSuffix(lower)
+  const ver = parseVersion(stripped)
+  // flash-lite must be checked before flash (substring overlap).
+  const tier = stripped.includes('flash-lite') ? 100 : stripped.includes('pro') ? 300 : stripped.includes('flash') ? 200 : 0
   if (!tier) return -1
   // Prefer stable over -exp / -preview snapshots.
-  const stable = (lower.includes('exp') || lower.includes('preview')) ? 0 : 1
+  const stable = (stripped.includes('exp') || stripped.includes('preview')) ? 0 : 1
+  // Version dominates so a newer Flash beats an older Pro; tier is the tiebreaker.
   return ver * 10 + tier + stable
 }
 
