@@ -13,91 +13,56 @@ export interface GenerateGroundTruthOptions {
   signal?: AbortSignal
 }
 
-const SYSTEM_PROMPT = `You compile a LogSim scenario YAML into a "ground truth" plain-text summary used as the supervised target for SFT and the reward target for RL on incident-investigation agents.
+const SYSTEM_PROMPT = `You compile a LogSim scenario YAML into a "ground truth" summary used for SFT and RL on incident-investigation agents.
 
-Your output IS the ground truth. An RL agent receives the scenario logs and must reach this summary — most importantly, the ROOT CAUSE section. Be precise, deterministic, and concise. Do not invent details that aren't in the YAML.
+The agent under evaluation only sees the **logs** the scenario emits. It produces a TIMELINE of what it inferred happened, plus a CONCLUSION naming the root cause. Your output is the target the agent is graded against — so it must be written in the same shape and the same language an investigator would use after reading logs, NOT in language that exposes the simulator's internal state machine or the YAML's structure.
 
-Output the following sections in this exact order, with the exact headers shown. Use plain text only — no Markdown bold, no fenced code blocks, no JSON.
+Output exactly these three blocks, in order, plain text only — no Markdown bold, no fenced code blocks, no JSON, no divider lines.
 
-═══════════════════════════════════════════════════════════════════════════
 SCENARIO: <name>
-Description: <one short line describing the architecture>
-Duration: <N> ticks (<wall-clock>) at <tick_interval_ms>ms/tick
+Architecture (context, not scored): <one short line listing the major components and how they connect, e.g. "1 VPC; Nginx edge-lb fronts 3 Go APIs which read MySQL and a Redis rate-limiter cache.">
 
-================================================================
-INFRASTRUCTURE
-================================================================
-Counts: <N VPCs, M subnets, K virtual servers, S services>.
-
-VPCs:
-  - <name> (provider, region, cidr)
-
-Subnets:
-  - <name> (in <vpc>, cidr, public/private)
-
-Virtual servers:
-  - <name> (in <subnet>, instance_type, os, ip)
-
-================================================================
-SERVICES
-================================================================
-<for each service, in alphabetical order by name:>
-<name> (<friendly type label, e.g. Node.js / PostgreSQL / Redis>)
-  Host: <virtual server name or "-">
-  Port: <port>
-  <one line summarising key generator config — log format/level for app servers, slow query threshold for databases, eviction policy for caches, etc.>
-  <if endpoints exist, list them as "- METHOD path (avg <ms>ms, error_rate=<x>)">
-
-================================================================
-CONNECTIONS
-================================================================
-  - <source> -> <target> (<protocol>:<port>)
-<sorted alphabetically by source then target>
-
-================================================================
 TIMELINE
-================================================================
-Narrative beats:
-  [tick <N>, <mm:ss>] <text>
+- <mm:ss>  <one short clause describing an observable event, in the language a human reading logs would use>
+- <mm:ss>  <next event>
+...
 
-Service behavior:
-
-<for each service that has timeline blocks, in alphabetical order by service name:>
-<name>:
-  [tick <start>..<end> (<mm:ss>..<mm:ss>)] <state> — error_rate=X, latency_mul=Y, log_vol_mul=Z
-      note: <note text if present>
-
-================================================================
-ROOT CAUSE
-================================================================
-<This section is the salient takeaway — what an investigator must conclude. It is the single most important section for RL.>
-
-Primary cause: <one short sentence naming the failing component and the failure mode, e.g. "session-cache (Redis) ran out of memory and was OOM-killed at tick 240 (04:00)">.
-
-Trigger: <what initiated the failure — a deploy, a traffic spike, an upstream outage, a config change, an attack — referenced by the relevant tick if known>.
-
-Propagation: <how the failure spread through the topology — name the affected services in the order they degraded, with tick references>.
-
-Symptoms an investigator would see in logs:
-  - <symptom 1, e.g. "Redis: out-of-memory errors and connection refused around tick 240">
-  - <symptom 2, e.g. "user-db: slow query log exceeds threshold from tick 300">
-  - <symptom 3, e.g. "api-1/api-2: HTTP 5xx rate climbs to ~85% from tick 360">
-  Aim for 3-6 specific symptoms tied to ticks and services.
-
-Resolution: <one sentence on how/when the system recovered, e.g. "Redis restarted at tick 660; cache warmed by tick 780; APIs healthy by tick 900">.
+CONCLUSION
+Root cause: <one short sentence naming the failing component and the failure mode>.
+Mitigation: <what stopped or contained the incident, with timestamp>.
+Recovery: <when full health was restored>.
 
 ═══════════════════════════════════════════════════════════════════════════
 
 RULES
 
-1. Use the YAML as the sole source of truth. Do not invent infrastructure, services, or events that aren't in it.
-2. Convert ticks to mm:ss using the supplied tick_interval_ms (default 1000). For totals over an hour, use h:mm:ss.
-3. Sort all lists alphabetically by name unless the YAML imposes a different order (timeline blocks sort by start tick).
-4. The root cause MUST be derived from the timeline + states + narrative beats, not generic platitudes. If a service goes "down" with note "OOM kill", that's the root cause. If a service is "under_attack", say so.
-5. If the YAML has no timeline / no behavior changes, the ROOT CAUSE section should say: "Primary cause: none — this scenario depicts a steady-state baseline with no incident."
-6. Keep service/host/connection names verbatim from the YAML.
-7. Keep numeric formatting tidy: integers when whole; up to 4 decimals otherwise.
-8. Output plain text only. No prose intro, no markdown fences, no commentary outside the sections above.`
+1. The YAML is the sole source of truth. Do not invent events, services, or causes that aren't in it.
+2. Convert ticks to mm:ss using the supplied tick_interval_ms (default 1000). Use h:mm:ss only when totals exceed an hour. Pad to two digits (03:00, not 3:00).
+3. The TIMELINE must read like an investigator's notes, not a state-machine dump. Translate simulator-internal terms into observable symptoms:
+     - "under_attack" with elevated error_rate → "5xx rate spikes to ~X%" or "request volume jumps; error rate climbs"
+     - "degraded"      → "latency climbs / error rate ~X%" / "p95 latency up ~Yx"
+     - "down"          → "service unresponsive; ~85% of requests fail"
+     - "throttled"     → "rate limiter engaged; 429 responses appear" / "requests drop and 429s appear"
+     - "recovering"    → "errors drop but latency still elevated"
+     - "compromised"   → "anomalous activity / suspicious egress / lateral movement"
+     - "healthy" returning at the end → "service back to baseline"
+   Always include concrete numbers when the YAML provides them (error rate %, latency multiplier, throttle).
+4. One TIMELINE bullet per **state transition** that matters. Do NOT list every block of every service — collapse "all three APIs degraded together" into one line. Skip the implicit baseline-healthy block at tick 0 (the agent already knows the starting state). Aim for 6-12 bullets total for a typical 10-30 minute scenario.
+5. Reference services by their YAML name, lowercase verbatim (edge-lb, user-db). Never use simulator state names ("under_attack", "throttled") as nouns or adjectives in the prose; describe what those states look like in logs instead.
+6. Do NOT emit infrastructure dumps, service config tables, endpoint lists, connection lists, multipliers, log_vol_mul, or any YAML field by name. The agent never produced these from logs and they are noise in the diff.
+7. CONCLUSION:
+   - "Root cause" must name the first/initiating failure (the thing the attack/load/bug hit), not its downstream effects.
+   - "Mitigation" is the action that contained the incident (rate limit engaged, rollback deployed, replica failover, restart). If none, say "none — the system did not self-heal".
+   - "Recovery" is the timestamp when the affected services returned to healthy. If they never did within the duration, say "incomplete by end of scenario".
+8. If the YAML has no timeline / no state changes, output:
+     TIMELINE
+     - (no incidents — steady-state baseline for the full duration)
+     CONCLUSION
+     Root cause: none — this scenario depicts a steady-state baseline with no incident.
+     Mitigation: n/a.
+     Recovery: n/a.
+9. Keep numeric formatting tidy: integers when whole; up to 2 decimal places otherwise (write 25% not 0.25; write 4× not latency_mul=4).
+10. Output plain text only. No prose intro, no commentary outside the three blocks above.`
 
 function buildUserPrompt(yamlText: string, tickIntervalMs: number): string {
   return `Compile the following LogSim scenario YAML into the ground-truth summary.
