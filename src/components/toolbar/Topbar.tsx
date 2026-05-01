@@ -43,10 +43,10 @@ import { asFlowEdgeData, asFlowNodeData } from '@/lib/flow-data'
 import { cn } from '@/lib/utils'
 import { pickCriblPayload } from '@/lib/backendClient'
 import { canvasToScenarioYaml } from '@/lib/canvasToScenarioYaml'
-import { buildScenarioGroundTruth } from '@/lib/scenarioGroundTruth'
 import { runStream } from '@/lib/runStream'
 import { logsAt } from '@/lib/logsAt'
 import { materializeProposedScenarioJson } from '@/lib/scenarioPrompt'
+import { ExportPreviewModal, type ExportTab } from '@/components/toolbar/ExportPreviewModal'
 
 interface PresetScenarioManifestEntry {
   file: string
@@ -85,6 +85,7 @@ function GithubMark({ className }: { className?: string }) {
 export function Topbar() {
   const { nodes, edges, metadata, setMetadata, resetScenario, loadScenario } = useScenarioStore()
   const setDescribePanelOpen = useUIStore(s => s.setDescribePanelOpen)
+  const episode = useEpisodeStore(s => s.episode)
   const setEpisode = useEpisodeStore(s => s.setEpisode)
   const setTick = useEpisodeStore(s => s.setTick)
   const setRunStatus = useEpisodeStore(s => s.setRunStatus)
@@ -391,11 +392,6 @@ export function Topbar() {
     URL.revokeObjectURL(url)
   }, [])
 
-  const fileSlug = useCallback(() => {
-    const slug = (metadata.name || 'scenario').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9._-]/g, '')
-    return slug || 'scenario'
-  }, [metadata.name])
-
   const handleExportLog = useCallback(() => {
     downloadText(logBuffer.map(l => l.raw).join('\n'), 'logs.log', 'text/plain')
   }, [downloadText, logBuffer])
@@ -404,16 +400,12 @@ export function Topbar() {
     downloadText(logBuffer.map(l => JSON.stringify(l)).join('\n'), 'logs.jsonl', 'application/jsonl')
   }, [downloadText, logBuffer])
 
-  const handleExportScenarioYaml = useCallback(() => {
-    const yamlText = buildScenarioYaml()
-    downloadText(yamlText, `${fileSlug()}.scenario.yaml`, 'application/x-yaml')
-  }, [buildScenarioYaml, downloadText, fileSlug])
-
-  const handleExportGroundTruth = useCallback(() => {
-    const ep = useEpisodeStore.getState().episode
-    const text = buildScenarioGroundTruth(nodes, edges, metadata, { episode: ep, tickIntervalMs: 1000 })
-    downloadText(text, `${fileSlug()}.ground-truth.txt`, 'text/plain')
-  }, [downloadText, edges, fileSlug, metadata, nodes])
+  const [exportModalOpen, setExportModalOpen] = useState(false)
+  const [exportModalTab, setExportModalTab] = useState<ExportTab>('yaml')
+  const openExportModal = useCallback((tab: ExportTab) => {
+    setExportModalTab(tab)
+    setExportModalOpen(true)
+  }, [])
 
   // ── Derived ─────────────────────────────────────────────────────
   const isRunning = status === 'running'
@@ -765,11 +757,11 @@ export function Topbar() {
               Scenario
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={handleExportScenarioYaml} className="cursor-pointer text-xs">
+            <DropdownMenuItem onSelect={() => openExportModal('yaml')} className="cursor-pointer text-xs">
               <span className="font-mono text-[11px] text-slate-400">.yaml</span>
               <span className="ml-2">scenario.yaml</span>
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={handleExportGroundTruth} className="cursor-pointer text-xs">
+            <DropdownMenuItem onSelect={() => openExportModal('ground-truth')} className="cursor-pointer text-xs">
               <span className="font-mono text-[11px] text-slate-400">.txt</span>
               <span className="ml-2">Ground truth (SFT/RL)</span>
             </DropdownMenuItem>
@@ -779,6 +771,18 @@ export function Topbar() {
 
       {/* hidden file input */}
       <input ref={fileInputRef} type="file" accept=".json,.logsim.json" className="hidden" onChange={handleScenarioFileChange} />
+
+      {/* Export preview modal */}
+      <ExportPreviewModal
+        open={exportModalOpen}
+        onClose={() => setExportModalOpen(false)}
+        initialTab={exportModalTab}
+        flowNodes={nodes}
+        flowEdges={edges}
+        metadata={metadata}
+        episode={episode}
+        tickIntervalMs={1000}
+      />
 
       {/* About modal */}
       <Dialog open={aboutOpen} onOpenChange={setAboutOpen}>
