@@ -11,6 +11,7 @@ import {
   Play,
   RotateCcw,
   StepForward,
+  Trash2,
 } from 'lucide-react'
 import {
   DropdownMenu,
@@ -36,10 +37,11 @@ import { useUIStore } from '@/store/useUIStore'
 import { useEpisodeStore } from '@/store/useEpisodeStore'
 import { useSimulationStore } from '@/store/useSimulationStore'
 import { useDestinationsStore } from '@/store/useDestinationsStore'
+import { useScenarioLibraryStore, type SavedScenario } from '@/store/useScenarioLibraryStore'
 import { DESTINATION_TYPE_META } from '@/types/destinations'
 import { serializeScenario, deserializeScenario, downloadJson } from '@/lib/serialization'
 import type { Connection } from '@/types/connections'
-import { asFlowEdgeData, asFlowNodeData } from '@/lib/flow-data'
+import { scenarioToFlow } from '@/lib/flow-data'
 import { cn } from '@/lib/utils'
 import { pickCriblPayload } from '@/lib/backendClient'
 import { canvasToScenarioYaml } from '@/lib/canvasToScenarioYaml'
@@ -121,6 +123,10 @@ export function Topbar() {
   const [editingTitle, setEditingTitle] = useState(false)
   const [aboutOpen, setAboutOpen] = useState(false)
 
+  // Recent scenarios from the persistent library (newest first).
+  const recentScenarios = useScenarioLibraryStore(s => s.scenarios)
+  const currentScenarioId = useScenarioLibraryStore(s => s.currentId)
+
   // Backend polling refs (mirrors SimulationControls)
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const abortRef = useRef<AbortController | null>(null)
@@ -143,11 +149,30 @@ export function Topbar() {
     metadata,
   ), [nodes, edges, metadata])
 
+  // Autosave writes the current canvas + timeline as a single library entry,
+  // so reloading the editor restores both. Allocates a new id if no entry is
+  // currently active (e.g. first edit on a fresh canvas).
   const persistAutosave = useCallback(() => {
+    if (typeof window === 'undefined') return
+    if (nodes.length === 0) return
     const scenario = buildScenario()
-    localStorage.setItem('logsim-autosave', JSON.stringify(scenario))
-    localStorage.setItem('logsim-autosave-time', new Date().toISOString())
-  }, [buildScenario])
+    const ep = useEpisodeStore.getState().episode
+    const lib = useScenarioLibraryStore.getState()
+    let id = lib.currentId
+    if (!id) {
+      id = lib.startNew()
+    }
+    const existing = lib.getById(id)
+    const now = new Date().toISOString()
+    lib.upsert({
+      id,
+      name: metadata.name,
+      scenario,
+      episode: ep,
+      savedAt: now,
+      createdAt: existing?.createdAt ?? now,
+    })
+  }, [buildScenario, metadata.name, nodes.length])
 
   const handleSaveScenario = useCallback(() => {
     const scenario = buildScenario()
@@ -174,25 +199,10 @@ export function Topbar() {
       try {
         const data = JSON.parse(evt.target?.result as string)
         const scenario = deserializeScenario(data)
-        const flowNodes = scenario.nodes.map(n => ({
-          id: n.id,
-          type: n.type,
-          position: n.position,
-          parentId: n.parentId || undefined,
-          data: asFlowNodeData(n),
-          style: n.size ? { width: n.size.width, height: n.size.height } : {},
-          ...(n.parentId ? { extent: 'parent' as const } : {}),
-        }))
-        const flowEdges = scenario.connections.map(c => ({
-          id: c.id,
-          source: c.sourceId,
-          target: c.targetId,
-          sourceHandle: c.sourceHandle,
-          targetHandle: c.targetHandle,
-          type: 'connectionEdge' as const,
-          data: asFlowEdgeData(c),
-          label: c.protocol.toUpperCase(),
-        }))
+        const { flowNodes, flowEdges } = scenarioToFlow(scenario)
+        // Imported scenarios become a fresh library entry so autosave doesn't
+        // overwrite whatever the user was editing before.
+        useScenarioLibraryStore.getState().startNew()
         loadScenario(flowNodes, flowEdges, scenario.metadata)
       } catch (err) {
         alert('Failed to load scenario: ' + String(err))
@@ -206,9 +216,31 @@ export function Topbar() {
     if (nodes.length > 0) {
       if (!confirm('Create a new scenario? Unsaved changes will be lost.')) return
     }
+    // Allocate a fresh library id so the new scenario is tracked separately
+    // and the previous one stays available under "Recent Scenarios".
+    useScenarioLibraryStore.getState().startNew()
     resetScenario()
+    useEpisodeStore.getState().resetEpisode()
     setDescribePanelOpen(true)
   }, [nodes.length, resetScenario, setDescribePanelOpen])
+
+  const handleLoadFromLibrary = useCallback((entry: SavedScenario) => {
+    try {
+      const { flowNodes, flowEdges } = scenarioToFlow(entry.scenario)
+      useScenarioLibraryStore.getState().setCurrentId(entry.id)
+      loadScenario(flowNodes, flowEdges, entry.scenario.metadata)
+      setEpisode(entry.episode)
+    } catch (err) {
+      alert('Failed to load scenario: ' + String(err))
+    }
+  }, [loadScenario, setEpisode])
+
+  const handleDeleteFromLibrary = useCallback((entry: SavedScenario, e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!confirm(`Delete "${entry.name}" from your recent scenarios?`)) return
+    useScenarioLibraryStore.getState().remove(entry.id)
+  }, [])
 
   // ── Example Scenarios (presets w/ embedded timelines) ───────────
   const loadPresetsManifest = useCallback(async () => {
@@ -227,6 +259,9 @@ export function Topbar() {
       const json = await res.json()
       const result = materializeProposedScenarioJson(json)
       const now = new Date().toISOString()
+      // Each preset load opens a new library entry so it shows up under
+      // "Recent" once the user starts editing it.
+      useScenarioLibraryStore.getState().startNew()
       loadScenario(result.flowNodes, result.flowEdges, {
         name: result.name?.trim() || entry.title,
         description: result.description?.trim() || entry.description,
@@ -376,7 +411,11 @@ export function Topbar() {
   // ── Title editing ───────────────────────────────────────────────
   const commitName = useCallback((raw: string) => {
     const next = raw.trim() || 'My Scenario'
-    if (next !== metadata.name) setMetadata({ name: next })
+    if (next !== metadata.name) {
+      setMetadata({ name: next })
+      const lib = useScenarioLibraryStore.getState()
+      if (lib.currentId) lib.renameById(lib.currentId, next)
+    }
     setDraftName(next)
     setEditingTitle(false)
   }, [metadata.name, setMetadata])
@@ -484,6 +523,64 @@ export function Topbar() {
             <DropdownMenuItem onClick={handleOpenScenario} className="cursor-pointer text-xs">📂 Open Scenario…</DropdownMenuItem>
             <DropdownMenuItem onClick={handleSaveScenario} className="cursor-pointer text-xs">💾 Save Scenario  ⌘S</DropdownMenuItem>
             <DropdownMenuSeparator />
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger
+                disabled={recentScenarios.length === 0}
+                className="cursor-pointer text-xs data-[disabled]:opacity-50"
+              >
+                🕘 Recent Scenarios
+                {recentScenarios.length > 0 && (
+                  <span className="ml-auto text-[10px] text-slate-400">{recentScenarios.length}</span>
+                )}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="max-w-sm text-xs">
+                <DropdownMenuLabel className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                  Saved in this browser
+                </DropdownMenuLabel>
+                {recentScenarios.length === 0 ? (
+                  <div className="px-2 py-1.5 text-[11px] text-slate-400">No recent scenarios.</div>
+                ) : (
+                  recentScenarios.map(entry => {
+                    const isCurrent = entry.id === currentScenarioId
+                    const services = entry.scenario.nodes.filter(n => n.type === 'service').length
+                    const beats = entry.episode.narrative?.length ?? 0
+                    const blockCount = entry.episode.lanes
+                      ? Object.values(entry.episode.lanes).reduce((sum, blocks) => sum + (blocks?.length ?? 0), 0)
+                      : 0
+                    return (
+                      <DropdownMenuItem
+                        key={entry.id}
+                        onSelect={() => handleLoadFromLibrary(entry)}
+                        className="group/recent flex cursor-pointer items-start gap-2 text-xs"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="truncate font-medium">{entry.name || 'Untitled'}</span>
+                            {isCurrent && (
+                              <span className="rounded bg-blue-100 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-blue-700">
+                                Current
+                              </span>
+                            )}
+                          </div>
+                          <div className="mt-0.5 text-[10px] text-slate-400">
+                            {services} services · {blockCount} blocks · {beats} beats · {fmtRelativeTime(entry.savedAt)}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteFromLibrary(entry, e)}
+                          className="shrink-0 rounded p-1 text-slate-300 opacity-0 transition-opacity hover:bg-red-50 hover:text-red-600 group-hover/recent:opacity-100"
+                          title="Delete"
+                          aria-label={`Delete ${entry.name}`}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      </DropdownMenuItem>
+                    )
+                  })
+                )}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
             <DropdownMenuSub>
               <DropdownMenuSubTrigger
                 onMouseEnter={loadPresetsManifest}
@@ -829,5 +926,21 @@ export function Topbar() {
       </Dialog>
     </div>
   )
+}
+
+function fmtRelativeTime(iso: string): string {
+  const ts = new Date(iso).getTime()
+  if (Number.isNaN(ts)) return ''
+  const diff = Date.now() - ts
+  if (diff < 0) return 'just now'
+  const sec = Math.floor(diff / 1000)
+  if (sec < 60) return 'just now'
+  const min = Math.floor(sec / 60)
+  if (min < 60) return `${min}m ago`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${hr}h ago`
+  const day = Math.floor(hr / 24)
+  if (day < 7) return `${day}d ago`
+  return new Date(iso).toLocaleDateString()
 }
 
