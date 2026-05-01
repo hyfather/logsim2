@@ -46,6 +46,7 @@ import { canvasToScenarioYaml } from '@/lib/canvasToScenarioYaml'
 import { runStream } from '@/lib/runStream'
 import { logsAt } from '@/lib/logsAt'
 import { materializeProposedScenarioJson } from '@/lib/scenarioPrompt'
+import { ExportPreviewModal, type ExportTab } from '@/components/toolbar/ExportPreviewModal'
 
 interface PresetScenarioManifestEntry {
   file: string
@@ -84,6 +85,7 @@ function GithubMark({ className }: { className?: string }) {
 export function Topbar() {
   const { nodes, edges, metadata, setMetadata, resetScenario, loadScenario } = useScenarioStore()
   const setDescribePanelOpen = useUIStore(s => s.setDescribePanelOpen)
+  const episode = useEpisodeStore(s => s.episode)
   const setEpisode = useEpisodeStore(s => s.setEpisode)
   const setTick = useEpisodeStore(s => s.setTick)
   const setRunStatus = useEpisodeStore(s => s.setRunStatus)
@@ -380,27 +382,30 @@ export function Topbar() {
   }, [metadata.name, setMetadata])
 
   // ── Exports ─────────────────────────────────────────────────────
-  const handleExportLog = useCallback(() => {
-    const text = logBuffer.map(l => l.raw).join('\n')
-    const blob = new Blob([text], { type: 'text/plain' })
+  const downloadText = useCallback((text: string, filename: string, mime: string) => {
+    const blob = new Blob([text], { type: mime })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = 'logs.log'
+    a.download = filename
     a.click()
     URL.revokeObjectURL(url)
-  }, [logBuffer])
+  }, [])
+
+  const handleExportLog = useCallback(() => {
+    downloadText(logBuffer.map(l => l.raw).join('\n'), 'logs.log', 'text/plain')
+  }, [downloadText, logBuffer])
 
   const handleExportJsonl = useCallback(() => {
-    const text = logBuffer.map(l => JSON.stringify(l)).join('\n')
-    const blob = new Blob([text], { type: 'application/jsonl' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'logs.jsonl'
-    a.click()
-    URL.revokeObjectURL(url)
-  }, [logBuffer])
+    downloadText(logBuffer.map(l => JSON.stringify(l)).join('\n'), 'logs.jsonl', 'application/jsonl')
+  }, [downloadText, logBuffer])
+
+  const [exportModalOpen, setExportModalOpen] = useState(false)
+  const [exportModalTab, setExportModalTab] = useState<ExportTab>('yaml')
+  const openExportModal = useCallback((tab: ExportTab) => {
+    setExportModalTab(tab)
+    setExportModalOpen(true)
+  }, [])
 
   // ── Derived ─────────────────────────────────────────────────────
   const isRunning = status === 'running'
@@ -734,9 +739,9 @@ export function Topbar() {
               <span className="hidden md:inline">Export</span>
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-44">
+          <DropdownMenuContent align="end" className="w-56">
             <DropdownMenuLabel className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
-              Export {logBuffer.length} log{logBuffer.length === 1 ? '' : 's'}
+              Logs ({logBuffer.length})
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={handleExportLog} className="cursor-pointer text-xs">
@@ -747,12 +752,37 @@ export function Topbar() {
               <span className="font-mono text-[11px] text-slate-400">.jsonl</span>
               <span className="ml-2">JSON lines</span>
             </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
+              Scenario
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => openExportModal('yaml')} className="cursor-pointer text-xs">
+              <span className="font-mono text-[11px] text-slate-400">.yaml</span>
+              <span className="ml-2">scenario.yaml</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => openExportModal('ground-truth')} className="cursor-pointer text-xs">
+              <span className="font-mono text-[11px] text-slate-400">.txt</span>
+              <span className="ml-2">Ground truth (SFT/RL)</span>
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
 
       {/* hidden file input */}
       <input ref={fileInputRef} type="file" accept=".json,.logsim.json" className="hidden" onChange={handleScenarioFileChange} />
+
+      {/* Export preview modal */}
+      <ExportPreviewModal
+        open={exportModalOpen}
+        onClose={() => setExportModalOpen(false)}
+        initialTab={exportModalTab}
+        flowNodes={nodes}
+        flowEdges={edges}
+        metadata={metadata}
+        episode={episode}
+        tickIntervalMs={1000}
+      />
 
       {/* About modal */}
       <Dialog open={aboutOpen} onOpenChange={setAboutOpen}>
