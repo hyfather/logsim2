@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils'
 import { useAIKeysStore } from '@/store/useAIKeysStore'
 import { useScenarioStore } from '@/store/useScenarioStore'
 import { useEpisodeStore } from '@/store/useEpisodeStore'
+import { useScenarioLibraryStore } from '@/store/useScenarioLibraryStore'
 import { AI_PROVIDER_META, type AIProvider } from '@/types/aiKeys'
 import { generateScenarioFromDescription } from '@/lib/scenarioPrompt'
 import { AIRequestError } from '@/lib/aiClient'
@@ -96,6 +97,10 @@ export function DescribeScenarioPanel({ open, onClose }: DescribeScenarioPanelPr
         description,
         { signal: controller.signal },
       )
+
+      // Begin a fresh library entry so the previously-edited scenario stays
+      // in "Recent" instead of being overwritten by the AI generation.
+      useScenarioLibraryStore.getState().startNew()
 
       // Replace the current scenario with what the model proposed. The user
       // still has Ctrl+Z (or just typing again) as undo.

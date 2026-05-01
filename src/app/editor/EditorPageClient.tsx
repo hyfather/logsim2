@@ -18,8 +18,9 @@ import { forwardToHec } from '@/lib/criblForwarder'
 import type { CriblHecDestination } from '@/types/destinations'
 import { PanelLeftOpen, PanelRightOpen, ChevronDown, ChevronUp } from 'lucide-react'
 import { deserializeScenario } from '@/lib/serialization'
-import { asFlowEdgeData, asFlowNodeData } from '@/lib/flow-data'
+import { scenarioToFlow } from '@/lib/flow-data'
 import { materializeProposedScenarioJson } from '@/lib/scenarioPrompt'
+import { useScenarioLibraryStore } from '@/store/useScenarioLibraryStore'
 import { cn } from '@/lib/utils'
 import { useUrlSync } from '@/hooks/useUrlSync'
 import { useIsMobile } from '@/hooks/useMediaQuery'
@@ -77,6 +78,9 @@ export default function EditorPageClient() {
           if (cancelled) return
           const result = materializeProposedScenarioJson(json)
           const now = new Date().toISOString()
+          // Loading a preset from the URL begins a fresh library entry so the
+          // user's previous in-progress scenario stays in "Recent".
+          useScenarioLibraryStore.getState().startNew()
           loadScenario(result.flowNodes, result.flowEdges, {
             name: result.name?.trim() || slug,
             description: result.description?.trim() || '',
@@ -98,38 +102,42 @@ export default function EditorPageClient() {
       return () => { cancelled = true }
     }
 
+    // Restore the last-edited scenario (canvas + timeline) from the library.
+    const lib = useScenarioLibraryStore.getState()
+    const current = lib.currentId ? lib.getById(lib.currentId) : undefined
+    if (current) {
+      try {
+        const { flowNodes, flowEdges } = scenarioToFlow(current.scenario)
+        loadScenario(flowNodes, flowEdges, current.scenario.metadata)
+        setEpisode(current.episode)
+        return
+      } catch {
+        // fall through to migration / blank canvas
+      }
+    }
+
+    // One-time migration: import the legacy `logsim-autosave` key (canvas-only)
+    // into the library so users don't lose work when this version ships. The
+    // legacy entry is then removed.
     const saved = localStorage.getItem('logsim-autosave')
     const savedTime = localStorage.getItem('logsim-autosave-time')
     if (saved && savedTime) {
       const age = Date.now() - new Date(savedTime).getTime()
-      if (age < 7 * 24 * 3600 * 1000) { // within 7 days
+      if (age < 7 * 24 * 3600 * 1000) {
         try {
           const data = JSON.parse(saved)
           const scenario = deserializeScenario(data)
-          const flowNodes = scenario.nodes.map(n => ({
-              id: n.id,
-              type: n.type,
-              position: n.position,
-              parentId: n.parentId || undefined,
-              data: asFlowNodeData(n),
-              style: n.size ? { width: n.size.width, height: n.size.height } : {},
-              ...(n.parentId ? { extent: 'parent' as const } : {}),
-            }))
-            const flowEdges = scenario.connections.map(c => ({
-              id: c.id,
-              source: c.sourceId,
-              target: c.targetId,
-              sourceHandle: c.sourceHandle,
-              targetHandle: c.targetHandle,
-              type: 'connectionEdge' as const,
-              data: asFlowEdgeData(c),
-              label: c.protocol.toUpperCase(),
-            }))
-            loadScenario(flowNodes, flowEdges, scenario.metadata)
+          const { flowNodes, flowEdges } = scenarioToFlow(scenario)
+          loadScenario(flowNodes, flowEdges, scenario.metadata)
+          // Defer; the next autosave will write this into the library under a
+          // fresh id (allocated here so renames stick).
+          lib.startNew()
         } catch {
-          // ignore
+          // ignore corrupted legacy data
         }
       }
+      localStorage.removeItem('logsim-autosave')
+      localStorage.removeItem('logsim-autosave-time')
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
