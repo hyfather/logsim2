@@ -1,0 +1,71 @@
+{
+  "name": "Internal DNS Resolver Outage",
+  "description": "The corporate Unbound resolver pair goes silent after a config push. Pods, app servers and the LB all start failing health checks because nothing can resolve internal SRV records. Failover to the secondary takes longer than anyone expected.",
+  "reasoning": "Edge nginx fronts a Go API that depends on Postgres + Redis. All four lean on internal DNS for service discovery. When DNS dies, every TCP connect attempt blows past its dial timeout and 5xx rates spike across the board.",
+  "category": "incident",
+  "difficulty": "medium",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "corp-prod-use1",   "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "subnet-edge-a",    "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "subnet-app-priv",  "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "subnet-data-priv", "parent": "vpc" },
+    { "id": "dnsnet",  "type": "subnet",  "label": "subnet-shared-svc", "parent": "vpc" },
+    { "id": "lb",   "type": "service", "serviceType": "nginx",    "label": "edge-ingress-01",      "parent": "pubnet" },
+    { "id": "api",  "type": "service", "serviceType": "golang",   "label": "checkout-api",         "parent": "appnet" },
+    { "id": "wrk",  "type": "service", "serviceType": "golang",   "label": "checkout-worker",      "parent": "appnet" },
+    { "id": "db",   "type": "service", "serviceType": "postgres", "label": "checkout-pg-primary",  "parent": "datanet" },
+    { "id": "rd",   "type": "service", "serviceType": "redis",    "label": "checkout-cache",       "parent": "datanet" },
+    { "id": "dns1", "type": "service", "serviceType": "custom",   "label": "ns-resolver-01",       "parent": "dnsnet", "notes": "Unbound primary, listens on udp/53 + tcp/53." },
+    { "id": "dns2", "type": "service", "serviceType": "custom",   "label": "ns-resolver-02",       "parent": "dnsnet", "notes": "Cold standby; nobody has tested failover in months." }
+  ],
+  "edges": [
+    { "source": "lb",  "target": "api",  "protocol": "http", "port": 8080, "trafficRate": 110, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "api", "target": "db",   "protocol": "tcp",  "port": 5432, "trafficRate": 50,  "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "api", "target": "rd",   "protocol": "tcp",  "port": 6379, "trafficRate": 220, "trafficPattern": "steady",  "errorRate": 0.0005 },
+    { "source": "wrk", "target": "db",   "protocol": "tcp",  "port": 5432, "trafficRate": 30,  "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "api", "target": "dns1", "protocol": "udp",  "port": 53,   "trafficRate": 90,  "trafficPattern": "steady",  "errorRate": 0.0005 },
+    { "source": "wrk", "target": "dns1", "protocol": "udp",  "port": 53,   "trafficRate": 60,  "trafficPattern": "steady",  "errorRate": 0.0005 },
+    { "source": "lb",  "target": "dns1", "protocol": "udp",  "port": 53,   "trafficRate": 40,  "trafficPattern": "steady",  "errorRate": 0.0005 }
+  ],
+  "timeline": {
+    "duration": 1380,
+    "narrative": [
+      { "tick": 0,    "text": "Quiet evening traffic. ns-resolver-01 happily answering ~300 qps." },
+      { "tick": 240,  "text": "An ops PR rolls out a typo in unbound.conf via Salt; ns-resolver-01 crashes on reload." },
+      { "tick": 290,  "text": "checkout-api dial timeouts begin: 'lookup checkout-pg-primary on 10.0.5.10:53: i/o timeout'." },
+      { "tick": 420,  "text": "edge-ingress-01 returns 502s for ~40% of upstream picks. PagerDuty wakes the SRE on call." },
+      { "tick": 660,  "text": "Operators try to flip resolv.conf to ns-resolver-02 — the standby has no zones loaded since Q3." },
+      { "tick": 900,  "text": "Standby zones force-synced from git. Resolution starts working again, slow." },
+      { "tick": 1080, "text": "DNS caches warm, Postgres connection pools recover, error rate falling fast." },
+      { "tick": 1260, "text": "Steady state. Postmortem opened: 'no monitoring on resolver health, no automated failover'." }
+    ],
+    "lanes": {
+      "dns1": [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 660, "state": "down",       "note": "config push crashed unbound" },
+        { "start": 900,  "duration": 480, "state": "recovering" }
+      ],
+      "dns2": [
+        { "start": 0,    "duration": 660, "state": "healthy",    "note": "cold standby, no zones" },
+        { "start": 660,  "duration": 240, "state": "recovering", "note": "force-syncing zones" },
+        { "start": 900,  "duration": 480, "state": "healthy" }
+      ],
+      "api": [
+        { "start": 0,    "duration": 290, "state": "healthy" },
+        { "start": 290,  "duration": 670, "state": "degraded",   "note": "DNS lookups timing out" },
+        { "start": 960,  "duration": 240, "state": "recovering" },
+        { "start": 1200, "duration": 180, "state": "healthy" }
+      ],
+      "wrk": [
+        { "start": 0,    "duration": 290, "state": "healthy" },
+        { "start": 290,  "duration": 670, "state": "degraded" },
+        { "start": 960,  "duration": 420, "state": "healthy" }
+      ],
+      "lb": [
+        { "start": 0,    "duration": 420, "state": "healthy" },
+        { "start": 420,  "duration": 540, "state": "degraded",   "note": "upstream resolution failing" },
+        { "start": 960,  "duration": 420, "state": "healthy" }
+      ]
+    }
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "name": "AWS Root Account Used From New Geo",
+  "description": "The root account on the master payer hasn't been used in 411 days. Tonight someone logs in from an IP in a country no employee is in, opens the billing console, and creates an access key.",
+  "reasoning": "AWS control plane only. CloudTrail shows the rare 'rootUser' principal used, the GeoIP is unfamiliar, and a root access key is being minted — three high-confidence signals that should each individually page.",
+  "category": "cloud",
+  "difficulty": "easy",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "control-plane-mirror", "parent": null },
+    { "id": "edgenet", "type": "subnet",  "label": "iam-edge",             "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "control-plane-app",    "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "audit-store",          "parent": "vpc" },
+    { "id": "iam",  "type": "service", "serviceType": "custom",  "label": "aws-iam",          "parent": "edgenet" },
+    { "id": "bil",  "type": "service", "serviceType": "custom",  "label": "aws-billing-console","parent": "appnet" },
+    { "id": "ct",   "type": "service", "serviceType": "custom",  "label": "cloudtrail-firehose","parent": "datanet" },
+    { "id": "siem", "type": "service", "serviceType": "custom",  "label": "siem-collector",   "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "iam", "target": "bil",  "protocol": "https", "port": 443, "trafficRate": 5,  "trafficPattern": "steady", "errorRate": 0.005 },
+    { "source": "iam", "target": "ct",   "protocol": "https", "port": 443, "trafficRate": 8,  "trafficPattern": "steady", "errorRate": 0.001 },
+    { "source": "bil", "target": "ct",   "protocol": "https", "port": 443, "trafficRate": 3,  "trafficPattern": "steady", "errorRate": 0.001 },
+    { "source": "ct",  "target": "siem", "protocol": "tcp",   "port": 9200,"trafficRate": 14, "trafficPattern": "steady", "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 900,
+    "narrative": [
+      { "tick": 0,    "text": "Quiet baseline. Root has not been used in 411 days." },
+      { "tick": 180,  "text": "ConsoleLogin event for principal 'rootUser' from sourceIPAddress 5.34.180.x (TR)." },
+      { "tick": 240,  "text": "Billing dashboard opened; spend reports downloaded." },
+      { "tick": 300,  "text": "iam:CreateAccessKey for root issued — long-lived credentials minted." },
+      { "tick": 360,  "text": "EventBridge rule 'root-login' fires; PagerDuty wakes the security director directly." },
+      { "tick": 540,  "text": "Root password reset, MFA factor swapped to a hardware key, freshly issued AK deleted." },
+      { "tick": 720,  "text": "Forensics: stolen MFA seed traced to a 2022 export from a former contractor's laptop." },
+      { "tick": 840,  "text": "Steady state. Action items: enable IAM Identity Center, kill all root keys, lock root in a vault." }
+    ],
+    "lanes": {
+      "iam": [
+        { "start": 0,    "duration": 180, "state": "healthy" },
+        { "start": 180,  "duration": 360, "state": "compromised",  "note": "rootUser console + AK creation" },
+        { "start": 540,  "duration": 360, "state": "recovering" }
+      ],
+      "bil": [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 300, "state": "under_attack", "note": "anomalous root browse" },
+        { "start": 540,  "duration": 360, "state": "healthy" }
+      ]
+    }
+  }
+}

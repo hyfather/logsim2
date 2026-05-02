@@ -1,0 +1,56 @@
+{
+  "name": "Departing Engineer — Bulk Repo & Doc Pull",
+  "description": "Senior engineer gives notice on the 1st. Over the following two weeks they git-clone 87 internal repos, then on the morning of their last day they pull 14 GB from SharePoint covering customer roadmaps, contract redlines and salary bands.",
+  "reasoning": "GitHub Enterprise + SharePoint Online are modelled as services behind a corp identity edge. The simulation shows individual user activity (the offboarding employee) producing anomalous bulk reads across both surfaces.",
+  "category": "insider",
+  "difficulty": "medium",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "corp-services",  "parent": null },
+    { "id": "edgenet", "type": "subnet",  "label": "identity-edge",  "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "saas-bridge",    "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "audit-store",    "parent": "vpc" },
+    { "id": "broker", "type": "service", "serviceType": "nginx",   "label": "okta-sso-edge",      "parent": "edgenet" },
+    { "id": "ghe",    "type": "service", "serviceType": "custom",  "label": "github-enterprise",  "parent": "appnet" },
+    { "id": "spo",    "type": "service", "serviceType": "custom",  "label": "sharepoint-online",  "parent": "appnet" },
+    { "id": "dlp",    "type": "service", "serviceType": "custom",  "label": "dlp-egress-proxy",   "parent": "appnet"  },
+    { "id": "audit",  "type": "service", "serviceType": "postgres","label": "audit-events-db",    "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "broker", "target": "ghe",   "protocol": "https", "port": 443, "trafficRate": 30, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "broker", "target": "spo",   "protocol": "https", "port": 443, "trafficRate": 50, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "ghe",    "target": "dlp",   "protocol": "https", "port": 443, "trafficRate": 30, "trafficPattern": "steady",  "errorRate": 0.005 },
+    { "source": "spo",    "target": "dlp",   "protocol": "https", "port": 443, "trafficRate": 50, "trafficPattern": "steady",  "errorRate": 0.005 },
+    { "source": "broker", "target": "audit", "protocol": "tcp",   "port": 5432,"trafficRate": 12, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1800,
+    "narrative": [
+      { "tick": 0,    "text": "Normal collaboration traffic, single tenant, working hours." },
+      { "tick": 240,  "text": "User m.singh@corp begins cloning repos sequentially via personal laptop token (PAT)." },
+      { "tick": 480,  "text": "After 2h, 41 repos cloned; rate consistent (one every ~3 min)." },
+      { "tick": 780,  "text": "Cloning continues into the evening; 87 repos total in the audit log by EOD." },
+      { "tick": 960,  "text": "Next morning: SharePoint bulk download starts — 14 GB across /Customers, /Roadmaps, /HR-private." },
+      { "tick": 1140, "text": "DLP rule 'large-volume-doc-export' fires; risk score for m.singh jumps." },
+      { "tick": 1320, "text": "Insider-risk team revokes session, suspends PAT, schedules forensic call with the user's manager." },
+      { "tick": 1560, "text": "Legal hold placed on m.singh's mailbox + endpoint; egress activity flat." }
+    ],
+    "lanes": {
+      "ghe": [
+        { "start": 0,    "duration": 240,  "state": "healthy" },
+        { "start": 240,  "duration": 720,  "state": "under_attack", "note": "single user, anomalous repo-clone rate" },
+        { "start": 1140, "duration": 360,  "state": "throttled",    "note": "PAT revoked" },
+        { "start": 1500, "duration": 300,  "state": "healthy" }
+      ],
+      "spo": [
+        { "start": 0,    "duration": 960,  "state": "healthy" },
+        { "start": 960,  "duration": 360,  "state": "under_attack", "note": "14 GB anomalous read" },
+        { "start": 1320, "duration": 480,  "state": "recovering" }
+      ],
+      "dlp": [
+        { "start": 0,    "duration": 1140, "state": "healthy" },
+        { "start": 1140, "duration": 240,  "state": "under_attack", "note": "DLP signal flood" },
+        { "start": 1380, "duration": 420,  "state": "healthy" }
+      ]
+    }
+  }
+}

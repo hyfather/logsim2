@@ -1,0 +1,50 @@
+{
+  "name": "Conditional Access Policy Weakened 'For Testing'",
+  "description": "An IT admin disables the 'require compliant device for all users' Conditional Access policy at 14:02 to debug a partner integration. They forget. Six hours later attackers spray credentials from non-corporate devices and walk straight into Exchange.",
+  "reasoning": "Identity edge + downstream M365 services. The simulation shows the policy flip (low-volume admin event), then a delayed attack timing that maps to attackers waking up in their tz, then containment.",
+  "category": "cloud",
+  "difficulty": "medium",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "corp-identity",  "parent": null },
+    { "id": "edgenet", "type": "subnet",  "label": "identity-edge",  "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "saas-bridge",    "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "audit-store",    "parent": "vpc" },
+    { "id": "edge",  "type": "service", "serviceType": "nginx",   "label": "entra-edge",      "parent": "edgenet" },
+    { "id": "ad",    "type": "service", "serviceType": "custom",  "label": "entra-id-tenancy","parent": "appnet" },
+    { "id": "exo",   "type": "service", "serviceType": "custom",  "label": "exchange-online", "parent": "appnet" },
+    { "id": "ueba",  "type": "service", "serviceType": "custom",  "label": "id-ueba",         "parent": "appnet" },
+    { "id": "siem",  "type": "service", "serviceType": "custom",  "label": "siem-collector",  "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "edge", "target": "ad",   "protocol": "https", "port": 443, "trafficRate": 70, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "ad",   "target": "exo",  "protocol": "https", "port": 443, "trafficRate": 40, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "ad",   "target": "ueba", "protocol": "https", "port": 443, "trafficRate": 12, "trafficPattern": "steady",  "errorRate": 0.005 },
+    { "source": "ueba", "target": "siem", "protocol": "tcp",   "port": 9200,"trafficRate": 22, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1500,
+    "narrative": [
+      { "tick": 0,    "text": "Quiet baseline; CA policy 'require compliant device' enabled and enforcing." },
+      { "tick": 180,  "text": "14:02 UTC — admin disables the policy 'temporarily' and forgets to restore." },
+      { "tick": 540,  "text": "Spray begins from 50+ residential IPs (botnet); 0.5% of attempts succeed (re-used passwords)." },
+      { "tick": 720,  "text": "Successful logins from non-managed devices to Exchange Web Services for ~14 accounts." },
+      { "tick": 900,  "text": "Mailbox forwarding rules added on 6 of those accounts (BEC pattern)." },
+      { "tick": 1080, "text": "UEBA + DLP correlate 'no compliant device' + 'new forwarding rule'. SOC paged." },
+      { "tick": 1260, "text": "CA policy re-enabled; affected sessions revoked; forwarding rules removed." },
+      { "tick": 1440, "text": "Steady state. New rule: any disable of tier-0 CA policy auto-restores after 60 minutes." }
+    ],
+    "lanes": {
+      "ad": [
+        { "start": 0,    "duration": 540, "state": "healthy" },
+        { "start": 540,  "duration": 540, "state": "under_attack", "note": "credential spray with weakened policy" },
+        { "start": 1080, "duration": 240, "state": "recovering" },
+        { "start": 1320, "duration": 180, "state": "healthy" }
+      ],
+      "exo": [
+        { "start": 0,    "duration": 720, "state": "healthy" },
+        { "start": 720,  "duration": 360, "state": "compromised",  "note": "BEC forwarding rules" },
+        { "start": 1080, "duration": 420, "state": "recovering" }
+      ]
+    }
+  }
+}

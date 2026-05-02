@@ -1,0 +1,55 @@
+{
+  "name": "PCI Segment Violation",
+  "description": "A developer working on a payments feature SSHes into a CDE-segment EC2 instance and from there opens a TCP connection to a non-CDE Elasticsearch cluster (because that's where their dashboard lives). PCI-DSS doesn't care about intent — that flow violates segmentation.",
+  "reasoning": "The CDE has a payments-svc reachable only via a tightly controlled jump host. The simulation shows an unusual east-west flow from the CDE jump host to the non-CDE shared logging cluster, picked up by netflow + flow-log analytics.",
+  "category": "insider",
+  "difficulty": "medium",
+  "nodes": [
+    { "id": "vpc",      "type": "vpc",     "label": "payments-cde-vpc", "parent": null },
+    { "id": "cdeedge",  "type": "subnet",  "label": "cde-edge",         "parent": "vpc" },
+    { "id": "cdeapp",   "type": "subnet",  "label": "cde-app",          "parent": "vpc" },
+    { "id": "cdedata",  "type": "subnet",  "label": "cde-data",         "parent": "vpc" },
+    { "id": "shared",   "type": "subnet",  "label": "shared-svcs-net",  "parent": "vpc" },
+    { "id": "lb",   "type": "service", "serviceType": "nginx",    "label": "cde-edge-lb",        "parent": "cdeedge" },
+    { "id": "pay",  "type": "service", "serviceType": "golang",   "label": "payments-svc",       "parent": "cdeapp" },
+    { "id": "jump", "type": "service", "serviceType": "custom",   "label": "cde-jumphost",       "parent": "cdeapp" },
+    { "id": "pg",   "type": "service", "serviceType": "postgres", "label": "payments-db",        "parent": "cdedata" },
+    { "id": "es",   "type": "service", "serviceType": "custom",   "label": "shared-elasticsearch","parent": "shared",  "notes": "Non-CDE logging cluster." },
+    { "id": "siem", "type": "service", "serviceType": "custom",   "label": "vpc-flow-collector", "parent": "shared" }
+  ],
+  "edges": [
+    { "source": "lb",   "target": "pay",  "protocol": "https", "port": 443,  "trafficRate": 50, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "pay",  "target": "pg",   "protocol": "tcp",   "port": 5432, "trafficRate": 30, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "jump", "target": "pay",  "protocol": "tcp",   "port": 22,   "trafficRate": 2,  "trafficPattern": "steady",  "errorRate": 0.005 },
+    { "source": "jump", "target": "es",   "protocol": "http",  "port": 9200, "trafficRate": 4,  "trafficPattern": "bursty",  "errorRate": 0.005 },
+    { "source": "es",   "target": "siem", "protocol": "tcp",   "port": 9997, "trafficRate": 12, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1080,
+    "narrative": [
+      { "tick": 0,    "text": "Quiet morning; CDE traffic stays tightly scoped." },
+      { "tick": 240,  "text": "Developer SSHes into cde-jumphost via the bastion; 'normal' so far." },
+      { "tick": 360,  "text": "From the jumphost, a curl to shared-elasticsearch:9200 fires off a saved query." },
+      { "tick": 480,  "text": "VPC flow log analytics: 'east-west from CDE-app subnet to non-CDE subnet' — not allowed." },
+      { "tick": 660,  "text": "Compliance and security paged; flow blocked at the SG; user contacted by manager." },
+      { "tick": 840,  "text": "Logs from the unrelated dashboard moved into the CDE log aggregator (proper path)." },
+      { "tick": 1020, "text": "Findings recorded for the next QSA review." }
+    ],
+    "lanes": {
+      "jump": [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 240, "state": "compromised", "note": "PCI segment crossing" },
+        { "start": 480,  "duration": 360, "state": "throttled",   "note": "SG block applied" },
+        { "start": 840,  "duration": 240, "state": "healthy" }
+      ],
+      "es": [
+        { "start": 0,    "duration": 360, "state": "healthy" },
+        { "start": 360,  "duration": 120, "state": "under_attack", "note": "received CDE-origin traffic" },
+        { "start": 480,  "duration": 600, "state": "healthy" }
+      ],
+      "pay": [
+        { "start": 0,    "duration": 1080, "state": "healthy" }
+      ]
+    }
+  }
+}

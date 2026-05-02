@@ -1,0 +1,53 @@
+{
+  "name": "Tor Exit Nodes Scraping Pricing API",
+  "description": "A competitor (or someone running for one) hammers /api/v3/pricing through ~40 Tor exit nodes to dodge IP-based rate limits. Each individual IP looks like a normal user, but the aggregate pulls a full price book every two hours. The pricing service stays up but the Postgres read replica falls behind on lag.",
+  "reasoning": "Edge nginx → pricing-api (Go) → primary + read replica. Most reads go to the replica; the scraping pattern hits cold parts of the catalog so the replica's working set churns and replication lag grows.",
+  "category": "security",
+  "difficulty": "easy",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "ecom-prod-vpc", "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "ecom-edge",     "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "ecom-app",      "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "ecom-data",     "parent": "vpc" },
+    { "id": "lb",     "type": "service", "serviceType": "nginx",    "label": "ecom-edge-lb",      "parent": "pubnet" },
+    { "id": "api",    "type": "service", "serviceType": "golang",   "label": "pricing-api",       "parent": "appnet" },
+    { "id": "primary","type": "service", "serviceType": "postgres", "label": "pricing-pg-primary","parent": "datanet" },
+    { "id": "replica","type": "service", "serviceType": "postgres", "label": "pricing-pg-ro",     "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "lb",  "target": "api",     "protocol": "https", "port": 443,  "trafficRate": 90, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "api", "target": "primary", "protocol": "tcp",   "port": 5432, "trafficRate": 15, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "api", "target": "replica","protocol": "tcp",   "port": 5432, "trafficRate": 75, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1800,
+    "narrative": [
+      { "tick": 0,    "text": "Normal day-shift traffic; cache hit ratio on /pricing 92%." },
+      { "tick": 240,  "text": "Anomaly: requests from ~40 ASNs all matching known Tor exit list, low rate per IP, overlapping crawl pattern." },
+      { "tick": 360,  "text": "Working set on pricing-pg-ro churns; cache hit drops to 60%." },
+      { "tick": 660,  "text": "Replication lag grows to 12s as replica spends cycles on cold-page reads." },
+      { "tick": 900,  "text": "Pattern repeats — crawler restarts every ~7000 requests. Bot-detector flags it for review." },
+      { "tick": 1140, "text": "Risk team blocks Tor exits at the WAF for /api/v3/* endpoints." },
+      { "tick": 1380, "text": "Replica catches up; cache hit recovers to 88%." },
+      { "tick": 1620, "text": "Steady state; long-term plan: per-account auth on bulk pricing endpoints." }
+    ],
+    "lanes": {
+      "lb": [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 900, "state": "under_attack", "note": "Tor scraping" },
+        { "start": 1140, "duration": 240, "state": "throttled",    "note": "Tor blocked at WAF" },
+        { "start": 1380, "duration": 420, "state": "healthy" }
+      ],
+      "api": [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 1140,"state": "degraded",     "note": "elevated reads" },
+        { "start": 1380, "duration": 420, "state": "healthy" }
+      ],
+      "replica": [
+        { "start": 0,    "duration": 360, "state": "healthy" },
+        { "start": 360,  "duration": 1020,"state": "degraded",     "note": "lag, cold pages" },
+        { "start": 1380, "duration": 420, "state": "healthy" }
+      ]
+    }
+  }
+}

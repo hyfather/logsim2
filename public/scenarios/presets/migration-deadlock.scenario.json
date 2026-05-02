@@ -1,0 +1,64 @@
+{
+  "name": "Online Schema Migration Deadlock",
+  "description": "An ALTER TABLE on the orders table runs as part of a deploy. It's supposed to be online, but a long-held SELECT FOR UPDATE from a stale connection blocks it. The migration acquires a metadata lock, every subsequent INSERT waits for the migration, and the API queues fill up.",
+  "reasoning": "API → MySQL. The migration job is modelled as a third actor, briefly 'compromising' the database from the application's perspective until it either gets killed or completes.",
+  "category": "deploy",
+  "difficulty": "medium",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "orders-prod-vpc", "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "orders-edge",     "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "orders-app",      "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "orders-data",     "parent": "vpc" },
+    { "id": "lb",  "type": "service", "serviceType": "nginx",  "label": "orders-edge-lb",   "parent": "pubnet" },
+    { "id": "a1",  "type": "service", "serviceType": "nodejs", "label": "orders-api-1",     "parent": "appnet" },
+    { "id": "a2",  "type": "service", "serviceType": "nodejs", "label": "orders-api-2",     "parent": "appnet" },
+    { "id": "mig", "type": "service", "serviceType": "custom", "label": "schema-migrator-job", "parent": "appnet",  "notes": "Runs flyway via a one-shot K8s job during deploy." },
+    { "id": "db",  "type": "service", "serviceType": "mysql",  "label": "orders-db",        "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "lb",  "target": "a1",  "protocol": "http", "port": 3000, "trafficRate": 60, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb",  "target": "a2",  "protocol": "http", "port": 3000, "trafficRate": 60, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "a1",  "target": "db",  "protocol": "tcp",  "port": 3306, "trafficRate": 30, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "a2",  "target": "db",  "protocol": "tcp",  "port": 3306, "trafficRate": 30, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "mig", "target": "db",  "protocol": "tcp",  "port": 3306, "trafficRate": 6,  "trafficPattern": "bursty",  "errorRate": 0.005 }
+  ],
+  "timeline": {
+    "duration": 1200,
+    "narrative": [
+      { "tick": 0,    "text": "Steady traffic. Deploy starts; migrator job triggered." },
+      { "tick": 180,  "text": "ALTER TABLE orders ADD COLUMN ... begins; metadata lock requested." },
+      { "tick": 240,  "text": "A 9-min-old connection still holds SELECT FOR UPDATE; migrator blocks behind it." },
+      { "tick": 360,  "text": "INSERT into orders queues up; api-1/api-2 connection pools saturate." },
+      { "tick": 540,  "text": "On-call kills the stale session. Migration completes in ~30s." },
+      { "tick": 660,  "text": "Pools drain; API recovers; queue spike absorbs in ~3 minutes." },
+      { "tick": 900,  "text": "Postmortem: long-held transactions outside a 60s budget should be killed proactively." },
+      { "tick": 1080, "text": "Steady state. pt-kill installed for transactions older than 60s." }
+    ],
+    "lanes": {
+      "db": [
+        { "start": 0,    "duration": 180, "state": "healthy" },
+        { "start": 180,  "duration": 360, "state": "down",       "note": "metadata lock standoff" },
+        { "start": 540,  "duration": 240, "state": "recovering" },
+        { "start": 780,  "duration": 420, "state": "healthy" }
+      ],
+      "a1": [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 360, "state": "degraded",   "note": "pool saturated" },
+        { "start": 600,  "duration": 240, "state": "recovering" },
+        { "start": 840,  "duration": 360, "state": "healthy" }
+      ],
+      "a2": [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 360, "state": "degraded" },
+        { "start": 600,  "duration": 240, "state": "recovering" },
+        { "start": 840,  "duration": 360, "state": "healthy" }
+      ],
+      "mig": [
+        { "start": 0,    "duration": 180, "state": "healthy" },
+        { "start": 180,  "duration": 360, "state": "down",       "note": "blocked on metadata lock" },
+        { "start": 540,  "duration": 60,  "state": "recovering" },
+        { "start": 600,  "duration": 600, "state": "healthy" }
+      ]
+    }
+  }
+}

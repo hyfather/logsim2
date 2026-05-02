@@ -1,0 +1,61 @@
+{
+  "name": "Rollback Fails on Non-Reversible Migration",
+  "description": "A bad deploy needs to roll back. Unfortunately the migration that ran also DROPPED the legacy 'addresses_v1' table. The rollback target's code expects that table — restart loops in CrashLoopBackOff and the on-call has to roll forward and restore from a snapshot at the same time.",
+  "reasoning": "App fleet + Postgres. The rollback fails partway, leaving the cluster in a mixed state: some replicas restart-loop, others run on the new schema. The simulation focuses on the asymmetric degraded state.",
+  "category": "deploy",
+  "difficulty": "hard",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "shipping-prod-vpc", "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "shipping-edge",     "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "shipping-app",      "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "shipping-data",     "parent": "vpc" },
+    { "id": "lb",  "type": "service", "serviceType": "nginx",    "label": "shipping-edge-lb", "parent": "pubnet" },
+    { "id": "a1",  "type": "service", "serviceType": "nodejs",   "label": "shipping-api-1",   "parent": "appnet" },
+    { "id": "a2",  "type": "service", "serviceType": "nodejs",   "label": "shipping-api-2",   "parent": "appnet" },
+    { "id": "a3",  "type": "service", "serviceType": "nodejs",   "label": "shipping-api-3",   "parent": "appnet" },
+    { "id": "db",  "type": "service", "serviceType": "postgres", "label": "shipping-db",      "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "lb", "target": "a1", "protocol": "http", "port": 3000, "trafficRate": 50, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb", "target": "a2", "protocol": "http", "port": 3000, "trafficRate": 50, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb", "target": "a3", "protocol": "http", "port": 3000, "trafficRate": 50, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "a1", "target": "db", "protocol": "tcp",  "port": 5432, "trafficRate": 25, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "a2", "target": "db", "protocol": "tcp",  "port": 5432, "trafficRate": 25, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "a3", "target": "db", "protocol": "tcp",  "port": 5432, "trafficRate": 25, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1620,
+    "narrative": [
+      { "tick": 0,    "text": "Bad deploy goes out at T+0; addresses_v1 is dropped, addresses_v2 created and backfilled." },
+      { "tick": 240,  "text": "5xx rate climbs on the new code — null-handling regression. Engineer triggers rollback." },
+      { "tick": 360,  "text": "First old-version pod boots, queries addresses_v1, errors with 'relation does not exist', enters CrashLoopBackOff." },
+      { "tick": 540,  "text": "Cluster sits in mixed state: a1/a2 (old, broken) crash-looping, a3 (new) still serving but partially failing." },
+      { "tick": 720,  "text": "Decision: roll forward instead. Hot-fix code that handles addresses_v2 deployed." },
+      { "tick": 900,  "text": "All replicas converge on the new code; queue drains." },
+      { "tick": 1200, "text": "Steady state. Postmortem: irreversible migrations require a 2-step pattern (write-both, read-old, then flip)." },
+      { "tick": 1500, "text": "Process change rolled out to the rest of engineering." }
+    ],
+    "lanes": {
+      "a1": [
+        { "start": 0,    "duration": 360,  "state": "degraded",  "note": "new code, broken" },
+        { "start": 360,  "duration": 540,  "state": "down",      "note": "rollback CrashLoop" },
+        { "start": 900,  "duration": 240,  "state": "recovering" },
+        { "start": 1140, "duration": 480,  "state": "healthy" }
+      ],
+      "a2": [
+        { "start": 0,    "duration": 360,  "state": "degraded" },
+        { "start": 360,  "duration": 540,  "state": "down" },
+        { "start": 900,  "duration": 240,  "state": "recovering" },
+        { "start": 1140, "duration": 480,  "state": "healthy" }
+      ],
+      "a3": [
+        { "start": 0,    "duration": 900,  "state": "degraded",  "note": "new code, broken" },
+        { "start": 900,  "duration": 240,  "state": "recovering" },
+        { "start": 1140, "duration": 480,  "state": "healthy" }
+      ],
+      "db": [
+        { "start": 0,    "duration": 1620, "state": "healthy" }
+      ]
+    }
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "name": "Rogue Global Admin Service Principal",
+  "description": "A Global Admin in a stale break-glass account consents to a third-party app called 'BackupTool 365'. The app has Application.ReadWrite.All and Directory.ReadWrite.All. Within an hour it has registered a new service principal and granted it Global Admin role assignment.",
+  "reasoning": "Entra ID + the audit pipeline. The high-fidelity signal is 'role assignment created with role=Global Administrator and principal=ServicePrincipal' — this should never happen outside known automation.",
+  "category": "cloud",
+  "difficulty": "hard",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "corp-identity",  "parent": null },
+    { "id": "edgenet", "type": "subnet",  "label": "identity-edge",  "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "saas-bridge",    "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "audit-store",    "parent": "vpc" },
+    { "id": "edge",  "type": "service", "serviceType": "nginx",   "label": "entra-token-endpoint","parent": "edgenet" },
+    { "id": "ad",    "type": "service", "serviceType": "custom",  "label": "entra-id-tenancy",    "parent": "appnet" },
+    { "id": "graph", "type": "service", "serviceType": "custom",  "label": "ms-graph-api",        "parent": "appnet" },
+    { "id": "ueba",  "type": "service", "serviceType": "custom",  "label": "id-ueba",             "parent": "appnet" },
+    { "id": "siem",  "type": "service", "serviceType": "custom",  "label": "siem-collector",      "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "edge",  "target": "ad",    "protocol": "https", "port": 443, "trafficRate": 60, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "ad",    "target": "graph", "protocol": "https", "port": 443, "trafficRate": 30, "trafficPattern": "steady",  "errorRate": 0.005 },
+    { "source": "graph", "target": "ueba",  "protocol": "https", "port": 443, "trafficRate": 12, "trafficPattern": "steady",  "errorRate": 0.005 },
+    { "source": "ueba",  "target": "siem",  "protocol": "tcp",   "port": 9200,"trafficRate": 22, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1500,
+    "narrative": [
+      { "tick": 0,    "text": "Quiet identity baseline. Break-glass accounts dormant." },
+      { "tick": 240,  "text": "Break-glass GA 'ga-emergency2' signs in — first time in 9 months." },
+      { "tick": 360,  "text": "App 'BackupTool 365' granted admin consent for AppRoleAssignment.ReadWrite.All + Directory.ReadWrite.All." },
+      { "tick": 540,  "text": "New service principal 'svc-cloud-bkp' created and assigned Global Administrator." },
+      { "tick": 720,  "text": "UEBA fires 'service-principal-granted-global-admin'. SOC paged." },
+      { "tick": 960,  "text": "Backdoor SP deleted; consent grant revoked; break-glass MFA factor reset." },
+      { "tick": 1200, "text": "Audit walk of every role assignment in the last 7 days. Two more suspicious consents undone." },
+      { "tick": 1440, "text": "Steady state. New rule: GA-tier consent grants require admin-approval workflow." }
+    ],
+    "lanes": {
+      "ad": [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 720, "state": "compromised",  "note": "rogue admin consent + role grant" },
+        { "start": 960,  "duration": 240, "state": "recovering" },
+        { "start": 1200, "duration": 300, "state": "healthy" }
+      ],
+      "graph": [
+        { "start": 0,    "duration": 540, "state": "healthy" },
+        { "start": 540,  "duration": 420, "state": "under_attack", "note": "directory writes via attacker SP" },
+        { "start": 960,  "duration": 540, "state": "healthy" }
+      ]
+    }
+  }
+}

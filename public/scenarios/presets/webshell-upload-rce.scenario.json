@@ -1,0 +1,62 @@
+{
+  "name": "Web Shell Drop via Image Uploader",
+  "description": "A poorly written profile-photo uploader trusts the client-supplied Content-Type and writes the file under the public webroot. An attacker uploads a polyglot .jpg/.phtml, hits its URL, and gets RCE inside the user-uploads container.",
+  "reasoning": "Edge nginx → Node API → Postgres + S3-compatible MinIO. The uploader writes to a shared volume that's also reachable by the static-asset pod. The attacker uses the foothold to enumerate AWS env vars and start tunnelling data out via DNS.",
+  "category": "security",
+  "difficulty": "medium",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "consumer-prod-vpc", "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "consumer-edge",     "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "consumer-app",      "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "consumer-data",     "parent": "vpc" },
+    { "id": "lb",       "type": "service", "serviceType": "nginx",    "label": "edge-cdn-origin",  "parent": "pubnet" },
+    { "id": "api",      "type": "service", "serviceType": "nodejs",   "label": "profile-api",      "parent": "appnet" },
+    { "id": "uploader", "type": "service", "serviceType": "nodejs",   "label": "user-uploads-svc", "parent": "appnet",  "notes": "Trusts Content-Type from the client." },
+    { "id": "static",   "type": "service", "serviceType": "nginx",    "label": "static-assets",    "parent": "appnet",  "notes": "Serves /uploads/* via PHP-FPM passthrough (legacy)." },
+    { "id": "db",       "type": "service", "serviceType": "postgres", "label": "users-db",         "parent": "datanet" },
+    { "id": "minio",    "type": "service", "serviceType": "custom",   "label": "minio-blobs",      "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "lb",       "target": "api",      "protocol": "https", "port": 443,  "trafficRate": 90, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb",       "target": "uploader", "protocol": "https", "port": 443,  "trafficRate": 30, "trafficPattern": "steady",  "errorRate": 0.01  },
+    { "source": "lb",       "target": "static",   "protocol": "https", "port": 443,  "trafficRate": 50, "trafficPattern": "diurnal", "errorRate": 0.003 },
+    { "source": "api",      "target": "db",       "protocol": "tcp",   "port": 5432, "trafficRate": 40, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "uploader", "target": "minio",    "protocol": "http",  "port": 9000, "trafficRate": 20, "trafficPattern": "steady",  "errorRate": 0.002 }
+  ],
+  "timeline": {
+    "duration": 1500,
+    "narrative": [
+      { "tick": 0,    "text": "Quiet baseline; ~30 uploads/min from real users." },
+      { "tick": 240,  "text": "Single source IP uploads 14 oddly-shaped .jpg files in 40 seconds — all 1.5MB, all polyglot." },
+      { "tick": 360,  "text": "static-assets serves /uploads/avatar_5b3c.phtml; PHP-FPM executes the embedded shell." },
+      { "tick": 480,  "text": "Shell enumerates AWS env vars; tries IMDSv2 (gets denied, hop limit set to 1)." },
+      { "tick": 660,  "text": "Attacker pivots to DNS exfil: bursts of unusual TXT lookups for .attacker.party." },
+      { "tick": 840,  "text": "EDR catches anomalous php-fpm child spawning /usr/bin/dig in a loop. Pages SOC." },
+      { "tick": 1020, "text": "Static-assets pod cordoned; uploader returned to allow-list image-magick output only." },
+      { "tick": 1260, "text": "Forensics shows ~80 user records read but no DB write. WAF rule live for polyglot magic-bytes." }
+    ],
+    "lanes": {
+      "uploader": [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 240, "state": "under_attack", "note": "polyglot uploads accepted" },
+        { "start": 480,  "duration": 540, "state": "compromised",  "note": "RCE via static-assets passthrough" },
+        { "start": 1020, "duration": 240, "state": "recovering",   "note": "allow-list rolled out" },
+        { "start": 1260, "duration": 240, "state": "healthy" }
+      ],
+      "static": [
+        { "start": 0,    "duration": 360, "state": "healthy" },
+        { "start": 360,  "duration": 660, "state": "compromised",  "note": "executing user-uploaded code" },
+        { "start": 1020, "duration": 240, "state": "recovering" },
+        { "start": 1260, "duration": 240, "state": "healthy" }
+      ],
+      "api": [
+        { "start": 0,    "duration": 1500, "state": "healthy" }
+      ],
+      "db": [
+        { "start": 0,    "duration": 660, "state": "healthy" },
+        { "start": 660,  "duration": 360, "state": "under_attack", "note": "anomalous reads via shell" },
+        { "start": 1020, "duration": 480, "state": "healthy" }
+      ]
+    }
+  }
+}

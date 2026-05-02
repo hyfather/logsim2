@@ -1,0 +1,56 @@
+{
+  "name": "SSRF → IMDSv1 → Stolen EC2 Role Credentials",
+  "description": "An image-resize endpoint trusts a user-supplied URL and fetches it server-side. Attacker passes http://169.254.169.254/latest/meta-data/iam/security-credentials/ec2-app-role and the app cheerfully returns AWS temp credentials. They use them from a residential IP to enumerate S3.",
+  "reasoning": "EC2 with IMDSv1 still allowed (legacy AMI). The simulation models the moment the role's credentials start being used from outside the VPC — CloudTrail picks up an unfamiliar source IP for a known principal.",
+  "category": "cloud",
+  "difficulty": "hard",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "media-services-vpc", "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "media-edge",         "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "media-app",          "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "media-data",         "parent": "vpc" },
+    { "id": "lb",     "type": "service", "serviceType": "nginx",   "label": "media-edge-lb",  "parent": "pubnet" },
+    { "id": "resize", "type": "service", "serviceType": "nodejs",  "label": "image-resize-svc","parent": "appnet",  "notes": "Fetches user-supplied URL. Hop limit not enforced; IMDSv1 enabled on the AMI." },
+    { "id": "imds",   "type": "service", "serviceType": "custom",  "label": "ec2-imdsv1",     "parent": "appnet",  "notes": "169.254.169.254 endpoint. Returns temp creds for ec2-app-role." },
+    { "id": "s3",     "type": "service", "serviceType": "custom",  "label": "s3-media-bucket","parent": "datanet" },
+    { "id": "ct",     "type": "service", "serviceType": "custom",  "label": "cloudtrail-firehose","parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "lb",     "target": "resize", "protocol": "https", "port": 443,  "trafficRate": 70, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "resize", "target": "imds",   "protocol": "http",  "port": 80,   "trafficRate": 1,  "trafficPattern": "steady",  "errorRate": 0.005 },
+    { "source": "resize", "target": "s3",     "protocol": "https", "port": 443,  "trafficRate": 12, "trafficPattern": "steady",  "errorRate": 0.005 },
+    { "source": "s3",     "target": "ct",     "protocol": "https", "port": 443,  "trafficRate": 8,  "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1500,
+    "narrative": [
+      { "tick": 0,    "text": "Steady image-resize traffic; ~70 req/s, normal user-uploaded URLs." },
+      { "tick": 240,  "text": "Single source IP starts probing /resize?src=http://169.254.169.254/... patterns." },
+      { "tick": 360,  "text": "Successful response: AccessKeyId/SecretAccessKey/Token returned in the resize service's body." },
+      { "tick": 540,  "text": "Stolen creds used from residential IP 87.93.x.x against s3:ListObjects on every bucket." },
+      { "tick": 780,  "text": "GuardDuty 'UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.OutsideAWS' fires." },
+      { "tick": 1020, "text": "Role's session policies revoked; AMI flipped to IMDSv2-required and rolled out." },
+      { "tick": 1260, "text": "Forensics: 4 buckets enumerated, no objects pulled (deny-by-default policy held)." },
+      { "tick": 1440, "text": "Steady state. SCP added to forbid IMDSv1 going forward." }
+    ],
+    "lanes": {
+      "resize": [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 300, "state": "under_attack", "note": "SSRF probes" },
+        { "start": 540,  "duration": 480, "state": "compromised",  "note": "credentials exfilled via metadata" },
+        { "start": 1020, "duration": 240, "state": "recovering",   "note": "AMI updated to IMDSv2" },
+        { "start": 1260, "duration": 240, "state": "healthy" }
+      ],
+      "imds": [
+        { "start": 0,    "duration": 360, "state": "healthy" },
+        { "start": 360,  "duration": 660, "state": "compromised",  "note": "answering anon queries" },
+        { "start": 1020, "duration": 480, "state": "healthy",      "note": "now requires PUT token" }
+      ],
+      "s3": [
+        { "start": 0,    "duration": 540, "state": "healthy" },
+        { "start": 540,  "duration": 480, "state": "under_attack", "note": "credential reuse from outside VPC" },
+        { "start": 1020, "duration": 480, "state": "healthy" }
+      ]
+    }
+  }
+}

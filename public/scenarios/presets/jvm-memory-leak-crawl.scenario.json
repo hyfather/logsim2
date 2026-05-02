@@ -1,0 +1,63 @@
+{
+  "name": "JVM Memory Leak Death Spiral",
+  "description": "A subtle memory leak in a custom Caffeine cache key (mutable LocalDate without equals/hashCode) bleeds heap on the search service over ~25 minutes. GC pauses go from 50ms to 8s, then the JVM enters death-spiral GC and finally OOMs.",
+  "reasoning": "Three replicas of search-svc fronted by nginx. Only one replica leaks initially (the first to receive the new query type). When it dies the LB shifts traffic to the others, which then hit the same path and start leaking too.",
+  "category": "incident",
+  "difficulty": "hard",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "search-prod-vpc", "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "search-edge",     "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "search-app",      "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "search-data",     "parent": "vpc" },
+    { "id": "lb",  "type": "service", "serviceType": "nginx",    "label": "search-edge-lb",   "parent": "pubnet" },
+    { "id": "s1",  "type": "service", "serviceType": "custom",   "label": "search-svc-jvm-1", "parent": "appnet",  "notes": "Spring Boot 3.2, Caffeine cache 200K entries." },
+    { "id": "s2",  "type": "service", "serviceType": "custom",   "label": "search-svc-jvm-2", "parent": "appnet" },
+    { "id": "s3",  "type": "service", "serviceType": "custom",   "label": "search-svc-jvm-3", "parent": "appnet" },
+    { "id": "es",  "type": "service", "serviceType": "custom",   "label": "es-cluster-vip",   "parent": "datanet", "notes": "Elasticsearch 8.11 backing store." }
+  ],
+  "edges": [
+    { "source": "lb", "target": "s1", "protocol": "http", "port": 8080, "trafficRate": 60, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb", "target": "s2", "protocol": "http", "port": 8080, "trafficRate": 60, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb", "target": "s3", "protocol": "http", "port": 8080, "trafficRate": 60, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "s1", "target": "es", "protocol": "http", "port": 9200, "trafficRate": 30, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "s2", "target": "es", "protocol": "http", "port": 9200, "trafficRate": 30, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "s3", "target": "es", "protocol": "http", "port": 9200, "trafficRate": 30, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1800,
+    "narrative": [
+      { "tick": 0,    "text": "Baseline; heap on each JVM ~45% used." },
+      { "tick": 300,  "text": "s1 heap creeps past 75%; G1 mixed GC frequency doubles." },
+      { "tick": 600,  "text": "s1 GC pause 1.2s — health checks miss but recover." },
+      { "tick": 780,  "text": "s1 hits OutOfMemoryError, container restarts; LB redirects load." },
+      { "tick": 900,  "text": "s2 + s3 take 50% extra traffic; same leak path triggers — both heap at 70%." },
+      { "tick": 1140, "text": "s2 OOMs. s3 enters GC death spiral; p99 latency 12s." },
+      { "tick": 1380, "text": "Hotfix tag deployed (override equals/hashCode). All three replicas restart on the new tag." },
+      { "tick": 1620, "text": "Fleet stable; heap holding at ~50%." }
+    ],
+    "lanes": {
+      "s1": [
+        { "start": 0,    "duration": 300, "state": "healthy" },
+        { "start": 300,  "duration": 480, "state": "degraded",   "note": "GC pressure" },
+        { "start": 780,  "duration": 60,  "state": "down",       "note": "OOM" },
+        { "start": 840,  "duration": 540, "state": "degraded" },
+        { "start": 1380, "duration": 240, "state": "recovering" },
+        { "start": 1620, "duration": 180, "state": "healthy" }
+      ],
+      "s2": [
+        { "start": 0,    "duration": 900,  "state": "healthy" },
+        { "start": 900,  "duration": 240,  "state": "degraded" },
+        { "start": 1140, "duration": 60,   "state": "down",     "note": "OOM" },
+        { "start": 1200, "duration": 180,  "state": "degraded" },
+        { "start": 1380, "duration": 240,  "state": "recovering" },
+        { "start": 1620, "duration": 180,  "state": "healthy" }
+      ],
+      "s3": [
+        { "start": 0,    "duration": 900,  "state": "healthy" },
+        { "start": 900,  "duration": 480,  "state": "degraded",  "note": "GC death spiral" },
+        { "start": 1380, "duration": 240,  "state": "recovering" },
+        { "start": 1620, "duration": 180,  "state": "healthy" }
+      ]
+    }
+  }
+}

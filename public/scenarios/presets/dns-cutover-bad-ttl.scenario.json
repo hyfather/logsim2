@@ -1,0 +1,55 @@
+{
+  "name": "DNS Cutover With Bad TTL",
+  "description": "Cutover from old-edge.acme.io (Apache) to new-edge.acme.io (Envoy) was supposed to be instant. The old A record had a 24-hour TTL set during a 2019 migration that nobody changed. After cutover, half the user base happily slams the old, decommissioned edge for hours.",
+  "reasoning": "Two edge services and one app fleet. Half the users hit the old edge (which is now returning 503 because the upstream pool is empty), the other half hit the new edge (healthy). The bug is invisible from server-side metrics if you only look at the new edge.",
+  "category": "deploy",
+  "difficulty": "easy",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "consumer-prod",  "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "consumer-edge",  "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "consumer-app",   "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "consumer-data",  "parent": "vpc" },
+    { "id": "oldedge", "type": "service", "serviceType": "nginx",    "label": "old-edge-apache",  "parent": "pubnet",  "notes": "Decommissioned. Upstream pool empty after cutover." },
+    { "id": "newedge", "type": "service", "serviceType": "nginx",    "label": "new-edge-envoy",   "parent": "pubnet" },
+    { "id": "api1",    "type": "service", "serviceType": "nodejs",   "label": "consumer-api-1",   "parent": "appnet" },
+    { "id": "api2",    "type": "service", "serviceType": "nodejs",   "label": "consumer-api-2",   "parent": "appnet" },
+    { "id": "db",      "type": "service", "serviceType": "postgres", "label": "consumer-db",      "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "newedge", "target": "api1", "protocol": "http", "port": 3000, "trafficRate": 60, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "newedge", "target": "api2", "protocol": "http", "port": 3000, "trafficRate": 60, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "api1",    "target": "db",   "protocol": "tcp",  "port": 5432, "trafficRate": 25, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "api2",    "target": "db",   "protocol": "tcp",  "port": 5432, "trafficRate": 25, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1620,
+    "narrative": [
+      { "tick": 0,    "text": "Steady baseline. Cutover scheduled at T+180." },
+      { "tick": 180,  "text": "DNS A record flipped to new-edge IPs. TTL on the old record turns out to be 24h." },
+      { "tick": 240,  "text": "Resolvers world-wide split: half cached the new IP, half still see the old one." },
+      { "tick": 300,  "text": "Old-edge sees inbound HTTP but has no upstream → 503s." },
+      { "tick": 480,  "text": "Customer support flooded. SRE realises 50% of users are getting 503s on old-edge." },
+      { "tick": 660,  "text": "Stopgap: re-add the upstream pool to old-edge so it proxies normally to api-1/api-2." },
+      { "tick": 900,  "text": "TTL reduced to 60s; resolvers begin to converge on new-edge." },
+      { "tick": 1320, "text": "By T+22m the long tail clears; old-edge ramped down again." },
+      { "tick": 1500, "text": "Steady state. Long-term: TTL runbook + dynamic-DNS health flip in CDN." }
+    ],
+    "lanes": {
+      "oldedge": [
+        { "start": 0,    "duration": 180, "state": "healthy" },
+        { "start": 180,  "duration": 480, "state": "down",       "note": "no upstream after cutover" },
+        { "start": 660,  "duration": 660, "state": "recovering", "note": "stopgap pool re-added" },
+        { "start": 1320, "duration": 300, "state": "healthy" }
+      ],
+      "newedge": [
+        { "start": 0,    "duration": 1620, "state": "healthy" }
+      ],
+      "api1": [
+        { "start": 0,    "duration": 1620, "state": "healthy" }
+      ],
+      "api2": [
+        { "start": 0,    "duration": 1620, "state": "healthy" }
+      ]
+    }
+  }
+}

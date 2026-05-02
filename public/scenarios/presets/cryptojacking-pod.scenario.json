@@ -1,0 +1,64 @@
+{
+  "name": "Cryptojacking in Forgotten K8s Pod",
+  "description": "A 'temporary' debug pod from a 2023 hackathon was left running with the cluster-admin token mounted and the kube-api on a public NodePort. Crawlers find it, drop xmrig, and start mining Monero. CPU on three nodes pegs to 100% and pricing-svc latency spikes.",
+  "reasoning": "The compromise lives on a side pod ('debug-shell') that shares a node with the pricing-svc replicas. The simulation models pricing-svc as 'degraded' due to noisy-neighbour CPU, and the debug-shell pod itself as 'compromised'.",
+  "category": "security",
+  "difficulty": "medium",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "experiments-vpc", "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "k8s-public-nps",  "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "k8s-workloads",   "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "k8s-data",        "parent": "vpc" },
+    { "id": "lb",      "type": "service", "serviceType": "nginx",  "label": "ingress-controller", "parent": "pubnet" },
+    { "id": "pricing", "type": "service", "serviceType": "golang", "label": "pricing-svc",        "parent": "appnet" },
+    { "id": "catalog", "type": "service", "serviceType": "golang", "label": "catalog-svc",        "parent": "appnet" },
+    { "id": "debug",   "type": "service", "serviceType": "custom", "label": "debug-shell-pod",    "parent": "appnet",  "notes": "Hackathon leftover. Privileged; cluster-admin SA." },
+    { "id": "kube",    "type": "service", "serviceType": "custom", "label": "kube-apiserver",     "parent": "appnet",  "notes": "Exposed on a NodePort with anonymous auth allowed." },
+    { "id": "redis",   "type": "service", "serviceType": "redis",  "label": "pricing-cache",      "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "lb",     "target": "pricing", "protocol": "http", "port": 8080, "trafficRate": 70, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb",     "target": "catalog", "protocol": "http", "port": 8080, "trafficRate": 60, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb",     "target": "kube",    "protocol": "https","port": 6443, "trafficRate": 5,  "trafficPattern": "steady",  "errorRate": 0.02  },
+    { "source": "pricing","target": "redis",   "protocol": "tcp",  "port": 6379, "trafficRate": 200,"trafficPattern": "steady",  "errorRate": 0.0005 },
+    { "source": "debug",  "target": "kube",    "protocol": "https","port": 6443, "trafficRate": 8,  "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1500,
+    "narrative": [
+      { "tick": 0,    "text": "Steady weekend traffic; pricing-svc p95 100ms." },
+      { "tick": 180,  "text": "Internet crawler hits the open NodePort; sends 'GET /api/v1/namespaces/default/pods'." },
+      { "tick": 300,  "text": "Anonymous request returns 200 — RBAC misconfig means cluster-admin to anyone." },
+      { "tick": 420,  "text": "Attacker creates pod 'debug-shell' on node-2 with a mining image (xmrig)." },
+      { "tick": 540,  "text": "Node-2 CPU hits 100%; pricing-svc replica on node-2 latency triples." },
+      { "tick": 720,  "text": "Falco rule 'unexpected-outbound-pool' fires (xmrig connecting to pool.minexmr.com)." },
+      { "tick": 900,  "text": "SOC pulls the kubeconfig audit; sees pod created by 'system:anonymous'." },
+      { "tick": 1080, "text": "kube-apiserver locked down (anonymous-auth=false); rogue pod deleted; node cordoned." },
+      { "tick": 1320, "text": "Cluster scanned for persistence; nothing else found. Forensic image of node-2 captured." }
+    ],
+    "lanes": {
+      "kube": [
+        { "start": 0,    "duration": 180, "state": "healthy" },
+        { "start": 180,  "duration": 240, "state": "under_attack", "note": "anon API access" },
+        { "start": 420,  "duration": 660, "state": "compromised",  "note": "rogue workloads being scheduled" },
+        { "start": 1080, "duration": 420, "state": "recovering",   "note": "RBAC tightened" }
+      ],
+      "debug": [
+        { "start": 0,    "duration": 420, "state": "healthy",      "note": "idle leftover" },
+        { "start": 420,  "duration": 660, "state": "compromised",  "note": "running xmrig" },
+        { "start": 1080, "duration": 60,  "state": "down",         "note": "deleted" }
+      ],
+      "pricing": [
+        { "start": 0,    "duration": 540, "state": "healthy" },
+        { "start": 540,  "duration": 540, "state": "degraded",     "note": "noisy-neighbour CPU starvation" },
+        { "start": 1080, "duration": 240, "state": "recovering" },
+        { "start": 1320, "duration": 180, "state": "healthy" }
+      ],
+      "catalog": [
+        { "start": 0,    "duration": 540, "state": "healthy" },
+        { "start": 540,  "duration": 540, "state": "degraded" },
+        { "start": 1080, "duration": 420, "state": "healthy" }
+      ]
+    }
+  }
+}

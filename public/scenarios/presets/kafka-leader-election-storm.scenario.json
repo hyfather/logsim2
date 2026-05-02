@@ -1,0 +1,73 @@
+{
+  "name": "Kafka Broker Loss → Leader Election Storm",
+  "description": "broker-3 dies hard (kernel panic on a flaky NIC). The ISR shrinks, partitions reshuffle, and a leader-election storm pushes p99 produce latency on the producers from 12ms to ~3 seconds. Consumers fall behind and the order pipeline lags.",
+  "reasoning": "Producer Go service, three brokers, and a consumer worker. When one broker drops out, surviving brokers become leaders for many more partitions. Producer batches retry, latency climbs, the worker can't keep up and the downstream Postgres view goes stale.",
+  "category": "incident",
+  "difficulty": "hard",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "data-platform-vpc", "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "edge-public-2c",    "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "stream-app-2c",     "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "stream-data-2c",    "parent": "vpc" },
+    { "id": "lb",       "type": "service", "serviceType": "nginx",   "label": "events-ingest-lb",   "parent": "pubnet" },
+    { "id": "producer", "type": "service", "serviceType": "golang",  "label": "events-producer",    "parent": "appnet",  "notes": "Sarama client, acks=all, idempotent." },
+    { "id": "broker1",  "type": "service", "serviceType": "custom",  "label": "kfk-broker-1",       "parent": "datanet", "notes": "Kafka 3.6, KRaft mode." },
+    { "id": "broker2",  "type": "service", "serviceType": "custom",  "label": "kfk-broker-2",       "parent": "datanet" },
+    { "id": "broker3",  "type": "service", "serviceType": "custom",  "label": "kfk-broker-3",       "parent": "datanet", "notes": "Flaky NIC; bond0 is in degraded state." },
+    { "id": "consumer", "type": "service", "serviceType": "golang",  "label": "orders-projector",   "parent": "appnet",  "notes": "Consumes events topic, writes to PG." },
+    { "id": "pg",       "type": "service", "serviceType": "postgres","label": "orders-readmodel-db","parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "lb",       "target": "producer", "protocol": "http", "port": 8080, "trafficRate": 120, "trafficPattern": "bursty",   "errorRate": 0.005 },
+    { "source": "producer", "target": "broker1",  "protocol": "tcp",  "port": 9092, "trafficRate": 80,  "trafficPattern": "steady",   "errorRate": 0.001 },
+    { "source": "producer", "target": "broker2",  "protocol": "tcp",  "port": 9092, "trafficRate": 80,  "trafficPattern": "steady",   "errorRate": 0.001 },
+    { "source": "producer", "target": "broker3",  "protocol": "tcp",  "port": 9092, "trafficRate": 80,  "trafficPattern": "steady",   "errorRate": 0.001 },
+    { "source": "consumer", "target": "broker1",  "protocol": "tcp",  "port": 9092, "trafficRate": 60,  "trafficPattern": "steady",   "errorRate": 0.001 },
+    { "source": "consumer", "target": "broker2",  "protocol": "tcp",  "port": 9092, "trafficRate": 60,  "trafficPattern": "steady",   "errorRate": 0.001 },
+    { "source": "consumer", "target": "broker3",  "protocol": "tcp",  "port": 9092, "trafficRate": 60,  "trafficPattern": "steady",   "errorRate": 0.001 },
+    { "source": "consumer", "target": "pg",       "protocol": "tcp",  "port": 5432, "trafficRate": 40,  "trafficPattern": "steady",   "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1500,
+    "narrative": [
+      { "tick": 0,    "text": "Steady event ingest, ~120 msgs/sec, p99 produce 12ms." },
+      { "tick": 300,  "text": "kfk-broker-3 NIC starts dropping — TCP retransmits visible on broker-1's metrics." },
+      { "tick": 360,  "text": "broker-3 marked offline by controller. Leader election kicks off for ~140 partitions." },
+      { "tick": 480,  "text": "Producer p99 latency climbs to 2.8s; orders-projector consumer lag in the millions." },
+      { "tick": 720,  "text": "Operators move the broker workload to a fresh VM and rejoin the cluster." },
+      { "tick": 960,  "text": "Partitions rebalanced; lag draining at ~3K msg/sec." },
+      { "tick": 1200, "text": "Consumer caught up; readmodel back to <500ms staleness." },
+      { "tick": 1380, "text": "All green; root cause filed: bond0 misconfiguration in image baseline." }
+    ],
+    "lanes": {
+      "broker3": [
+        { "start": 0,    "duration": 300, "state": "healthy" },
+        { "start": 300,  "duration": 60,  "state": "degraded",   "note": "TCP retransmits" },
+        { "start": 360,  "duration": 360, "state": "down",       "note": "controller fenced" },
+        { "start": 720,  "duration": 240, "state": "recovering" },
+        { "start": 960,  "duration": 540, "state": "healthy" }
+      ],
+      "broker1": [
+        { "start": 0,    "duration": 360, "state": "healthy" },
+        { "start": 360,  "duration": 360, "state": "degraded",   "note": "absorbing failed-over partitions" },
+        { "start": 720,  "duration": 240, "state": "recovering" },
+        { "start": 960,  "duration": 540, "state": "healthy" }
+      ],
+      "broker2": [
+        { "start": 0,    "duration": 360, "state": "healthy" },
+        { "start": 360,  "duration": 360, "state": "degraded" },
+        { "start": 720,  "duration": 780, "state": "healthy" }
+      ],
+      "producer": [
+        { "start": 0,    "duration": 480, "state": "healthy" },
+        { "start": 480,  "duration": 480, "state": "degraded",   "note": "produce timeouts, retries" },
+        { "start": 960,  "duration": 540, "state": "healthy" }
+      ],
+      "consumer": [
+        { "start": 0,    "duration": 480, "state": "healthy" },
+        { "start": 480,  "duration": 720, "state": "degraded",   "note": "millions of messages lag" },
+        { "start": 1200, "duration": 300, "state": "healthy" }
+      ]
+    }
+  }
+}

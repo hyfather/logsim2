@@ -1,0 +1,56 @@
+{
+  "name": "After-Hours Admin Activity Spike",
+  "description": "Sunday 02:30 — sysadmin account 'sysadm-pjones' makes 280 config changes against production AWS resources in 90 minutes: SG rules, IAM roles, lambda environment variables. Could be incident response. Could be the admin themselves. Could be someone with their creds.",
+  "reasoning": "AWS control plane traffic via CloudTrail is the visible signal. The simulation shows a quiet weekend baseline followed by a spike of write actions from a single principal, then containment.",
+  "category": "insider",
+  "difficulty": "medium",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "control-plane-mirror", "parent": null },
+    { "id": "edgenet", "type": "subnet",  "label": "iam-edge",             "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "control-plane-app",    "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "audit-store",          "parent": "vpc" },
+    { "id": "iam",  "type": "service", "serviceType": "custom",  "label": "aws-iam",          "parent": "edgenet" },
+    { "id": "ec2", "type": "service", "serviceType": "custom",  "label": "aws-ec2-control",  "parent": "appnet" },
+    { "id": "lam", "type": "service", "serviceType": "custom",  "label": "aws-lambda-control","parent": "appnet" },
+    { "id": "ct",  "type": "service", "serviceType": "custom",  "label": "cloudtrail-firehose","parent": "datanet" },
+    { "id": "siem","type": "service", "serviceType": "custom",  "label": "siem-collector",   "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "iam", "target": "ec2",  "protocol": "https", "port": 443, "trafficRate": 20, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "iam", "target": "lam",  "protocol": "https", "port": 443, "trafficRate": 15, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "ec2", "target": "ct",   "protocol": "https", "port": 443, "trafficRate": 25, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "lam", "target": "ct",   "protocol": "https", "port": 443, "trafficRate": 18, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "ct",  "target": "siem", "protocol": "tcp",   "port": 9200,"trafficRate": 30, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1500,
+    "narrative": [
+      { "tick": 0,    "text": "Quiet Sunday — only routine maintenance API calls." },
+      { "tick": 240,  "text": "02:30 UTC — sysadm-pjones starts making rapid config changes via the AWS console." },
+      { "tick": 360,  "text": "94 SG rule modifications, 41 lambda env var changes; user is on a residential IP via corporate VPN." },
+      { "tick": 540,  "text": "UEBA flags 'admin-activity-burst-off-hours'. Pages on-call security." },
+      { "tick": 720,  "text": "On-call calls pjones — they confirm: 'incident response, mid-fix on the queue lambda'." },
+      { "tick": 900,  "text": "Activity continues, but now narrated in #ops-incidents; risk score lowered." },
+      { "tick": 1140, "text": "Incident closed; no malicious changes; postmortem flags lack of pre-announce in admin behaviour analytics." },
+      { "tick": 1380, "text": "Quiet again. Action item: 'before-touch announce' Slack workflow proposed." }
+    ],
+    "lanes": {
+      "iam": [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 480, "state": "under_attack", "note": "anomalous off-hours admin burst" },
+        { "start": 720,  "duration": 240, "state": "recovering" },
+        { "start": 960,  "duration": 540, "state": "healthy" }
+      ],
+      "ec2": [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 480, "state": "degraded",     "note": "rapid SG changes" },
+        { "start": 720,  "duration": 780, "state": "healthy" }
+      ],
+      "lam": [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 480, "state": "degraded",     "note": "env var churn" },
+        { "start": 720,  "duration": 780, "state": "healthy" }
+      ]
+    }
+  }
+}

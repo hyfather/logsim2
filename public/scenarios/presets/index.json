@@ -1,56 +1,486 @@
-[
-  {
-    "file": "db-slowdown-cascade.scenario.json",
-    "title": "Database Slowdown Cascade",
-    "description": "Postgres slow queries cascade into API degradation; replica failover restores service.",
-    "category": "incident",
-    "difficulty": "easy",
-    "durationTicks": 1200,
-    "serviceCount": 5
-  },
-  {
-    "file": "ddos-edge-mitigation.scenario.json",
-    "title": "DDoS at the Edge",
-    "description": "L7 flood saturates the edge LB; downstream APIs throttle, attack subsides, traffic normalises.",
-    "category": "security",
-    "difficulty": "medium",
-    "durationTicks": 1200,
-    "serviceCount": 6
-  },
-  {
-    "file": "bad-canary-deploy.scenario.json",
-    "title": "Bad Canary Deploy",
-    "description": "Canary fails health checks; LB shifts traffic and the rest of the fleet absorbs the load until rollback.",
-    "category": "deploy",
-    "difficulty": "medium",
-    "durationTicks": 1080,
-    "serviceCount": 5
-  },
-  {
-    "file": "cache-failure-cascade.scenario.json",
-    "title": "Cache Failure Cascade",
-    "description": "Redis OOM forces reads onto Postgres; pool exhausts; APIs degrade until cache recovers.",
-    "category": "incident",
-    "difficulty": "easy",
-    "durationTicks": 1080,
-    "serviceCount": 5
-  },
-  {
-    "file": "credential-stuffing-takeover.scenario.json",
-    "title": "Credential Stuffing → Account Takeover",
-    "description": "Brute force on auth-api breaks through; lateral movement and bulk PII reads before containment.",
-    "category": "security",
-    "difficulty": "hard",
-    "durationTicks": 1500,
-    "serviceCount": 5
-  },
-  {
-    "file": "healthy-baseline.scenario.json",
-    "title": "Healthy Baseline — No Incident",
-    "description": "A well-behaved three-tier app for 20 minutes. Reference dataset for detection rule tuning.",
-    "category": "baseline",
-    "difficulty": "easy",
-    "durationTicks": 1200,
-    "serviceCount": 4
-  }
-]
+{
+  "groups": [
+    {
+      "id": "incident",
+      "label": "Production Incidents",
+      "description": "Outages, slowdowns, and oh-no Tuesdays from real ops war stories.",
+      "order": 1
+    },
+    {
+      "id": "deploy",
+      "label": "Deploys & Releases",
+      "description": "Deployments, rollbacks, schema migrations, and config-change pain.",
+      "order": 2
+    },
+    {
+      "id": "security",
+      "label": "External Threats",
+      "description": "Attacks, exploits, and unwanted attention from the internet.",
+      "order": 3
+    },
+    {
+      "id": "insider",
+      "label": "Insider & Abuse",
+      "description": "Departing employees, off-policy access, and misuse from inside the perimeter.",
+      "order": 4
+    },
+    {
+      "id": "cloud",
+      "label": "Cloud & Identity",
+      "description": "IAM, OIDC, SaaS, and identity-edge mistakes on AWS / Entra / Okta / GitHub.",
+      "order": 5
+    }
+  ],
+  "scenarios": [
+    {
+      "file": "db-slowdown-cascade.scenario.json",
+      "title": "Database Slowdown Cascade",
+      "description": "Postgres slow queries cascade into API degradation; replica failover restores service.",
+      "category": "incident",
+      "difficulty": "easy",
+      "durationTicks": 1200,
+      "serviceCount": 5
+    },
+    {
+      "file": "cache-failure-cascade.scenario.json",
+      "title": "Cache Failure Cascade",
+      "description": "Redis OOM forces reads onto Postgres; pool exhausts; APIs degrade until cache recovers.",
+      "category": "incident",
+      "difficulty": "easy",
+      "durationTicks": 1080,
+      "serviceCount": 5
+    },
+    {
+      "file": "dns-resolver-outage.scenario.json",
+      "title": "Internal DNS Resolver Outage",
+      "description": "Corp Unbound dies after a config push; downstream apps can't resolve internal SRV records and fail health checks.",
+      "category": "incident",
+      "difficulty": "medium",
+      "durationTicks": 1380,
+      "serviceCount": 7
+    },
+    {
+      "file": "cert-expiry-cascade.scenario.json",
+      "title": "Wildcard Cert Expired at 03:14 UTC",
+      "description": "Wildcard renewed in Vault but never re-deployed; edge TLS and east-west mTLS both break.",
+      "category": "incident",
+      "difficulty": "easy",
+      "durationTicks": 1200,
+      "serviceCount": 5
+    },
+    {
+      "file": "disk-full-log-flood.scenario.json",
+      "title": "Disk Full From Runaway Debug Logs",
+      "description": "DEBUG-mode logging fills the data partition on a legacy MySQL; binlogs stop, DB goes read-only.",
+      "category": "incident",
+      "difficulty": "medium",
+      "durationTicks": 1500,
+      "serviceCount": 4
+    },
+    {
+      "file": "kafka-leader-election-storm.scenario.json",
+      "title": "Kafka Broker Loss → Election Storm",
+      "description": "Flaky NIC drops a broker; partition leader elections push produce p99 to seconds and consumers fall behind.",
+      "category": "incident",
+      "difficulty": "hard",
+      "durationTicks": 1500,
+      "serviceCount": 7
+    },
+    {
+      "file": "connection-pool-exhaustion.scenario.json",
+      "title": "Connection Pool Exhaustion",
+      "description": "A slow third-party tax API holds open HikariCP connections; pool saturates and the LB ejects an instance.",
+      "category": "incident",
+      "difficulty": "medium",
+      "durationTicks": 1080,
+      "serviceCount": 4
+    },
+    {
+      "file": "ntp-drift-auth-failure.scenario.json",
+      "title": "NTP Drift Breaks Authentication",
+      "description": "ESXi host loses NTP sync; VMs drift forward; JWT and Kerberos tickets start being rejected.",
+      "category": "incident",
+      "difficulty": "hard",
+      "durationTicks": 1500,
+      "serviceCount": 4
+    },
+    {
+      "file": "jvm-memory-leak-crawl.scenario.json",
+      "title": "JVM Memory Leak Death Spiral",
+      "description": "Subtle leak in a Caffeine cache key causes GC pauses to climb until OOM, then cascades to peer replicas.",
+      "category": "incident",
+      "difficulty": "hard",
+      "durationTicks": 1800,
+      "serviceCount": 5
+    },
+    {
+      "file": "nlb-cross-zone-skew.scenario.json",
+      "title": "NLB Cross-Zone Imbalance",
+      "description": "Cross-zone load balancing accidentally disabled; one AZ takes 75% of the traffic and saturates.",
+      "category": "incident",
+      "difficulty": "medium",
+      "durationTicks": 1200,
+      "serviceCount": 5
+    },
+    {
+      "file": "bad-canary-deploy.scenario.json",
+      "title": "Bad Canary Deploy",
+      "description": "Canary fails health checks; LB shifts traffic and the rest of the fleet absorbs the load until rollback.",
+      "category": "deploy",
+      "difficulty": "medium",
+      "durationTicks": 1080,
+      "serviceCount": 5
+    },
+    {
+      "file": "migration-deadlock.scenario.json",
+      "title": "Online Schema Migration Deadlock",
+      "description": "Migration blocks behind a stale SELECT FOR UPDATE; metadata lock wedges every INSERT to orders.",
+      "category": "deploy",
+      "difficulty": "medium",
+      "durationTicks": 1200,
+      "serviceCount": 5
+    },
+    {
+      "file": "feature-flag-storm.scenario.json",
+      "title": "Feature Flag Flip Storms Downstream",
+      "description": "Flag flipped 5%→100% quadruples DB query rate and starves an unrelated service that shares the database.",
+      "category": "deploy",
+      "difficulty": "medium",
+      "durationTicks": 1080,
+      "serviceCount": 4
+    },
+    {
+      "file": "helm-bad-image-tag.scenario.json",
+      "title": "Helm Image Tag Typo → CrashLoopBackOff",
+      "description": "values.yaml references a tag that doesn't exist; rolling update breaks every replica until rollback.",
+      "category": "deploy",
+      "difficulty": "easy",
+      "durationTicks": 900,
+      "serviceCount": 5
+    },
+    {
+      "file": "config-drift-rollback.scenario.json",
+      "title": "Config Drift Blows Up Terraform Apply",
+      "description": "Hand-edited SG rule reconciled away by IaC; partner integration breaks until the rule is reinstated.",
+      "category": "deploy",
+      "difficulty": "medium",
+      "durationTicks": 1200,
+      "serviceCount": 4
+    },
+    {
+      "file": "dns-cutover-bad-ttl.scenario.json",
+      "title": "DNS Cutover With Bad TTL",
+      "description": "Cutover honoured a 24h TTL; half the user base hits the decommissioned old edge for hours.",
+      "category": "deploy",
+      "difficulty": "easy",
+      "durationTicks": 1620,
+      "serviceCount": 5
+    },
+    {
+      "file": "forgotten-cron-eol-host.scenario.json",
+      "title": "Forgotten Cron on a 12-Year-Old Host",
+      "description": "Disk on a long-forgotten RHEL 6 cron host fails; nightly close pipeline misses for the first time in nine years.",
+      "category": "deploy",
+      "difficulty": "easy",
+      "durationTicks": 1500,
+      "serviceCount": 4
+    },
+    {
+      "file": "rollback-non-reversible-migration.scenario.json",
+      "title": "Rollback Hits Non-Reversible Migration",
+      "description": "Rollback target's code expects a table the migration already DROPPED; cluster ends up in mixed state.",
+      "category": "deploy",
+      "difficulty": "hard",
+      "durationTicks": 1620,
+      "serviceCount": 5
+    },
+    {
+      "file": "third-party-sdk-breaking-change.scenario.json",
+      "title": "Third-Party SDK Auto-Bump Breaks API",
+      "description": "Renovate-merged 'minor' bump silently changes an auth header; every IdP call returns 401.",
+      "category": "deploy",
+      "difficulty": "medium",
+      "durationTicks": 1080,
+      "serviceCount": 4
+    },
+    {
+      "file": "autoscaler-traffic-ramp-lag.scenario.json",
+      "title": "Autoscaler Lags a Black Friday Ramp",
+      "description": "Promo emails ramp traffic 20x in 5 minutes; HPA + pod warm-up are slower than the spike.",
+      "category": "deploy",
+      "difficulty": "medium",
+      "durationTicks": 1500,
+      "serviceCount": 7
+    },
+    {
+      "file": "ddos-edge-mitigation.scenario.json",
+      "title": "DDoS at the Edge",
+      "description": "L7 flood saturates the edge LB; downstream APIs throttle, attack subsides, traffic normalises.",
+      "category": "security",
+      "difficulty": "medium",
+      "durationTicks": 1200,
+      "serviceCount": 6
+    },
+    {
+      "file": "credential-stuffing-takeover.scenario.json",
+      "title": "Credential Stuffing → Account Takeover",
+      "description": "Brute force on auth-api breaks through; lateral movement and bulk PII reads before containment.",
+      "category": "security",
+      "difficulty": "hard",
+      "durationTicks": 1500,
+      "serviceCount": 5
+    },
+    {
+      "file": "log4shell-jndi-probe.scenario.json",
+      "title": "Log4Shell Probe & Successful Exploit",
+      "description": "Mass jndi: payloads land in headers; one forgotten Tomcat with log4j 2.14 makes the outbound LDAP call.",
+      "category": "security",
+      "difficulty": "hard",
+      "durationTicks": 1620,
+      "serviceCount": 5
+    },
+    {
+      "file": "sql-injection-legacy-form.scenario.json",
+      "title": "SQL Injection on Legacy Form",
+      "description": "Boolean-blind SQLi against a 2014-era ColdFusion partner portal exfils the partners table over 12 minutes.",
+      "category": "security",
+      "difficulty": "medium",
+      "durationTicks": 1320,
+      "serviceCount": 4
+    },
+    {
+      "file": "webshell-upload-rce.scenario.json",
+      "title": "Web Shell Drop via Image Uploader",
+      "description": "Polyglot .jpg/.phtml upload through a permissive uploader; static-assets pod ends up executing the shell.",
+      "category": "security",
+      "difficulty": "medium",
+      "durationTicks": 1500,
+      "serviceCount": 6
+    },
+    {
+      "file": "phishing-oauth-consent.scenario.json",
+      "title": "Illicit OAuth Consent Grant",
+      "description": "Phishing tricks finance staff into consenting to a Mail.Read app; attacker pulls inboxes via Graph.",
+      "category": "security",
+      "difficulty": "hard",
+      "durationTicks": 1620,
+      "serviceCount": 5
+    },
+    {
+      "file": "cryptojacking-pod.scenario.json",
+      "title": "Cryptojacking in Forgotten K8s Pod",
+      "description": "Open NodePort + cluster-admin SA → attacker schedules an xmrig pod; CPU pegs and noisy-neighbours app.",
+      "category": "security",
+      "difficulty": "medium",
+      "durationTicks": 1500,
+      "serviceCount": 6
+    },
+    {
+      "file": "tor-scraping-pricing.scenario.json",
+      "title": "Tor Exit Nodes Scraping Pricing",
+      "description": "Distributed Tor scraping dodges per-IP rate limits; replica lag grows as the cache churns.",
+      "category": "security",
+      "difficulty": "easy",
+      "durationTicks": 1800,
+      "serviceCount": 4
+    },
+    {
+      "file": "public-s3-discovered.scenario.json",
+      "title": "Public S3 Bucket Discovered & Drained",
+      "description": "World-readable backup bucket from 2022 enumerated and drained; GuardDuty fires on anonymous reads.",
+      "category": "security",
+      "difficulty": "easy",
+      "durationTicks": 1080,
+      "serviceCount": 4
+    },
+    {
+      "file": "subdomain-takeover.scenario.json",
+      "title": "Subdomain Takeover via Dangling CNAME",
+      "description": "Attacker claims a deleted Heroku app behind shop-old.acme.io and serves a near-perfect phishing clone.",
+      "category": "security",
+      "difficulty": "hard",
+      "durationTicks": 1620,
+      "serviceCount": 5
+    },
+    {
+      "file": "departing-eng-bulk-pull.scenario.json",
+      "title": "Departing Engineer — Bulk Pull",
+      "description": "Engineer two weeks from leaving clones 87 repos and pulls 14 GB from SharePoint on their last day.",
+      "category": "insider",
+      "difficulty": "medium",
+      "durationTicks": 1800,
+      "serviceCount": 5
+    },
+    {
+      "file": "privileged-hr-snooping.scenario.json",
+      "title": "HR Analyst Snooping on Exec Files",
+      "description": "Authorised account opens 27 C-suite comp files at 1 AM Sunday — every action is technically allowed.",
+      "category": "insider",
+      "difficulty": "easy",
+      "durationTicks": 1080,
+      "serviceCount": 4
+    },
+    {
+      "file": "svc-account-interactive.scenario.json",
+      "title": "Service Account Used Interactively",
+      "description": "Backup service account suddenly authenticates with Logon Type 10 (RemoteInteractive) — never seen before.",
+      "category": "insider",
+      "difficulty": "medium",
+      "durationTicks": 1200,
+      "serviceCount": 4
+    },
+    {
+      "file": "personal-email-exfil.scenario.json",
+      "title": "Customer DB Exfil to Personal Gmail",
+      "description": "37k-row customer CSV emailed to a personal Gmail; DLP rule was set to monitor-only.",
+      "category": "insider",
+      "difficulty": "easy",
+      "durationTicks": 900,
+      "serviceCount": 5
+    },
+    {
+      "file": "honeytoken-tripped.scenario.json",
+      "title": "Honeytoken Tripped on Finance Share",
+      "description": "Canary M&A document opened from a vendor laptop VLAN at 02:47 — first solid lead on a 31-day dwell intrusion.",
+      "category": "insider",
+      "difficulty": "hard",
+      "durationTicks": 1500,
+      "serviceCount": 5
+    },
+    {
+      "file": "after-hours-admin-spree.scenario.json",
+      "title": "After-Hours Admin Activity Spike",
+      "description": "Admin makes 280 prod config changes at 02:30 Sunday — could be IR, could be the admin, could be someone else.",
+      "category": "insider",
+      "difficulty": "medium",
+      "durationTicks": 1500,
+      "serviceCount": 5
+    },
+    {
+      "file": "sales-rep-mass-export.scenario.json",
+      "title": "Sales Rep Mass-Exporting CRM",
+      "description": "AE pulls 'Lead Lists by Region' 532 times in five days, then accepts an offer at a competitor.",
+      "category": "insider",
+      "difficulty": "easy",
+      "durationTicks": 1620,
+      "serviceCount": 5
+    },
+    {
+      "file": "mass-mfa-disable.scenario.json",
+      "title": "Mass MFA Disable from Helpdesk Console",
+      "description": "Helpdesk session resets MFA on 41 VIPs in 30 minutes right before a phishing wave.",
+      "category": "insider",
+      "difficulty": "hard",
+      "durationTicks": 1500,
+      "serviceCount": 5
+    },
+    {
+      "file": "shadow-it-saas.scenario.json",
+      "title": "Shadow IT SaaS Wired Into Corp SSO",
+      "description": "Unsanctioned Notion workspace grows to 142 corp users; CASB risk score finally trips a review.",
+      "category": "insider",
+      "difficulty": "easy",
+      "durationTicks": 1800,
+      "serviceCount": 4
+    },
+    {
+      "file": "pci-segment-violation.scenario.json",
+      "title": "PCI Segment Violation",
+      "description": "Developer SSHes from CDE jump host to a non-CDE Elasticsearch — PCI-DSS doesn't care about intent.",
+      "category": "insider",
+      "difficulty": "medium",
+      "durationTicks": 1080,
+      "serviceCount": 6
+    },
+    {
+      "file": "imdsv1-ssrf-cred-theft.scenario.json",
+      "title": "SSRF → IMDSv1 → Stolen EC2 Creds",
+      "description": "Image-resize SSRF reaches 169.254.169.254 with IMDSv1; role credentials used from a residential IP.",
+      "category": "cloud",
+      "difficulty": "hard",
+      "durationTicks": 1500,
+      "serviceCount": 5
+    },
+    {
+      "file": "iam-passrole-privesc.scenario.json",
+      "title": "IAM PrivEsc via PassRole",
+      "description": "Low-priv user with iam:PassRole + lambda:CreateFunction chains to admin via a self-invoked Lambda.",
+      "category": "cloud",
+      "difficulty": "hard",
+      "durationTicks": 1500,
+      "serviceCount": 4
+    },
+    {
+      "file": "okta-support-session-theft.scenario.json",
+      "title": "IdP Support Session Theft",
+      "description": "Lapsus$-style: vendor support session compromised; password resets and factor enrolment from IdP infra IPs.",
+      "category": "cloud",
+      "difficulty": "hard",
+      "durationTicks": 1620,
+      "serviceCount": 5
+    },
+    {
+      "file": "github-pat-in-ci-logs.scenario.json",
+      "title": "GitHub PAT Leaked in CI Log",
+      "description": "set -x echoes a long-lived PAT into a public log; scraped within 90s, used for repo cloning + deploy key.",
+      "category": "cloud",
+      "difficulty": "easy",
+      "durationTicks": 1080,
+      "serviceCount": 5
+    },
+    {
+      "file": "azure-prt-theft.scenario.json",
+      "title": "Azure AD Pass-the-PRT",
+      "description": "Infostealer pulls PRT cookie + transport key from a laptop; Graph access without MFA from a new device.",
+      "category": "cloud",
+      "difficulty": "hard",
+      "durationTicks": 1620,
+      "serviceCount": 6
+    },
+    {
+      "file": "aws-root-login-alert.scenario.json",
+      "title": "AWS Root Login From New Geo",
+      "description": "Root account dormant 411 days suddenly logs in, opens billing, mints an access key.",
+      "category": "cloud",
+      "difficulty": "easy",
+      "durationTicks": 900,
+      "serviceCount": 4
+    },
+    {
+      "file": "rogue-global-admin-sp.scenario.json",
+      "title": "Rogue Global Admin Service Principal",
+      "description": "Break-glass GA consents to a 'BackupTool' app; new SP gets Global Admin within an hour.",
+      "category": "cloud",
+      "difficulty": "hard",
+      "durationTicks": 1500,
+      "serviceCount": 5
+    },
+    {
+      "file": "conditional-access-weakened.scenario.json",
+      "title": "Conditional Access Weakened 'For Testing'",
+      "description": "CA policy disabled to debug an integration and forgotten; spray + BEC forwarding rules follow hours later.",
+      "category": "cloud",
+      "difficulty": "medium",
+      "durationTicks": 1500,
+      "serviceCount": 5
+    },
+    {
+      "file": "stale-cross-account-trust.scenario.json",
+      "title": "Stale Cross-Account Trust Abused",
+      "description": "Defunct vendor's AWS account purchased at auction; pre-existing trust used to assume a prod role.",
+      "category": "cloud",
+      "difficulty": "medium",
+      "durationTicks": 1500,
+      "serviceCount": 5
+    },
+    {
+      "file": "gha-oidc-misconfig.scenario.json",
+      "title": "GitHub Actions OIDC Trust Too Loose",
+      "description": "Trust policy with repo:acme/* lets a fork-PR runner assume the prod deploy role.",
+      "category": "cloud",
+      "difficulty": "hard",
+      "durationTicks": 1500,
+      "serviceCount": 6
+    }
+  ]
+}

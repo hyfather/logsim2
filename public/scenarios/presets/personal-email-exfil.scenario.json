@@ -1,0 +1,48 @@
+{
+  "name": "Customer DB Exfil to Personal Gmail",
+  "description": "A marketing manager exports the customer-CRM CSV (37k rows, includes emails + spend) and emails it to their personal Gmail with subject 'work files - keep'. M365 sends the message; the DLP rule on 'PII to external personal mail' is set to monitor-only.",
+  "reasoning": "M365 mailflow is the focus. The simulation models a brief but high-volume external send by a single user during the workday — DLP rule fires but doesn't block, then policy is tightened.",
+  "category": "insider",
+  "difficulty": "easy",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "corp-mailflow", "parent": null },
+    { "id": "edgenet", "type": "subnet",  "label": "mail-edge",     "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "saas-bridge",   "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "audit-store",   "parent": "vpc" },
+    { "id": "edge", "type": "service", "serviceType": "nginx",  "label": "m365-mail-edge",   "parent": "edgenet" },
+    { "id": "exo",  "type": "service", "serviceType": "custom", "label": "exchange-online",  "parent": "appnet" },
+    { "id": "dlp",  "type": "service", "serviceType": "custom", "label": "dlp-mail-inspect", "parent": "appnet"  },
+    { "id": "crm",  "type": "service", "serviceType": "custom", "label": "salesforce-crm",   "parent": "appnet" },
+    { "id": "siem", "type": "service", "serviceType": "custom", "label": "siem-collector",   "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "edge", "target": "exo",  "protocol": "https", "port": 443, "trafficRate": 80, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "edge", "target": "crm",  "protocol": "https", "port": 443, "trafficRate": 30, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "exo",  "target": "dlp",  "protocol": "https", "port": 443, "trafficRate": 60, "trafficPattern": "steady",  "errorRate": 0.005 },
+    { "source": "dlp",  "target": "siem", "protocol": "tcp",   "port": 9200,"trafficRate": 12, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 900,
+    "narrative": [
+      { "tick": 0,    "text": "Steady mailflow; DLP scanning all outbound." },
+      { "tick": 180,  "text": "User a.davis@corp downloads a 12MB customers-export.csv from Salesforce." },
+      { "tick": 240,  "text": "Same user sends an email with that CSV attached to a personal Gmail address." },
+      { "tick": 300,  "text": "DLP rule 'pii-to-external-personal' matches in audit mode — does not block." },
+      { "tick": 480,  "text": "Insider-risk weekly review surfaces the event; manager notified." },
+      { "tick": 660,  "text": "Policy flipped to enforce-mode; user mailbox put on legal hold." },
+      { "tick": 840,  "text": "Future similar sends will be blocked at the exchange transport rule." }
+    ],
+    "lanes": {
+      "exo": [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 240, "state": "compromised", "note": "37k-row PII send to personal mail" },
+        { "start": 480,  "duration": 420, "state": "recovering" }
+      ],
+      "crm": [
+        { "start": 0,    "duration": 180, "state": "healthy" },
+        { "start": 180,  "duration": 120, "state": "under_attack", "note": "anomalous bulk export" },
+        { "start": 300,  "duration": 600, "state": "healthy" }
+      ]
+    }
+  }
+}

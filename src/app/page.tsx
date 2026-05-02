@@ -1,13 +1,13 @@
 import Link from 'next/link'
 import { promises as fs } from 'fs'
 import path from 'path'
-import { Sparkles, ArrowRight, Clock, Layers, ShieldAlert, Activity, Rocket, Heart } from 'lucide-react'
+import { Sparkles, ArrowRight, Clock, Layers, ShieldAlert, Activity, Rocket, Heart, UserCog, Cloud } from 'lucide-react'
 
 interface PresetEntry {
   file: string
   title: string
   description: string
-  category: 'incident' | 'security' | 'deploy' | 'baseline' | string
+  category: 'incident' | 'security' | 'deploy' | 'insider' | 'cloud' | 'baseline' | string
   difficulty: 'easy' | 'medium' | 'hard' | string
   durationTicks: number
   serviceCount: number
@@ -17,7 +17,11 @@ async function loadPresets(): Promise<PresetEntry[]> {
   try {
     const file = path.join(process.cwd(), 'public', 'scenarios', 'presets', 'index.json')
     const raw = await fs.readFile(file, 'utf8')
-    return JSON.parse(raw) as PresetEntry[]
+    const parsed = JSON.parse(raw)
+    // Accept both shapes: legacy flat array, or { groups, scenarios }.
+    if (Array.isArray(parsed)) return parsed as PresetEntry[]
+    if (parsed && Array.isArray(parsed.scenarios)) return parsed.scenarios as PresetEntry[]
+    return []
   } catch {
     return []
   }
@@ -26,8 +30,10 @@ async function loadPresets(): Promise<PresetEntry[]> {
 const CATEGORY_META: Record<string, { label: string; tint: string; ring: string; Icon: typeof ShieldAlert }> = {
   incident: { label: 'Incident', tint: 'bg-amber-50 text-amber-800', ring: 'ring-amber-200', Icon: Activity },
   security: { label: 'Security', tint: 'bg-rose-50 text-rose-800', ring: 'ring-rose-200', Icon: ShieldAlert },
-  deploy: { label: 'Deploy', tint: 'bg-violet-50 text-violet-800', ring: 'ring-violet-200', Icon: Rocket },
-  baseline: { label: 'Baseline', tint: 'bg-emerald-50 text-emerald-800', ring: 'ring-emerald-200', Icon: Heart },
+  deploy:   { label: 'Deploy',   tint: 'bg-violet-50 text-violet-800', ring: 'ring-violet-200', Icon: Rocket },
+  insider:  { label: 'Insider',  tint: 'bg-emerald-50 text-emerald-800', ring: 'ring-emerald-200', Icon: UserCog },
+  cloud:    { label: 'Cloud',    tint: 'bg-sky-50 text-sky-800', ring: 'ring-sky-200', Icon: Cloud },
+  baseline: { label: 'Baseline', tint: 'bg-slate-100 text-slate-700', ring: 'ring-slate-200', Icon: Heart },
 }
 
 const DIFFICULTY_TINT: Record<string, string> = {

@@ -1,0 +1,59 @@
+{
+  "name": "Illicit OAuth Consent Grant",
+  "description": "Targeted phishing email asks finance staff to review a 'Quarterly Spend Reviewer' app. The consent screen requests Mail.Read + Files.Read.All + offline_access. Three users click. Within minutes the attacker is pulling the inbox of two of them via the Microsoft Graph API.",
+  "reasoning": "The simulation models the corporate identity edge (entra/oauth-broker) and the Graph API as services. The attacker's app shows up as a high-volume third-party caller against Graph using freshly minted access + refresh tokens.",
+  "category": "security",
+  "difficulty": "hard",
+  "nodes": [
+    { "id": "vpc",      "type": "vpc",     "label": "corp-identity",    "parent": null },
+    { "id": "edgenet",  "type": "subnet",  "label": "identity-edge",    "parent": "vpc" },
+    { "id": "appnet",   "type": "subnet",  "label": "saas-bridge",      "parent": "vpc" },
+    { "id": "datanet",  "type": "subnet",  "label": "audit-store",      "parent": "vpc" },
+    { "id": "broker",   "type": "service", "serviceType": "nginx",    "label": "entra-oauth-broker", "parent": "edgenet" },
+    { "id": "graph",    "type": "service", "serviceType": "custom",   "label": "ms-graph-egress",    "parent": "appnet",  "notes": "Outbound graph.microsoft.com proxy with audit." },
+    { "id": "mailbox",  "type": "service", "serviceType": "custom",   "label": "exchange-online",    "parent": "appnet",  "notes": "Logical service representing M365 mailbox tenancy." },
+    { "id": "audit",    "type": "service", "serviceType": "postgres","label": "audit-events-db",    "parent": "datanet" },
+    { "id": "siem",     "type": "service", "serviceType": "custom",   "label": "siem-collector",     "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "broker",  "target": "graph",   "protocol": "https", "port": 443,  "trafficRate": 80, "trafficPattern": "diurnal", "errorRate": 0.003 },
+    { "source": "broker",  "target": "audit",   "protocol": "tcp",   "port": 5432, "trafficRate": 20, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "graph",   "target": "mailbox", "protocol": "https", "port": 443,  "trafficRate": 60, "trafficPattern": "steady",  "errorRate": 0.002 },
+    { "source": "broker",  "target": "siem",    "protocol": "tcp",   "port": 9200, "trafficRate": 10, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "graph",   "target": "siem",    "protocol": "tcp",   "port": 9200, "trafficRate": 15, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1620,
+    "narrative": [
+      { "tick": 0,    "text": "Steady identity traffic; standard sign-ins, normal Graph call patterns." },
+      { "tick": 240,  "text": "Phishing email lands in finance distribution list (subject: 'Action required: Q3 spend review')." },
+      { "tick": 360,  "text": "First consent grant: 'Quarterly Spend Reviewer' app gets Mail.Read + offline_access. User: jbrown@corp." },
+      { "tick": 480,  "text": "Two more consents granted. Audit log shows AppId 7c41... requesting tokens at 03:11 UTC." },
+      { "tick": 600,  "text": "Anomalous Graph spike: app pulls 4,800 messages from 3 mailboxes in 9 minutes." },
+      { "tick": 840,  "text": "SIEM rule 'consent-grant-to-mail-read-offline' fires; SOC paged." },
+      { "tick": 1020, "text": "Conditional Access tightened: admin-consent required for new apps. Tokens revoked." },
+      { "tick": 1260, "text": "DLP scan on exfilled mail data underway; affected users notified, passwords + sessions reset." },
+      { "tick": 1500, "text": "All flows back to baseline; postmortem opens around user training + admin-consent default." }
+    ],
+    "lanes": {
+      "broker": [
+        { "start": 0,    "duration": 360, "state": "healthy" },
+        { "start": 360,  "duration": 240, "state": "under_attack", "note": "rogue consent grants" },
+        { "start": 600,  "duration": 420, "state": "compromised",  "note": "tokens minted, refresh in use" },
+        { "start": 1020, "duration": 240, "state": "recovering",   "note": "tokens revoked" },
+        { "start": 1260, "duration": 360, "state": "healthy" }
+      ],
+      "graph": [
+        { "start": 0,    "duration": 600, "state": "healthy" },
+        { "start": 600,  "duration": 420, "state": "under_attack", "note": "anomalous Graph pulls" },
+        { "start": 1020, "duration": 240, "state": "recovering" },
+        { "start": 1260, "duration": 360, "state": "healthy" }
+      ],
+      "mailbox": [
+        { "start": 0,    "duration": 600,  "state": "healthy" },
+        { "start": 600,  "duration": 420,  "state": "compromised", "note": "bulk message read" },
+        { "start": 1020, "duration": 600,  "state": "healthy" }
+      ]
+    }
+  }
+}

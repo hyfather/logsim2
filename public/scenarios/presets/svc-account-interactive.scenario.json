@@ -1,0 +1,51 @@
+{
+  "name": "Service Account Used Interactively",
+  "description": "Backup service account svc_bkp_prod was supposed to run cron jobs only. A sysadmin needing fast access borrows the credentials and uses them for an interactive RDP session into a Windows file server, then opens PowerShell and pokes around.",
+  "reasoning": "AD as the auth source, a Windows file server as the destination. The detection signal is 'svc_*' account showing a Logon Type 10 (RemoteInteractive) where it has only ever shown Type 5 (Service) before.",
+  "category": "insider",
+  "difficulty": "medium",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "corp-onprem-dc1",  "parent": null },
+    { "id": "edgenet", "type": "subnet",  "label": "auth-edge",        "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "win-server-net",   "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "siem-net",         "parent": "vpc" },
+    { "id": "ad",      "type": "service", "serviceType": "custom",  "label": "ad-dc-01",            "parent": "edgenet",  "notes": "Windows Server 2019 DC." },
+    { "id": "fs",      "type": "service", "serviceType": "custom",  "label": "WIN-FS-PROD-04",      "parent": "appnet",   "notes": "File server with RDP enabled." },
+    { "id": "jump",    "type": "service", "serviceType": "custom",  "label": "JUMP-RDP-01",         "parent": "appnet" },
+    { "id": "siem",    "type": "service", "serviceType": "custom",  "label": "splunk-uf-collector", "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "ad",   "target": "fs",   "protocol": "tcp", "port": 445,  "trafficRate": 30, "trafficPattern": "steady", "errorRate": 0.002 },
+    { "source": "ad",   "target": "jump", "protocol": "tcp", "port": 3389, "trafficRate": 8,  "trafficPattern": "steady", "errorRate": 0.005 },
+    { "source": "jump", "target": "fs",   "protocol": "tcp", "port": 3389, "trafficRate": 5,  "trafficPattern": "steady", "errorRate": 0.005 },
+    { "source": "fs",   "target": "siem", "protocol": "tcp", "port": 9997, "trafficRate": 12, "trafficPattern": "steady", "errorRate": 0.001 },
+    { "source": "ad",   "target": "siem", "protocol": "tcp", "port": 9997, "trafficRate": 18, "trafficPattern": "steady", "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1200,
+    "narrative": [
+      { "tick": 0,    "text": "Normal weekday traffic; svc_bkp_prod logging in as Type 5 (Service) every 10 min." },
+      { "tick": 300,  "text": "svc_bkp_prod authenticates with Logon Type 10 (RemoteInteractive) from JUMP-RDP-01 — never seen before for this account." },
+      { "tick": 420,  "text": "PowerShell launched on WIN-FS-PROD-04; whoami /groups, net group 'Domain Admins' /domain." },
+      { "tick": 600,  "text": "Sysmon EID 1 records explorer.exe spawned; the original cron path used cmd.exe only." },
+      { "tick": 780,  "text": "Splunk UEBA correlation 'service-account-interactive-logon' fires." },
+      { "tick": 900,  "text": "SOC contacts the on-call sysadmin who admits using the creds 'because it was faster'." },
+      { "tick": 1080, "text": "Service account password rotated; tier-0 policy refresher scheduled with the team." }
+    ],
+    "lanes": {
+      "fs": [
+        { "start": 0,    "duration": 300, "state": "healthy" },
+        { "start": 300,  "duration": 480, "state": "compromised", "note": "interactive logon by service account" },
+        { "start": 780,  "duration": 420, "state": "recovering" }
+      ],
+      "ad": [
+        { "start": 0,    "duration": 1200, "state": "healthy" }
+      ],
+      "jump": [
+        { "start": 0,    "duration": 300, "state": "healthy" },
+        { "start": 300,  "duration": 480, "state": "compromised", "note": "originated the misuse" },
+        { "start": 780,  "duration": 420, "state": "recovering" }
+      ]
+    }
+  }
+}

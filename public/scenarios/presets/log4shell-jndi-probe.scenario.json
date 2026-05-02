@@ -1,0 +1,64 @@
+{
+  "name": "Log4Shell — Mass JNDI Probes & Successful Exploit",
+  "description": "December-2021 style scanning campaign hits the public API. ${jndi:ldap://...} payloads land in User-Agent and X-Api-Version headers across hundreds of endpoints. One legacy build of the reports service still runs log4j 2.14 — it makes the outbound LDAP call and an attacker drops a stage-2 implant.",
+  "reasoning": "Edge nginx → three Java/Go services → Postgres. Two of the services are patched (Go, modern Spring Boot). The third (\"reports-svc\") is a forgotten WAR on Tomcat and is the one that pops.",
+  "category": "security",
+  "difficulty": "hard",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "prod-vpc",       "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "public-edge",    "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "app-private",    "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "data-private",   "parent": "vpc" },
+    { "id": "lb",      "type": "service", "serviceType": "nginx",    "label": "edge-waf-lb",      "parent": "pubnet" },
+    { "id": "api",     "type": "service", "serviceType": "golang",   "label": "public-api",       "parent": "appnet" },
+    { "id": "auth",    "type": "service", "serviceType": "nodejs",   "label": "auth-svc",         "parent": "appnet" },
+    { "id": "reports", "type": "service", "serviceType": "custom",   "label": "reports-tomcat-7", "parent": "appnet",  "notes": "Tomcat 9 + log4j 2.14.1. Forgotten in Q4 patch sweep." },
+    { "id": "db",      "type": "service", "serviceType": "postgres", "label": "core-pg",          "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "lb",      "target": "api",     "protocol": "https", "port": 443,  "trafficRate": 110, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb",      "target": "auth",    "protocol": "https", "port": 443,  "trafficRate": 60,  "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb",      "target": "reports", "protocol": "https", "port": 443,  "trafficRate": 25,  "trafficPattern": "steady",  "errorRate": 0.01 },
+    { "source": "api",     "target": "db",      "protocol": "tcp",   "port": 5432, "trafficRate": 50,  "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "auth",    "target": "db",      "protocol": "tcp",   "port": 5432, "trafficRate": 30,  "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "reports", "target": "db",      "protocol": "tcp",   "port": 5432, "trafficRate": 20,  "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1620,
+    "narrative": [
+      { "tick": 0,    "text": "Quiet baseline. WAF in monitor-only mode." },
+      { "tick": 180,  "text": "Massive scan begins: ${jndi:ldap://*} payloads in 14 distinct headers across thousands of source IPs." },
+      { "tick": 360,  "text": "WAF flags suspicious patterns; api/auth shrug them off (already patched)." },
+      { "tick": 540,  "text": "reports-tomcat-7 makes outbound LDAP to evil.attacker.tld — DNS log captures the hostname." },
+      { "tick": 720,  "text": "Stage-2: cron job dropped, /tmp/.x86_64 binary written, persistence established." },
+      { "tick": 900,  "text": "EDR catches anomalous outbound on 1389 from the reports JVM and pages SOC." },
+      { "tick": 1080, "text": "Reports-svc isolated on the security group; outbound denied; in-flight session killed." },
+      { "tick": 1260, "text": "WAF flipped to block-mode for jndi: pattern; emergency log4j 2.17 hot-deploy in progress." },
+      { "tick": 1500, "text": "Forensics in progress; api/auth confirmed unaffected. Reports-svc rotated to a clean image." }
+    ],
+    "lanes": {
+      "lb": [
+        { "start": 0,    "duration": 180, "state": "healthy" },
+        { "start": 180,  "duration": 720, "state": "under_attack", "note": "mass jndi probes" },
+        { "start": 900,  "duration": 360, "state": "throttled",    "note": "WAF block-mode" },
+        { "start": 1260, "duration": 360, "state": "healthy" }
+      ],
+      "api": [
+        { "start": 0,    "duration": 1620, "state": "healthy",  "note": "patched, immune" }
+      ],
+      "auth": [
+        { "start": 0,    "duration": 1620, "state": "healthy",  "note": "patched, immune" }
+      ],
+      "reports": [
+        { "start": 0,    "duration": 540, "state": "healthy" },
+        { "start": 540,  "duration": 180, "state": "under_attack", "note": "JNDI lookup → LDAP outbound" },
+        { "start": 720,  "duration": 360, "state": "compromised",  "note": "stage-2 dropped" },
+        { "start": 1080, "duration": 180, "state": "down",         "note": "isolated by SOC" },
+        { "start": 1260, "duration": 360, "state": "recovering",   "note": "rotated to clean image" }
+      ],
+      "db": [
+        { "start": 0,    "duration": 1620, "state": "healthy" }
+      ]
+    }
+  }
+}

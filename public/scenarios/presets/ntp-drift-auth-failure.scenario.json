@@ -1,0 +1,55 @@
+{
+  "name": "NTP Drift Breaks Authentication",
+  "description": "An ESXi host loses sync with the corporate NTP fleet and the VMs running on it slowly drift forward by ~6 minutes. JWT validation starts failing with 'token used before nbf', Kerberos tickets get rejected by AD, and the affected app servers can no longer authenticate to the database.",
+  "reasoning": "Two app servers behind nginx talk to a Postgres that authenticates via Kerberos. The drift is invisible until token signatures stop validating; it manifests as auth-only failures while ICMP/networking still works.",
+  "category": "incident",
+  "difficulty": "hard",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "datacenter-iad-vpc", "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "iad-dmz",            "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "iad-app",            "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "iad-data",           "parent": "vpc" },
+    { "id": "lb",   "type": "service", "serviceType": "nginx",    "label": "iad-rev-proxy-01", "parent": "pubnet" },
+    { "id": "app1", "type": "service", "serviceType": "nodejs",   "label": "WIN-APP-IAD-09",   "parent": "appnet",  "notes": "Windows Server 2019 VM on host esx-iad-12." },
+    { "id": "app2", "type": "service", "serviceType": "nodejs",   "label": "WIN-APP-IAD-10",   "parent": "appnet",  "notes": "Same ESXi host." },
+    { "id": "db",   "type": "service", "serviceType": "postgres", "label": "PG-IAD-MAIN-01",   "parent": "datanet", "notes": "Auth via Kerberos against AD." }
+  ],
+  "edges": [
+    { "source": "lb",   "target": "app1", "protocol": "http", "port": 3000, "trafficRate": 50, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb",   "target": "app2", "protocol": "http", "port": 3000, "trafficRate": 50, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "app1", "target": "db",   "protocol": "tcp",  "port": 5432, "trafficRate": 25, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "app2", "target": "db",   "protocol": "tcp",  "port": 5432, "trafficRate": 25, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1500,
+    "narrative": [
+      { "tick": 0,    "text": "Baseline traffic, no anomalies, app servers in sync." },
+      { "tick": 240,  "text": "esx-iad-12 ntpd dies silently after a guest tools update. Drift accumulates." },
+      { "tick": 540,  "text": "Drift > 5 min. JWT validation: 'JsonWebTokenError: jwt issued in the future'." },
+      { "tick": 660,  "text": "Kerberos auth to PG fails: 'Clock skew too great (KRB_AP_ERR_SKEW)'." },
+      { "tick": 780,  "text": "Auth-only failures while ping still succeeds — operators chase the wrong layer for 20 min." },
+      { "tick": 1020, "text": "An old runbook is dug up; ntpdate -u corp-ntp.acme.local fixes drift in seconds." },
+      { "tick": 1200, "text": "Apps recover, AD-bound sessions re-issue successfully." },
+      { "tick": 1380, "text": "Postmortem: Telegraf drift metric was scraped but never alerted." }
+    ],
+    "lanes": {
+      "app1": [
+        { "start": 0,    "duration": 540,  "state": "healthy" },
+        { "start": 540,  "duration": 480,  "state": "degraded",   "note": "JWT/Kerberos failures" },
+        { "start": 1020, "duration": 240,  "state": "recovering" },
+        { "start": 1260, "duration": 240,  "state": "healthy" }
+      ],
+      "app2": [
+        { "start": 0,    "duration": 540,  "state": "healthy" },
+        { "start": 540,  "duration": 480,  "state": "degraded" },
+        { "start": 1020, "duration": 240,  "state": "recovering" },
+        { "start": 1260, "duration": 240,  "state": "healthy" }
+      ],
+      "db": [
+        { "start": 0,    "duration": 660,  "state": "healthy" },
+        { "start": 660,  "duration": 360,  "state": "degraded",   "note": "rejecting auth from drifted hosts" },
+        { "start": 1020, "duration": 480,  "state": "healthy" }
+      ]
+    }
+  }
+}

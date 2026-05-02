@@ -1,0 +1,56 @@
+{
+  "name": "Stale Cross-Account Trust Abused",
+  "description": "Vendor X went out of business in 2023, but the IAM role 'vendor-x-replication' in the prod account still trusts arn:aws:iam::4112*****:root. Someone bought their AWS account at auction and rediscovered the trust. Now they sts:AssumeRole into prod and start enumerating.",
+  "reasoning": "AWS control plane. The narrative is the mismatch: a long-quiescent role is suddenly being assumed from a different external account, and the subsequent API calls are all read-only enumeration.",
+  "category": "cloud",
+  "difficulty": "medium",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "control-plane-mirror", "parent": null },
+    { "id": "edgenet", "type": "subnet",  "label": "iam-edge",             "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "control-plane-app",    "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "audit-store",          "parent": "vpc" },
+    { "id": "iam",  "type": "service", "serviceType": "custom",  "label": "aws-iam",          "parent": "edgenet" },
+    { "id": "s3",   "type": "service", "serviceType": "custom",  "label": "aws-s3-control",   "parent": "appnet" },
+    { "id": "ec2",  "type": "service", "serviceType": "custom",  "label": "aws-ec2-control",  "parent": "appnet" },
+    { "id": "ct",   "type": "service", "serviceType": "custom",  "label": "cloudtrail-firehose","parent": "datanet" },
+    { "id": "siem", "type": "service", "serviceType": "custom",  "label": "siem-collector",   "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "iam", "target": "s3",   "protocol": "https", "port": 443, "trafficRate": 12, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "iam", "target": "ec2",  "protocol": "https", "port": 443, "trafficRate": 15, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "s3",  "target": "ct",   "protocol": "https", "port": 443, "trafficRate": 10, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "ec2", "target": "ct",   "protocol": "https", "port": 443, "trafficRate": 10, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "ct",  "target": "siem", "protocol": "tcp",   "port": 9200,"trafficRate": 16, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1500,
+    "narrative": [
+      { "tick": 0,    "text": "Quiet baseline; vendor-x-replication role last assumed 18 months ago." },
+      { "tick": 240,  "text": "sts:AssumeRole vendor-x-replication from external account 411232***." },
+      { "tick": 360,  "text": "ListBuckets, ListObjects, DescribeInstances, DescribeImages — all read-only enumeration." },
+      { "tick": 540,  "text": "GuardDuty 'Recon:IAMUser/UserPermissions' fires; SOC investigates the role's trust." },
+      { "tick": 720,  "text": "Security verifies vendor X is defunct; trust policy patched to {} (no trust)." },
+      { "tick": 900,  "text": "Audit walk for similar dangling trusts surfaces three more; all closed." },
+      { "tick": 1140, "text": "Forensics: no objects pulled; only metadata read. No CDE assets exposed." },
+      { "tick": 1380, "text": "Steady state. Action: SCP requiring all cross-account trusts to declare an owner tag." }
+    ],
+    "lanes": {
+      "iam": [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 480, "state": "under_attack", "note": "stale trust abused" },
+        { "start": 720,  "duration": 240, "state": "recovering" },
+        { "start": 960,  "duration": 540, "state": "healthy" }
+      ],
+      "s3": [
+        { "start": 0,    "duration": 360, "state": "healthy" },
+        { "start": 360,  "duration": 360, "state": "under_attack", "note": "anonymous-ish enumeration via assumed role" },
+        { "start": 720,  "duration": 780, "state": "healthy" }
+      ],
+      "ec2": [
+        { "start": 0,    "duration": 360, "state": "healthy" },
+        { "start": 360,  "duration": 360, "state": "under_attack" },
+        { "start": 720,  "duration": 780, "state": "healthy" }
+      ]
+    }
+  }
+}

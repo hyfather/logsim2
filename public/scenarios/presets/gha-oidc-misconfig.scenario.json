@@ -1,0 +1,58 @@
+{
+  "name": "GitHub Actions OIDC Trust Too Loose",
+  "description": "The IAM role for prod deploys trusts the GitHub OIDC provider with `repo:acme/*` instead of a specific repo + branch. An attacker forks a tiny repo, adds a workflow that requests an OIDC token, and assumes the prod role from their fork's PR runner.",
+  "reasoning": "GitHub Actions runner pool ↔ AWS IAM/STS. The signal is sts:AssumeRoleWithWebIdentity succeeding for a token whose `sub` claim points to an unfamiliar repo + ref combination.",
+  "category": "cloud",
+  "difficulty": "hard",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "scm-and-cloud-mirror", "parent": null },
+    { "id": "edgenet", "type": "subnet",  "label": "scm-edge",             "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "control-plane-app",    "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "audit-store",          "parent": "vpc" },
+    { "id": "edge",   "type": "service", "serviceType": "nginx",   "label": "github-edge",          "parent": "edgenet" },
+    { "id": "runner", "type": "service", "serviceType": "custom",  "label": "actions-runner-pool",  "parent": "appnet" },
+    { "id": "iam",    "type": "service", "serviceType": "custom",  "label": "aws-iam-sts",          "parent": "appnet" },
+    { "id": "ec2",    "type": "service", "serviceType": "custom",  "label": "aws-ec2-control",      "parent": "appnet" },
+    { "id": "ct",     "type": "service", "serviceType": "custom",  "label": "cloudtrail-firehose",  "parent": "datanet" },
+    { "id": "siem",   "type": "service", "serviceType": "custom",  "label": "siem-collector",       "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "edge",   "target": "runner", "protocol": "https", "port": 443, "trafficRate": 30, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "runner", "target": "iam",    "protocol": "https", "port": 443, "trafficRate": 10, "trafficPattern": "steady",  "errorRate": 0.005 },
+    { "source": "iam",    "target": "ec2",    "protocol": "https", "port": 443, "trafficRate": 8,  "trafficPattern": "steady",  "errorRate": 0.005 },
+    { "source": "ec2",    "target": "ct",     "protocol": "https", "port": 443, "trafficRate": 12, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "ct",     "target": "siem",   "protocol": "tcp",   "port": 9200,"trafficRate": 18, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1500,
+    "narrative": [
+      { "tick": 0,    "text": "Steady CI traffic; only 'acme/infra' workflows assume the prod role." },
+      { "tick": 240,  "text": "External user opens a PR against 'acme/sandbox-tutorial' (forked repo) with a tiny workflow." },
+      { "tick": 360,  "text": "Workflow requests OIDC token with audience=sts.amazonaws.com; trust policy allows 'repo:acme/*'." },
+      { "tick": 480,  "text": "AssumeRoleWithWebIdentity succeeds for arn:aws:iam::*:role/gha-prod-deploy from the fork's runner." },
+      { "tick": 660,  "text": "Attacker enumerates EC2; tries to ssm:SendCommand on a bastion. SCP denies it but logs everything." },
+      { "tick": 840,  "text": "GuardDuty 'CredentialAccess:IAMUser/AnomalousBehavior' fires on the new repo path." },
+      { "tick": 1020, "text": "Trust policy tightened to 'repo:acme/infra:ref:refs/heads/main'; old role rotated." },
+      { "tick": 1320, "text": "Audit walks every other GHA-OIDC trust in the org for the same wildcard pattern." }
+    ],
+    "lanes": {
+      "iam": [
+        { "start": 0,    "duration": 480, "state": "healthy" },
+        { "start": 480,  "duration": 540, "state": "compromised",  "note": "AssumeRoleWithWebIdentity from fork" },
+        { "start": 1020, "duration": 240, "state": "recovering" },
+        { "start": 1260, "duration": 240, "state": "healthy" }
+      ],
+      "runner": [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 240, "state": "under_attack", "note": "fork runner abusing OIDC" },
+        { "start": 480,  "duration": 540, "state": "compromised",  "note": "running with prod role creds" },
+        { "start": 1020, "duration": 480, "state": "healthy" }
+      ],
+      "ec2": [
+        { "start": 0,    "duration": 660, "state": "healthy" },
+        { "start": 660,  "duration": 360, "state": "under_attack" },
+        { "start": 1020, "duration": 480, "state": "healthy" }
+      ]
+    }
+  }
+}

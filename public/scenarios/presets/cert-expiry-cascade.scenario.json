@@ -1,0 +1,65 @@
+{
+  "name": "Wildcard Cert Expired at 03:14 UTC",
+  "description": "*.api.acme-corp.io was renewed in Vault but never re-deployed to the edge. At 03:14 UTC clients start getting NET::ERR_CERT_DATE_INVALID, internal mTLS fails between sidecars, half the fleet effectively goes offline.",
+  "reasoning": "The expired wildcard fronts both public ingress and the internal service mesh listener. So both edge nginx and the east-west calls between Go APIs break simultaneously, even though the database is fine.",
+  "category": "incident",
+  "difficulty": "easy",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "acme-prod-eu-w1",  "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "edge-public-1a",   "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "mesh-app-1a",      "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "data-private-1a",  "parent": "vpc" },
+    { "id": "lb",     "type": "service", "serviceType": "nginx",    "label": "edge-tls-term",       "parent": "pubnet" },
+    { "id": "auth",   "type": "service", "serviceType": "golang",   "label": "auth-svc",            "parent": "appnet" },
+    { "id": "orders", "type": "service", "serviceType": "golang",   "label": "orders-svc",          "parent": "appnet" },
+    { "id": "ship",   "type": "service", "serviceType": "golang",   "label": "shipping-svc",        "parent": "appnet" },
+    { "id": "db",     "type": "service", "serviceType": "postgres", "label": "core-db-rw",          "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "lb",     "target": "auth",   "protocol": "https", "port": 443,  "trafficRate": 60,  "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb",     "target": "orders", "protocol": "https", "port": 443,  "trafficRate": 90,  "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "orders", "target": "ship",   "protocol": "https", "port": 8443, "trafficRate": 40,  "trafficPattern": "steady",  "errorRate": 0.002 },
+    { "source": "auth",   "target": "db",     "protocol": "tcp",   "port": 5432, "trafficRate": 30,  "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "orders", "target": "db",     "protocol": "tcp",   "port": 5432, "trafficRate": 50,  "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "ship",   "target": "db",     "protocol": "tcp",   "port": 5432, "trafficRate": 20,  "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1200,
+    "narrative": [
+      { "tick": 0,    "text": "Quiet pre-dawn traffic, all services healthy." },
+      { "tick": 180,  "text": "03:14 UTC — *.api.acme-corp.io expires. Clients start hitting cert errors immediately." },
+      { "tick": 240,  "text": "Synthetic checks page on-call: 'TLS handshake failure, unable to verify the first certificate'." },
+      { "tick": 360,  "text": "East-west mTLS between orders-svc and shipping-svc breaks too — both used the same wildcard." },
+      { "tick": 540,  "text": "On-call discovers the cert was renewed in Vault 9 days ago but the deploy job never ran." },
+      { "tick": 720,  "text": "New cert pushed to edge nginx; internal sidecars rotate next." },
+      { "tick": 900,  "text": "All services back; postmortem flags monitoring gap on cert validity." },
+      { "tick": 1080, "text": "Steady state. cert-manager reminder Jira filed." }
+    ],
+    "lanes": {
+      "lb": [
+        { "start": 0,    "duration": 180, "state": "healthy" },
+        { "start": 180,  "duration": 540, "state": "down",       "note": "expired wildcard cert" },
+        { "start": 720,  "duration": 240, "state": "recovering" },
+        { "start": 960,  "duration": 240, "state": "healthy" }
+      ],
+      "auth": [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 480, "state": "down",       "note": "no traffic — TLS broken at edge" },
+        { "start": 720,  "duration": 240, "state": "recovering" },
+        { "start": 960,  "duration": 240, "state": "healthy" }
+      ],
+      "orders": [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 480, "state": "down" },
+        { "start": 720,  "duration": 240, "state": "recovering" },
+        { "start": 960,  "duration": 240, "state": "healthy" }
+      ],
+      "ship": [
+        { "start": 0,    "duration": 360, "state": "healthy" },
+        { "start": 360,  "duration": 360, "state": "down",       "note": "east-west mTLS failure" },
+        { "start": 720,  "duration": 240, "state": "recovering" },
+        { "start": 960,  "duration": 240, "state": "healthy" }
+      ]
+    }
+  }
+}

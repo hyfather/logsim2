@@ -1,0 +1,57 @@
+{
+  "name": "Azure AD Pass-the-PRT",
+  "description": "An infostealer pulls the Primary Refresh Token cookie + transport key from a corp laptop. The attacker replays them from their own machine, resolves a valid access token for graph.microsoft.com without prompting MFA, and starts pulling email + Teams chat history.",
+  "reasoning": "Entra ID + Microsoft Graph are the focal services. Telltale signal: Graph-bearing requests with the user's identity but inconsistent device-binding signals.",
+  "category": "cloud",
+  "difficulty": "hard",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "corp-identity",  "parent": null },
+    { "id": "edgenet", "type": "subnet",  "label": "identity-edge",  "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "saas-bridge",    "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "audit-store",    "parent": "vpc" },
+    { "id": "edge",  "type": "service", "serviceType": "nginx",   "label": "entra-token-endpoint","parent": "edgenet" },
+    { "id": "graph", "type": "service", "serviceType": "custom",  "label": "ms-graph-api",        "parent": "appnet" },
+    { "id": "exo",   "type": "service", "serviceType": "custom",  "label": "exchange-online",     "parent": "appnet" },
+    { "id": "teams", "type": "service", "serviceType": "custom",  "label": "teams-chat",          "parent": "appnet" },
+    { "id": "ueba",  "type": "service", "serviceType": "custom",  "label": "id-ueba",             "parent": "appnet" },
+    { "id": "siem",  "type": "service", "serviceType": "custom",  "label": "siem-collector",      "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "edge",  "target": "graph", "protocol": "https", "port": 443, "trafficRate": 60, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "graph", "target": "exo",   "protocol": "https", "port": 443, "trafficRate": 30, "trafficPattern": "steady",  "errorRate": 0.005 },
+    { "source": "graph", "target": "teams", "protocol": "https", "port": 443, "trafficRate": 25, "trafficPattern": "steady",  "errorRate": 0.005 },
+    { "source": "graph", "target": "ueba",  "protocol": "https", "port": 443, "trafficRate": 12, "trafficPattern": "steady",  "errorRate": 0.005 },
+    { "source": "ueba",  "target": "siem",  "protocol": "tcp",   "port": 9200,"trafficRate": 22, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1620,
+    "narrative": [
+      { "tick": 0,    "text": "Quiet baseline; user a.miller's device beacons a single Entra check-in." },
+      { "tick": 240,  "text": "Laptop is infected with Lumma stealer; PRT cookie + transport key copied." },
+      { "tick": 420,  "text": "Replay from new device: Entra issues a graph-scoped access token, no MFA prompted (PRT had stuck factor)." },
+      { "tick": 600,  "text": "Bulk Graph reads: Mail.Read (3,200 messages), TeamsMessages.Read (140 channels)." },
+      { "tick": 840,  "text": "UEBA correlates 'PRT used from new device, no compliant device claim' — alert fires." },
+      { "tick": 1080, "text": "Conditional Access tightened: device-compliance required; all sessions revoked." },
+      { "tick": 1320, "text": "User's laptop reimaged; FIDO2 enrolled; investigation closes." },
+      { "tick": 1560, "text": "Steady state. Org-wide policy: device-bound tokens for high-risk users only." }
+    ],
+    "lanes": {
+      "edge": [
+        { "start": 0,    "duration": 420, "state": "healthy" },
+        { "start": 420,  "duration": 660, "state": "compromised",  "note": "PRT replayed" },
+        { "start": 1080, "duration": 240, "state": "recovering" },
+        { "start": 1320, "duration": 300, "state": "healthy" }
+      ],
+      "graph": [
+        { "start": 0,    "duration": 600, "state": "healthy" },
+        { "start": 600,  "duration": 480, "state": "under_attack", "note": "anomalous graph reads" },
+        { "start": 1080, "duration": 540, "state": "healthy" }
+      ],
+      "exo": [
+        { "start": 0,    "duration": 600, "state": "healthy" },
+        { "start": 600,  "duration": 480, "state": "compromised",  "note": "mailbox bulk read" },
+        { "start": 1080, "duration": 540, "state": "healthy" }
+      ]
+    }
+  }
+}

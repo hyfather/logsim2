@@ -1,0 +1,49 @@
+{
+  "name": "Sales Rep Mass-Exporting CRM",
+  "description": "Account exec who hasn't shipped quota in two quarters quietly downloads 'Lead Lists by Region' 532 times in five days. The day after they accept an offer at a competitor, they're walked out with their email cached locally.",
+  "reasoning": "Salesforce-style CRM is the focus, with the file-output going to the user's local OneDrive sync. The simulation shows steady but anomalous report-export volume from one principal, separate from the rest of sales.",
+  "category": "insider",
+  "difficulty": "easy",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "rev-systems",   "parent": null },
+    { "id": "edgenet", "type": "subnet",  "label": "rev-edge",      "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "rev-app",       "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "rev-audit",     "parent": "vpc" },
+    { "id": "edge",  "type": "service", "serviceType": "nginx",   "label": "okta-rev-edge",   "parent": "edgenet" },
+    { "id": "crm",   "type": "service", "serviceType": "custom",  "label": "salesforce-crm",  "parent": "appnet" },
+    { "id": "od",    "type": "service", "serviceType": "custom",  "label": "onedrive-sync",   "parent": "appnet" },
+    { "id": "ueba",  "type": "service", "serviceType": "custom",  "label": "varonis-ueba",    "parent": "appnet" },
+    { "id": "siem",  "type": "service", "serviceType": "custom",  "label": "siem-collector",  "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "edge", "target": "crm",  "protocol": "https", "port": 443, "trafficRate": 80, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "edge", "target": "od",   "protocol": "https", "port": 443, "trafficRate": 60, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "crm",  "target": "ueba", "protocol": "https", "port": 443, "trafficRate": 12, "trafficPattern": "steady",  "errorRate": 0.005 },
+    { "source": "ueba", "target": "siem", "protocol": "tcp",   "port": 9200,"trafficRate": 20, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1620,
+    "narrative": [
+      { "tick": 0,    "text": "Day 1 — normal sales activity. Single user n.kim@corp pulls 47 'leads by region' reports." },
+      { "tick": 300,  "text": "Day 2 — same user pulls 89 reports; UEBA risk score rises but not yet flagged." },
+      { "tick": 660,  "text": "Day 3 — 112 reports, plus one 'all leads, all regions, with phone' export (40MB CSV)." },
+      { "tick": 900,  "text": "Day 4 — 165 reports; OneDrive sync uploads 410MB to user's personal device." },
+      { "tick": 1140, "text": "Day 5 — user accepts offer at competitor; HR informs security." },
+      { "tick": 1320, "text": "Access revoked; legal hold on mailbox + endpoint; DLP scans local copies on the device." },
+      { "tick": 1500, "text": "Forensic capture in progress. Customer notification path opened depending on findings." }
+    ],
+    "lanes": {
+      "crm": [
+        { "start": 0,    "duration": 300, "state": "healthy" },
+        { "start": 300,  "duration": 840, "state": "under_attack", "note": "single-user mass export pattern" },
+        { "start": 1140, "duration": 240, "state": "throttled",    "note": "access revoked" },
+        { "start": 1380, "duration": 240, "state": "healthy" }
+      ],
+      "od": [
+        { "start": 0,    "duration": 660,  "state": "healthy" },
+        { "start": 660,  "duration": 480,  "state": "compromised",  "note": "anomalous local sync size" },
+        { "start": 1140, "duration": 480,  "state": "recovering" }
+      ]
+    }
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "name": "Mass MFA Disable from Helpdesk Console",
+  "description": "Helpdesk technician (or someone using their session) walks down a list of 41 VIP accounts and clicks 'reset MFA / require re-enrollment' in 30 minutes. Real CEO travelling overseas and four other execs go from MFA-required to no-MFA right before a phishing wave hits.",
+  "reasoning": "Identity provider (Entra/Okta-style) is the affected service. The signal is repeated 'MFA reset' admin actions from one principal in a tight window, against a list that doesn't match normal helpdesk ticket flow.",
+  "category": "insider",
+  "difficulty": "hard",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "corp-identity",  "parent": null },
+    { "id": "edgenet", "type": "subnet",  "label": "identity-edge",  "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "saas-bridge",    "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "audit-store",    "parent": "vpc" },
+    { "id": "edge",  "type": "service", "serviceType": "nginx",   "label": "okta-edge",        "parent": "edgenet" },
+    { "id": "okta",  "type": "service", "serviceType": "custom",  "label": "okta-tenancy",     "parent": "appnet" },
+    { "id": "ad",    "type": "service", "serviceType": "custom",  "label": "entra-id-tenancy", "parent": "appnet" },
+    { "id": "ueba",  "type": "service", "serviceType": "custom",  "label": "id-ueba",          "parent": "appnet"  },
+    { "id": "siem",  "type": "service", "serviceType": "custom",  "label": "siem-collector",   "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "edge", "target": "okta", "protocol": "https", "port": 443, "trafficRate": 80, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "edge", "target": "ad",   "protocol": "https", "port": 443, "trafficRate": 60, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "okta", "target": "ueba", "protocol": "https", "port": 443, "trafficRate": 14, "trafficPattern": "steady",  "errorRate": 0.005 },
+    { "source": "ueba", "target": "siem", "protocol": "tcp",   "port": 9200,"trafficRate": 22, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1500,
+    "narrative": [
+      { "tick": 0,    "text": "Quiet baseline. Helpdesk averages ~3 MFA resets/hour during business hours." },
+      { "tick": 240,  "text": "13:14 UTC — admin 't.harris@corp' starts running 'Reset MFA factors' on a list of 41 accounts." },
+      { "tick": 360,  "text": "By 13:32 — 28 resets done; targets are concentrated in C-suite + finance, not the day's tickets." },
+      { "tick": 540,  "text": "Phishing emails land in the affected mailboxes within minutes — 'Verify your new login' lure." },
+      { "tick": 720,  "text": "UEBA fires 'admin-mfa-reset-burst-without-tickets'; SOC paged." },
+      { "tick": 900,  "text": "All 41 accounts force-reset to require MFA again; t.harris session terminated; investigation opens." },
+      { "tick": 1140, "text": "Forensics: helpdesk session token had been replayed from an unfamiliar IP for ~14 hours." },
+      { "tick": 1380, "text": "All affected users re-onboarded onto FIDO2; helpdesk session-binding policy tightened." }
+    ],
+    "lanes": {
+      "okta": [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 660, "state": "compromised",  "note": "MFA bulk reset by admin session" },
+        { "start": 900,  "duration": 240, "state": "recovering" },
+        { "start": 1140, "duration": 360, "state": "healthy" }
+      ],
+      "ad": [
+        { "start": 0,    "duration": 540, "state": "healthy" },
+        { "start": 540,  "duration": 360, "state": "under_attack", "note": "phishing wave on resetted accounts" },
+        { "start": 900,  "duration": 600, "state": "recovering" }
+      ],
+      "ueba": [
+        { "start": 0,    "duration": 720, "state": "healthy" },
+        { "start": 720,  "duration": 240, "state": "under_attack", "note": "alert flood" },
+        { "start": 960,  "duration": 540, "state": "healthy" }
+      ]
+    }
+  }
+}
