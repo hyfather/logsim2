@@ -17,7 +17,7 @@ import type { Episode } from '@/types/episode'
 import type { LogFormat } from '@/types/logs'
 
 const REPO_SLUG = 'hyfather/logsim2'
-const INSTALL_URL = `https://raw.githubusercontent.com/${REPO_SLUG}/main/scripts/install.sh`
+const INSTALL_URL = `https://raw.githubusercontent.com/${REPO_SLUG}/master/scripts/install.sh`
 const RELEASES_URL = `https://github.com/${REPO_SLUG}/releases`
 
 interface RunLocallyModalProps {
