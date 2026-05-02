@@ -24,6 +24,7 @@ interface UIState {
   paletteNodeType: string | null
   describePanelOpen: boolean
   modifyPanelOpen: boolean
+  newScenarioModalOpen: boolean
   hoveredServiceId: string | null
   // Actions
   selectNode: (id: string | null) => void
@@ -42,6 +43,7 @@ interface UIState {
   setDraggingFromPalette: (isDragging: boolean, nodeType?: string) => void
   setDescribePanelOpen: (open: boolean) => void
   setModifyPanelOpen: (open: boolean) => void
+  setNewScenarioModalOpen: (open: boolean) => void
   setHoveredServiceId: (id: string | null) => void
 }
 
@@ -62,6 +64,7 @@ export const useUIStore = create<UIState>()((set) => ({
   paletteNodeType: null,
   describePanelOpen: false,
   modifyPanelOpen: false,
+  newScenarioModalOpen: false,
   hoveredServiceId: null,
 
   selectNode: (id) => set({
@@ -91,5 +94,6 @@ export const useUIStore = create<UIState>()((set) => ({
     set({ isDraggingFromPalette: isDragging, paletteNodeType: nodeType || null }),
   setDescribePanelOpen: (open) => set({ describePanelOpen: open }),
   setModifyPanelOpen: (open) => set({ modifyPanelOpen: open }),
+  setNewScenarioModalOpen: (open) => set({ newScenarioModalOpen: open }),
   setHoveredServiceId: (id) => set({ hoveredServiceId: id }),
 }))

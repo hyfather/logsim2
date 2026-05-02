@@ -7,6 +7,7 @@ import { NodeInspectorPanel } from '@/components/panels/NodeInspectorPanel'
 import { Topbar } from '@/components/toolbar/Topbar'
 import { DescribeScenarioPanel } from '@/components/canvas/DescribeScenarioPanel'
 import { ModifyScenarioPanel } from '@/components/canvas/ModifyScenarioPanel'
+import { NewScenarioModal } from '@/components/canvas/NewScenarioModal'
 import { EpisodeTimeline } from '@/components/episodes/EpisodeTimeline'
 import { BlockInspector } from '@/components/episodes/BlockInspector'
 import { ScrubbedLogs } from '@/components/episodes/ScrubbedLogs'
@@ -38,6 +39,7 @@ export default function EditorPageClient() {
     canvasCollapsed, setCanvasCollapsed,
     describePanelOpen, setDescribePanelOpen,
     modifyPanelOpen, setModifyPanelOpen,
+    newScenarioModalOpen, setNewScenarioModalOpen,
   } = useUIStore()
   const selectedBlockId = useEpisodeStore(s => s.selectedBlockId)
   const setEpisode = useEpisodeStore(s => s.setEpisode)
@@ -411,6 +413,7 @@ export default function EditorPageClient() {
 
       <DescribeScenarioPanel open={describePanelOpen} onClose={() => setDescribePanelOpen(false)} />
       <ModifyScenarioPanel open={modifyPanelOpen} onClose={() => setModifyPanelOpen(false)} />
+      <NewScenarioModal open={newScenarioModalOpen} onClose={() => setNewScenarioModalOpen(false)} />
     </ReactFlowProvider>
   )
 }
