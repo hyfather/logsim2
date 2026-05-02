@@ -11,6 +11,7 @@ import {
   Play,
   RotateCcw,
   StepForward,
+  Terminal,
   Trash2,
 } from 'lucide-react'
 import {
@@ -49,6 +50,7 @@ import { runStream } from '@/lib/runStream'
 import { logsAt } from '@/lib/logsAt'
 import { materializeProposedScenarioJson } from '@/lib/scenarioPrompt'
 import { ExportPreviewModal, type ExportTab } from '@/components/toolbar/ExportPreviewModal'
+import { RunLocallyModal } from '@/components/toolbar/RunLocallyModal'
 
 interface PresetScenarioManifestEntry {
   file: string
@@ -445,6 +447,7 @@ export function Topbar() {
     setExportModalTab(tab)
     setExportModalOpen(true)
   }, [])
+  const [runLocallyOpen, setRunLocallyOpen] = useState(false)
 
   // ── Derived ─────────────────────────────────────────────────────
   const isRunning = status === 'running'
@@ -862,6 +865,11 @@ export function Topbar() {
               <span className="font-mono text-[11px] text-slate-400">.txt</span>
               <span className="ml-2">Ground truth (SFT/RL)</span>
             </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => setRunLocallyOpen(true)} className="cursor-pointer text-xs">
+              <Terminal className="h-3 w-3 text-slate-400" />
+              <span className="ml-2">Run locally with CLI…</span>
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -879,6 +887,18 @@ export function Topbar() {
         metadata={metadata}
         episode={episode}
         tickIntervalMs={1000}
+      />
+
+      {/* Run locally with CLI modal */}
+      <RunLocallyModal
+        open={runLocallyOpen}
+        onClose={() => setRunLocallyOpen(false)}
+        flowNodes={nodes}
+        flowEdges={edges}
+        metadata={metadata}
+        episode={episode}
+        tickIntervalMs={1000}
+        outputFormat={outputFormat}
       />
 
       {/* About modal */}

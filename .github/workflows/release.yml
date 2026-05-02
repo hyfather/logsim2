@@ -1,0 +1,72 @@
+name: Release logsim binary
+
+# Cross-compiles the `logsim` CLI for darwin/linux (amd64+arm64) on tag push
+# and uploads the binaries as release assets. The install script and the
+# in-app "Run locally" modal point users at the latest release.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}-${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+          - os: linux
+            arch: arm64
+          - os: darwin
+            arch: amd64
+          - os: darwin
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p dist
+          out="dist/logsim-${GOOS}-${GOARCH}"
+          go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME:-dev}" -o "$out" ./cmd/logsim
+          (cd dist && tar -czf "logsim-${GOOS}-${GOARCH}.tar.gz" "logsim-${GOOS}-${GOARCH}")
+          (cd dist && shasum -a 256 "logsim-${GOOS}-${GOARCH}.tar.gz" > "logsim-${GOOS}-${GOARCH}.tar.gz.sha256")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: logsim-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            dist/logsim-${{ matrix.os }}-${{ matrix.arch }}.tar.gz
+            dist/logsim-${{ matrix.os }}-${{ matrix.arch }}.tar.gz.sha256
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create or update release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
+          generate_release_notes: true
+          fail_on_unmatched_files: true
