@@ -20,14 +20,20 @@ import { Input } from '@/components/ui/input'
 import { Slider } from '@/components/ui/slider'
 import { useEffect, useRef } from 'react'
 
+// `bendX` / `bendY` are stored as an offset from the natural midpoint of the
+// edge (in flow coords). Storing as an offset — instead of an absolute world
+// position — means the elbow follows the source/target whenever a parent
+// container is dragged, so labels and bends stay glued to the edge.
 function buildSmoothOrthogonalPath({
   sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, bendX, bendY,
 }: {
   sourceX: number; sourceY: number; targetX: number; targetY: number
   sourcePosition?: Position; targetPosition?: Position; bendX?: number; bendY?: number
 }) {
-  const controlX = bendX ?? (sourceX + targetX) / 2
-  const controlY = bendY ?? (sourceY + targetY) / 2
+  const midX = (sourceX + targetX) / 2
+  const midY = (sourceY + targetY) / 2
+  const controlX = midX + (bendX ?? 0)
+  const controlY = midY + (bendY ?? 0)
   const [path, labelX, labelY] = getSmoothStepPath({
     sourceX, sourceY, sourcePosition,
     targetX, targetY, targetPosition,
@@ -174,7 +180,9 @@ export function ConnectionEdge({
     e.stopPropagation()
     const onMove = (moveEvent: MouseEvent) => {
       const point = screenToFlowPosition({ x: moveEvent.clientX, y: moveEvent.clientY })
-      updateEdge(id, { bendX: point.x, bendY: point.y })
+      const midX = (sourceX + targetX) / 2
+      const midY = (sourceY + targetY) / 2
+      updateEdge(id, { bendX: point.x - midX, bendY: point.y - midY })
     }
     const onUp = () => {
       window.removeEventListener('mousemove', onMove)
@@ -182,7 +190,7 @@ export function ConnectionEdge({
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
-  }, [id, screenToFlowPosition, updateEdge])
+  }, [id, screenToFlowPosition, updateEdge, sourceX, sourceY, targetX, targetY])
 
   const hasWarning = conn?.topologyWarning
   const isActive = Boolean(activity && activity.requestCount > 0)
