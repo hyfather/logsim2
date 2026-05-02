@@ -11,7 +11,6 @@ import {
   Play,
   RotateCcw,
   Settings,
-  Sparkles,
   StepForward,
   Terminal,
   Trash2,
@@ -79,10 +78,9 @@ function GithubMark({ className }: { className?: string }) {
 }
 
 export function Topbar() {
-  const { nodes, edges, metadata, setMetadata, resetScenario, loadScenario } = useScenarioStore()
-  const setDescribePanelOpen = useUIStore(s => s.setDescribePanelOpen)
-  const setModifyPanelOpen = useUIStore(s => s.setModifyPanelOpen)
+  const { nodes, edges, metadata, setMetadata, loadScenario } = useScenarioStore()
   const setNewScenarioModalOpen = useUIStore(s => s.setNewScenarioModalOpen)
+  const setModifyPanelOpen = useUIStore(s => s.setModifyPanelOpen)
   const episode = useEpisodeStore(s => s.episode)
   const setEpisode = useEpisodeStore(s => s.setEpisode)
   const setTick = useEpisodeStore(s => s.setTick)
@@ -211,15 +209,6 @@ export function Topbar() {
     setNewScenarioModalOpen(true)
   }, [setNewScenarioModalOpen])
 
-  const handleNewFromAI = useCallback(() => {
-    // Allocate a fresh library id so the previous scenario stays under
-    // "Recent" instead of being overwritten by the AI generation.
-    useScenarioLibraryStore.getState().startNew()
-    resetScenario()
-    useEpisodeStore.getState().resetEpisode()
-    setDescribePanelOpen(true)
-  }, [resetScenario, setDescribePanelOpen])
-
   const handleLoadFromLibrary = useCallback((entry: SavedScenario) => {
     try {
       const { flowNodes, flowEdges } = scenarioToFlow(entry.scenario)
@@ -259,6 +248,8 @@ export function Topbar() {
 
   const startPlayback = useCallback((nextSpeed: number) => {
     if (status === 'running') return
+    // Right rail is shared between chat and logs. Run swaps it back to logs.
+    setModifyPanelOpen(false)
     const enabledCribl = destinationsRef.current.find(d => d.enabled && d.type === 'cribl-hec')
     const cribl = pickCriblPayload(destinationsRef.current)
     const yaml = buildScenarioYaml()
@@ -317,7 +308,7 @@ export function Topbar() {
         setRunStatus('idle')
       },
     })
-  }, [addLogs, buildScenarioYaml, clearLogs, outputFormat, recordSent, setDestStatus, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, status])
+  }, [addLogs, buildScenarioYaml, clearLogs, outputFormat, recordSent, setDestStatus, setModifyPanelOpen, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, status])
 
   const stopPlayback = useCallback(() => {
     stopBackend()
@@ -502,9 +493,6 @@ export function Topbar() {
             <DropdownMenuItem onClick={handleNewScenario} className="cursor-pointer text-xs">
               📄 New Scenario…
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={handleNewFromAI} className="cursor-pointer text-xs">
-              ✨ New from AI prompt…
-            </DropdownMenuItem>
             <DropdownMenuItem onClick={handleOpenScenario} className="cursor-pointer text-xs">📂 Open Scenario…</DropdownMenuItem>
             <DropdownMenuItem onClick={handleSaveScenario} className="cursor-pointer text-xs">💾 Save Scenario  ⌘S</DropdownMenuItem>
             <DropdownMenuSeparator />
@@ -598,18 +586,6 @@ export function Topbar() {
             </button>
           )}
         </div>
-
-        {/* Modify with AI — opens a chat panel that revises the current canvas */}
-        <button
-          type="button"
-          onClick={() => setModifyPanelOpen(true)}
-          disabled={nodes.length === 0}
-          title="Modify scenario with AI"
-          className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-violet-200 bg-violet-50 px-2 text-[11.5px] font-medium text-violet-800 transition-colors hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-violet-50"
-        >
-          <Sparkles className="h-3 w-3" />
-          <span className="hidden sm:inline">Modify with AI</span>
-        </button>
       </div>
 
       {/* RIGHT: destinations + format + transport tray + export */}

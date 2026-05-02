@@ -5,7 +5,6 @@ import { Canvas } from '@/components/canvas/Canvas'
 import { Palette } from '@/components/palette/Palette'
 import { NodeInspectorPanel } from '@/components/panels/NodeInspectorPanel'
 import { Topbar } from '@/components/toolbar/Topbar'
-import { DescribeScenarioPanel } from '@/components/canvas/DescribeScenarioPanel'
 import { ModifyScenarioPanel } from '@/components/canvas/ModifyScenarioPanel'
 import { NewScenarioModal } from '@/components/canvas/NewScenarioModal'
 import { EpisodeTimeline } from '@/components/episodes/EpisodeTimeline'
@@ -18,7 +17,7 @@ import { useSimulationStore } from '@/store/useSimulationStore'
 import { useDestinationsStore } from '@/store/useDestinationsStore'
 import { forwardToHec } from '@/lib/criblForwarder'
 import type { CriblHecDestination } from '@/types/destinations'
-import { PanelLeftOpen, PanelRightOpen, ChevronDown, ChevronUp } from 'lucide-react'
+import { PanelLeftOpen, PanelRightOpen, ChevronDown, ChevronUp, Sparkles } from 'lucide-react'
 import { deserializeScenario } from '@/lib/serialization'
 import { scenarioToFlow } from '@/lib/flow-data'
 import { materializeProposedScenarioJson } from '@/lib/scenarioPrompt'
@@ -37,7 +36,6 @@ export default function EditorPageClient() {
     timelineHeight, setTimelineHeight,
     timelineCollapsed, setTimelineCollapsed,
     canvasCollapsed, setCanvasCollapsed,
-    describePanelOpen, setDescribePanelOpen,
     modifyPanelOpen, setModifyPanelOpen,
     newScenarioModalOpen, setNewScenarioModalOpen,
   } = useUIStore()
@@ -66,13 +64,6 @@ export default function EditorPageClient() {
   useEffect(() => {
     let cancelled = false
     const params = new URLSearchParams(window.location.search)
-    if (params.get('ai') === '1') {
-      setDescribePanelOpen(true)
-      params.delete('ai')
-      const next = params.toString()
-      const url = next ? `${window.location.pathname}?${next}` : window.location.pathname
-      window.history.replaceState(null, '', url)
-    }
 
     const loadPresetBySlug = async (slug: string, fallbackName?: string) => {
       const res = await fetch(`/scenarios/presets/${slug}.scenario.json`, { cache: 'no-cache' })
@@ -254,6 +245,17 @@ export default function EditorPageClient() {
     }
   }, [setLogPanelWidth, setLogPanelOpen, setCanvasOpen])
 
+  // Modify-with-AI shares the right rail with logs (mutually exclusive). Opening
+  // the chat forces the rail open and bumps width to a chat-friendly minimum.
+  const handleOpenModify = useCallback(() => {
+    setModifyPanelOpen(true)
+    setLogPanelOpen(true)
+    setLogPanelWidth(Math.max(380, logPanelWidth))
+    if (window.matchMedia('(max-width: 767px)').matches) {
+      setCanvasOpen(false)
+    }
+  }, [setModifyPanelOpen, setLogPanelOpen, setLogPanelWidth, logPanelWidth, setCanvasOpen])
+
   const handleOpenCanvas = useCallback(() => {
     setCanvasOpen(true)
     if (window.matchMedia('(max-width: 767px)').matches) {
@@ -362,6 +364,15 @@ export default function EditorPageClient() {
                     <div className="relative flex-1 min-h-0 overflow-hidden">
                       <Canvas />
                       <Palette />
+                      <button
+                        type="button"
+                        onClick={handleOpenModify}
+                        title="Modify scenario with AI"
+                        className="group absolute bottom-4 right-4 z-30 inline-flex items-center gap-1.5 rounded-full border border-violet-200 bg-white/95 px-3 py-1.5 text-[12px] font-semibold text-violet-800 shadow-md backdrop-blur transition-all hover:-translate-y-0.5 hover:bg-violet-50 hover:shadow-lg"
+                      >
+                        <Sparkles className="h-3.5 w-3.5" />
+                        Modify with AI
+                      </button>
                     </div>
                   </div>
                 )}
@@ -401,18 +412,18 @@ export default function EditorPageClient() {
             )}
 
             {logPanelOpen && (
-              selectedBlockId
-                ? <BlockInspector />
-                : selectedNode
-                  ? <NodeInspectorPanel nodeData={selectedNode} />
-                  : <ScrubbedLogs />
+              modifyPanelOpen
+                ? <ModifyScenarioPanel onClose={() => setModifyPanelOpen(false)} />
+                : selectedBlockId
+                  ? <BlockInspector />
+                  : selectedNode
+                    ? <NodeInspectorPanel nodeData={selectedNode} />
+                    : <ScrubbedLogs />
             )}
           </div>
         </div>
       </div>
 
-      <DescribeScenarioPanel open={describePanelOpen} onClose={() => setDescribePanelOpen(false)} />
-      <ModifyScenarioPanel open={modifyPanelOpen} onClose={() => setModifyPanelOpen(false)} />
       <NewScenarioModal open={newScenarioModalOpen} onClose={() => setNewScenarioModalOpen(false)} />
     </ReactFlowProvider>
   )
