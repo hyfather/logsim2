@@ -34,6 +34,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Switch } from '@/components/ui/switch'
+import { useIsMobile } from '@/hooks/useMediaQuery'
 import { useScenarioStore } from '@/store/useScenarioStore'
 import { useUIStore } from '@/store/useUIStore'
 import { useEpisodeStore } from '@/store/useEpisodeStore'
@@ -69,6 +70,25 @@ interface PresetScenarioGroup {
   label: string
   description?: string
   order?: number
+}
+
+function groupDotClass(id: string): string {
+  switch (id) {
+    case 'security': return 'bg-rose-500'
+    case 'incident': return 'bg-amber-500'
+    case 'deploy':   return 'bg-violet-500'
+    case 'insider':  return 'bg-emerald-500'
+    case 'cloud':    return 'bg-sky-500'
+    default:         return 'bg-slate-400'
+  }
+}
+
+function difficultyPillClass(diff: string): string {
+  switch (diff) {
+    case 'hard':   return 'bg-rose-100 text-rose-700'
+    case 'medium': return 'bg-amber-100 text-amber-800'
+    default:       return 'bg-emerald-100 text-emerald-700'
+  }
 }
 
 const FALLBACK_GROUPS: PresetScenarioGroup[] = [
@@ -144,6 +164,9 @@ export function Topbar() {
   const [editingTitle, setEditingTitle] = useState(false)
   const [aboutOpen, setAboutOpen] = useState(false)
   const [installOpen, setInstallOpen] = useState(false)
+  const [presetsDialogOpen, setPresetsDialogOpen] = useState(false)
+  const [openMobileGroups, setOpenMobileGroups] = useState<Record<string, boolean>>({})
+  const isMobile = useIsMobile()
 
   // Recent scenarios from the persistent library (newest first).
   const recentScenarios = useScenarioLibraryStore(s => s.scenarios)
@@ -651,77 +674,84 @@ export function Topbar() {
                 )}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger
-                onMouseEnter={loadPresetsManifest}
-                onFocus={loadPresetsManifest}
+            {isMobile ? (
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  // Keep the parent menu from re-stealing focus, then open the dialog.
+                  e.preventDefault()
+                  loadPresetsManifest()
+                  setPresetsDialogOpen(true)
+                }}
                 className="cursor-pointer text-xs"
               >
                 📚 Example Scenarios
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="w-64 text-xs">
-                <DropdownMenuLabel className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
-                  Browse by category
-                </DropdownMenuLabel>
-                {!presetsLoaded ? (
-                  <div className="px-2 py-1.5 text-[11px] text-slate-400">Loading…</div>
-                ) : groupedPresets.length === 0 ? (
-                  <div className="px-2 py-1.5 text-[11px] text-slate-400">No example scenarios found.</div>
-                ) : (
-                  groupedPresets.map(({ group, items }) => (
-                    <DropdownMenuSub key={group.id}>
-                      <DropdownMenuSubTrigger className="cursor-pointer text-xs">
-                        <span className="flex w-full items-center justify-between gap-2">
-                          <span className="flex items-center gap-1.5 font-medium">
-                            <span className={cn(
-                              'inline-block h-2 w-2 rounded-full',
-                              group.id === 'security' ? 'bg-rose-500'
-                                : group.id === 'incident' ? 'bg-amber-500'
-                                : group.id === 'deploy' ? 'bg-violet-500'
-                                : group.id === 'insider' ? 'bg-emerald-500'
-                                : group.id === 'cloud' ? 'bg-sky-500'
-                                : 'bg-slate-400',
-                            )} aria-hidden />
-                            {group.label}
-                          </span>
-                          <span className="text-[10px] text-slate-400">{items.length}</span>
-                        </span>
-                      </DropdownMenuSubTrigger>
-                      <DropdownMenuSubContent className="max-w-md text-xs">
-                        {group.description && (
-                          <DropdownMenuLabel className="whitespace-normal text-[10px] leading-tight text-slate-500">
-                            {group.description}
-                          </DropdownMenuLabel>
-                        )}
-                        {items.map(p => (
-                          <DropdownMenuItem
-                            key={p.file}
-                            onClick={() => loadExampleScenario(p)}
-                            className="flex cursor-pointer flex-col items-start gap-0.5 text-xs"
-                          >
+              </DropdownMenuItem>
+            ) : (
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger
+                  onMouseEnter={loadPresetsManifest}
+                  onFocus={loadPresetsManifest}
+                  className="cursor-pointer text-xs"
+                >
+                  📚 Example Scenarios
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="w-64 text-xs">
+                  <DropdownMenuLabel className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                    Browse by category
+                  </DropdownMenuLabel>
+                  {!presetsLoaded ? (
+                    <div className="px-2 py-1.5 text-[11px] text-slate-400">Loading…</div>
+                  ) : groupedPresets.length === 0 ? (
+                    <div className="px-2 py-1.5 text-[11px] text-slate-400">No example scenarios found.</div>
+                  ) : (
+                    groupedPresets.map(({ group, items }) => (
+                      <DropdownMenuSub key={group.id}>
+                        <DropdownMenuSubTrigger className="cursor-pointer text-xs">
+                          <span className="flex w-full items-center justify-between gap-2">
                             <span className="flex items-center gap-1.5 font-medium">
-                              {p.title}
                               <span className={cn(
-                                'rounded px-1 py-px text-[9px] font-semibold uppercase tracking-wide',
-                                p.difficulty === 'hard' ? 'bg-rose-100 text-rose-700'
-                                  : p.difficulty === 'medium' ? 'bg-amber-100 text-amber-800'
-                                  : 'bg-emerald-100 text-emerald-700',
-                              )}>{p.difficulty}</span>
+                                'inline-block h-2 w-2 rounded-full',
+                                groupDotClass(group.id),
+                              )} aria-hidden />
+                              {group.label}
                             </span>
-                            <span className="whitespace-normal text-[10px] leading-tight text-slate-500">
-                              {p.description}
-                            </span>
-                            <span className="text-[10px] text-slate-400">
-                              {p.serviceCount} services · {Math.round(p.durationTicks / 60)} min
-                            </span>
-                          </DropdownMenuItem>
-                        ))}
-                      </DropdownMenuSubContent>
-                    </DropdownMenuSub>
-                  ))
-                )}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
+                            <span className="text-[10px] text-slate-400">{items.length}</span>
+                          </span>
+                        </DropdownMenuSubTrigger>
+                        <DropdownMenuSubContent className="max-w-md text-xs">
+                          {group.description && (
+                            <DropdownMenuLabel className="whitespace-normal text-[10px] leading-tight text-slate-500">
+                              {group.description}
+                            </DropdownMenuLabel>
+                          )}
+                          {items.map(p => (
+                            <DropdownMenuItem
+                              key={p.file}
+                              onClick={() => loadExampleScenario(p)}
+                              className="flex cursor-pointer flex-col items-start gap-0.5 text-xs"
+                            >
+                              <span className="flex items-center gap-1.5 font-medium">
+                                {p.title}
+                                <span className={cn(
+                                  'rounded px-1 py-px text-[9px] font-semibold uppercase tracking-wide',
+                                  difficultyPillClass(p.difficulty),
+                                )}>{p.difficulty}</span>
+                              </span>
+                              <span className="whitespace-normal text-[10px] leading-tight text-slate-500">
+                                {p.description}
+                              </span>
+                              <span className="text-[10px] text-slate-400">
+                                {p.serviceCount} services · {Math.round(p.durationTicks / 60)} min
+                              </span>
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuSubContent>
+                      </DropdownMenuSub>
+                    ))
+                  )}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
 
@@ -1039,6 +1069,87 @@ export function Topbar() {
                 logged, or shared with third parties.
               </p>
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Mobile presets dialog — replaces nested submenus on small screens */}
+      <Dialog open={presetsDialogOpen} onOpenChange={setPresetsDialogOpen}>
+        <DialogContent className="flex h-[90dvh] max-h-[90dvh] w-[calc(100vw-1rem)] max-w-md flex-col gap-0 overflow-hidden p-0 sm:max-w-lg">
+          <DialogHeader className="border-b border-slate-200 px-4 py-3">
+            <DialogTitle className="text-base">Example Scenarios</DialogTitle>
+            <DialogDescription className="text-[12px] text-slate-500">
+              Realistic, hand-written incident scenarios across IT and security.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto overscroll-contain px-2 py-2">
+            {!presetsLoaded ? (
+              <div className="px-3 py-2 text-[12px] text-slate-400">Loading…</div>
+            ) : groupedPresets.length === 0 ? (
+              <div className="px-3 py-2 text-[12px] text-slate-400">No example scenarios found.</div>
+            ) : (
+              <ul className="space-y-2">
+                {groupedPresets.map(({ group, items }) => {
+                  const isOpen = openMobileGroups[group.id] ?? false
+                  return (
+                    <li key={group.id} className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+                      <button
+                        type="button"
+                        onClick={() => setOpenMobileGroups(s => ({ ...s, [group.id]: !isOpen }))}
+                        aria-expanded={isOpen}
+                        className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left active:bg-slate-50"
+                      >
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span className={cn('inline-block h-2.5 w-2.5 shrink-0 rounded-full', groupDotClass(group.id))} aria-hidden />
+                          <span className="min-w-0">
+                            <span className="block text-[14px] font-semibold text-slate-900">{group.label}</span>
+                            {group.description && (
+                              <span className="block truncate text-[11.5px] text-slate-500">{group.description}</span>
+                            )}
+                          </span>
+                        </span>
+                        <span className="flex shrink-0 items-center gap-2 text-slate-400">
+                          <span className="text-[11px] tabular-nums">{items.length}</span>
+                          <span className={cn('inline-block transition-transform', isOpen && 'rotate-90')} aria-hidden>›</span>
+                        </span>
+                      </button>
+                      {isOpen && (
+                        <ul className="divide-y divide-slate-100 border-t border-slate-100 bg-slate-50/40">
+                          {items.map(p => (
+                            <li key={p.file}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  loadExampleScenario(p)
+                                  setPresetsDialogOpen(false)
+                                }}
+                                className="flex w-full flex-col items-start gap-1 px-3 py-3 text-left active:bg-slate-100"
+                              >
+                                <span className="flex w-full items-start justify-between gap-2">
+                                  <span className="text-[13.5px] font-medium leading-tight text-slate-900">
+                                    {p.title}
+                                  </span>
+                                  <span className={cn(
+                                    'shrink-0 rounded px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide',
+                                    difficultyPillClass(p.difficulty),
+                                  )}>{p.difficulty}</span>
+                                </span>
+                                <span className="text-[12px] leading-snug text-slate-600">
+                                  {p.description}
+                                </span>
+                                <span className="text-[11px] text-slate-400">
+                                  {p.serviceCount} services · {Math.round(p.durationTicks / 60)} min
+                                </span>
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
           </div>
         </DialogContent>
       </Dialog>
