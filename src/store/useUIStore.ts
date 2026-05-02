@@ -23,6 +23,7 @@ interface UIState {
   isDraggingFromPalette: boolean
   paletteNodeType: string | null
   describePanelOpen: boolean
+  modifyPanelOpen: boolean
   hoveredServiceId: string | null
   // Actions
   selectNode: (id: string | null) => void
@@ -40,6 +41,7 @@ interface UIState {
   setCanvasCollapsed: (collapsed: boolean) => void
   setDraggingFromPalette: (isDragging: boolean, nodeType?: string) => void
   setDescribePanelOpen: (open: boolean) => void
+  setModifyPanelOpen: (open: boolean) => void
   setHoveredServiceId: (id: string | null) => void
 }
 
@@ -59,6 +61,7 @@ export const useUIStore = create<UIState>()((set) => ({
   isDraggingFromPalette: false,
   paletteNodeType: null,
   describePanelOpen: false,
+  modifyPanelOpen: false,
   hoveredServiceId: null,
 
   selectNode: (id) => set({
@@ -87,5 +90,6 @@ export const useUIStore = create<UIState>()((set) => ({
   setDraggingFromPalette: (isDragging, nodeType) =>
     set({ isDraggingFromPalette: isDragging, paletteNodeType: nodeType || null }),
   setDescribePanelOpen: (open) => set({ describePanelOpen: open }),
+  setModifyPanelOpen: (open) => set({ modifyPanelOpen: open }),
   setHoveredServiceId: (id) => set({ hoveredServiceId: id }),
 }))

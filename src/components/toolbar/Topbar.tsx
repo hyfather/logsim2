@@ -11,6 +11,7 @@ import {
   Play,
   RotateCcw,
   Settings,
+  Sparkles,
   StepForward,
   Terminal,
   Trash2,
@@ -107,6 +108,7 @@ function GithubMark({ className }: { className?: string }) {
 export function Topbar() {
   const { nodes, edges, metadata, setMetadata, resetScenario, loadScenario } = useScenarioStore()
   const setDescribePanelOpen = useUIStore(s => s.setDescribePanelOpen)
+  const setModifyPanelOpen = useUIStore(s => s.setModifyPanelOpen)
   const episode = useEpisodeStore(s => s.episode)
   const setEpisode = useEpisodeStore(s => s.setEpisode)
   const setTick = useEpisodeStore(s => s.setTick)
@@ -234,17 +236,22 @@ export function Topbar() {
     e.target.value = ''
   }, [loadScenario])
 
-  const handleNewScenario = useCallback(() => {
-    if (nodes.length > 0) {
-      if (!confirm('Create a new scenario? Unsaved changes will be lost.')) return
-    }
-    // Allocate a fresh library id so the new scenario is tracked separately
-    // and the previous one stays available under "Recent Scenarios".
+  // Allocate a fresh library id so the previous scenario stays in "Recent",
+  // then clear the canvas. Used by both "From AI prompt" and "Blank canvas".
+  const beginNewScenario = useCallback(() => {
     useScenarioLibraryStore.getState().startNew()
     resetScenario()
     useEpisodeStore.getState().resetEpisode()
+  }, [resetScenario])
+
+  const handleNewFromAI = useCallback(() => {
+    beginNewScenario()
     setDescribePanelOpen(true)
-  }, [nodes.length, resetScenario, setDescribePanelOpen])
+  }, [beginNewScenario, setDescribePanelOpen])
+
+  const handleNewBlank = useCallback(() => {
+    beginNewScenario()
+  }, [beginNewScenario])
 
   const handleLoadFromLibrary = useCallback((entry: SavedScenario) => {
     try {
@@ -589,7 +596,91 @@ export function Topbar() {
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-56 text-xs">
-            <DropdownMenuItem onClick={handleNewScenario} className="cursor-pointer text-xs">📄 New Scenario</DropdownMenuItem>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger
+                onMouseEnter={loadPresetsManifest}
+                onFocus={loadPresetsManifest}
+                className="cursor-pointer text-xs"
+              >
+                ✨ New scenario
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="w-56 text-xs">
+                <DropdownMenuItem onClick={handleNewFromAI} className="cursor-pointer text-xs">
+                  ✨ From AI prompt…
+                </DropdownMenuItem>
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger className="cursor-pointer text-xs">
+                    📚 From template
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent className="w-64 text-xs">
+                    <DropdownMenuLabel className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                      Browse by category
+                    </DropdownMenuLabel>
+                    {!presetsLoaded ? (
+                      <div className="px-2 py-1.5 text-[11px] text-slate-400">Loading…</div>
+                    ) : groupedPresets.length === 0 ? (
+                      <div className="px-2 py-1.5 text-[11px] text-slate-400">No templates found.</div>
+                    ) : (
+                      groupedPresets.map(({ group, items }) => (
+                        <DropdownMenuSub key={group.id}>
+                          <DropdownMenuSubTrigger className="cursor-pointer text-xs">
+                            <span className="flex w-full items-center justify-between gap-2">
+                              <span className="flex items-center gap-1.5 font-medium">
+                                <span className={cn(
+                                  'inline-block h-2 w-2 rounded-full',
+                                  group.id === 'security' ? 'bg-rose-500'
+                                    : group.id === 'incident' ? 'bg-amber-500'
+                                    : group.id === 'deploy' ? 'bg-violet-500'
+                                    : group.id === 'insider' ? 'bg-emerald-500'
+                                    : group.id === 'cloud' ? 'bg-sky-500'
+                                    : 'bg-slate-400',
+                                )} aria-hidden />
+                                {group.label}
+                              </span>
+                              <span className="text-[10px] text-slate-400">{items.length}</span>
+                            </span>
+                          </DropdownMenuSubTrigger>
+                          <DropdownMenuSubContent className="max-w-md text-xs">
+                            {group.description && (
+                              <DropdownMenuLabel className="whitespace-normal text-[10px] leading-tight text-slate-500">
+                                {group.description}
+                              </DropdownMenuLabel>
+                            )}
+                            {items.map(p => (
+                              <DropdownMenuItem
+                                key={p.file}
+                                onClick={() => loadExampleScenario(p)}
+                                className="flex cursor-pointer flex-col items-start gap-0.5 text-xs"
+                              >
+                                <span className="flex items-center gap-1.5 font-medium">
+                                  {p.title}
+                                  <span className={cn(
+                                    'rounded px-1 py-px text-[9px] font-semibold uppercase tracking-wide',
+                                    p.difficulty === 'hard' ? 'bg-rose-100 text-rose-700'
+                                      : p.difficulty === 'medium' ? 'bg-amber-100 text-amber-800'
+                                      : 'bg-emerald-100 text-emerald-700',
+                                  )}>{p.difficulty}</span>
+                                </span>
+                                <span className="whitespace-normal text-[10px] leading-tight text-slate-500">
+                                  {p.description}
+                                </span>
+                                <span className="text-[10px] text-slate-400">
+                                  {p.serviceCount} services · {Math.round(p.durationTicks / 60)} min
+                                </span>
+                              </DropdownMenuItem>
+                            ))}
+                          </DropdownMenuSubContent>
+                        </DropdownMenuSub>
+                      ))
+                    )}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={handleNewBlank} className="cursor-pointer text-xs">
+                  📄 Blank canvas
+                </DropdownMenuItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
             <DropdownMenuItem onClick={handleOpenScenario} className="cursor-pointer text-xs">📂 Open Scenario…</DropdownMenuItem>
             <DropdownMenuItem onClick={handleSaveScenario} className="cursor-pointer text-xs">💾 Save Scenario  ⌘S</DropdownMenuItem>
             <DropdownMenuSeparator />
@@ -651,77 +742,6 @@ export function Topbar() {
                 )}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger
-                onMouseEnter={loadPresetsManifest}
-                onFocus={loadPresetsManifest}
-                className="cursor-pointer text-xs"
-              >
-                📚 Example Scenarios
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="w-64 text-xs">
-                <DropdownMenuLabel className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
-                  Browse by category
-                </DropdownMenuLabel>
-                {!presetsLoaded ? (
-                  <div className="px-2 py-1.5 text-[11px] text-slate-400">Loading…</div>
-                ) : groupedPresets.length === 0 ? (
-                  <div className="px-2 py-1.5 text-[11px] text-slate-400">No example scenarios found.</div>
-                ) : (
-                  groupedPresets.map(({ group, items }) => (
-                    <DropdownMenuSub key={group.id}>
-                      <DropdownMenuSubTrigger className="cursor-pointer text-xs">
-                        <span className="flex w-full items-center justify-between gap-2">
-                          <span className="flex items-center gap-1.5 font-medium">
-                            <span className={cn(
-                              'inline-block h-2 w-2 rounded-full',
-                              group.id === 'security' ? 'bg-rose-500'
-                                : group.id === 'incident' ? 'bg-amber-500'
-                                : group.id === 'deploy' ? 'bg-violet-500'
-                                : group.id === 'insider' ? 'bg-emerald-500'
-                                : group.id === 'cloud' ? 'bg-sky-500'
-                                : 'bg-slate-400',
-                            )} aria-hidden />
-                            {group.label}
-                          </span>
-                          <span className="text-[10px] text-slate-400">{items.length}</span>
-                        </span>
-                      </DropdownMenuSubTrigger>
-                      <DropdownMenuSubContent className="max-w-md text-xs">
-                        {group.description && (
-                          <DropdownMenuLabel className="whitespace-normal text-[10px] leading-tight text-slate-500">
-                            {group.description}
-                          </DropdownMenuLabel>
-                        )}
-                        {items.map(p => (
-                          <DropdownMenuItem
-                            key={p.file}
-                            onClick={() => loadExampleScenario(p)}
-                            className="flex cursor-pointer flex-col items-start gap-0.5 text-xs"
-                          >
-                            <span className="flex items-center gap-1.5 font-medium">
-                              {p.title}
-                              <span className={cn(
-                                'rounded px-1 py-px text-[9px] font-semibold uppercase tracking-wide',
-                                p.difficulty === 'hard' ? 'bg-rose-100 text-rose-700'
-                                  : p.difficulty === 'medium' ? 'bg-amber-100 text-amber-800'
-                                  : 'bg-emerald-100 text-emerald-700',
-                              )}>{p.difficulty}</span>
-                            </span>
-                            <span className="whitespace-normal text-[10px] leading-tight text-slate-500">
-                              {p.description}
-                            </span>
-                            <span className="text-[10px] text-slate-400">
-                              {p.serviceCount} services · {Math.round(p.durationTicks / 60)} min
-                            </span>
-                          </DropdownMenuItem>
-                        ))}
-                      </DropdownMenuSubContent>
-                    </DropdownMenuSub>
-                  ))
-                )}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
           </DropdownMenuContent>
         </DropdownMenu>
 
@@ -754,6 +774,18 @@ export function Topbar() {
             </button>
           )}
         </div>
+
+        {/* Modify with AI — opens a chat panel that revises the current canvas */}
+        <button
+          type="button"
+          onClick={() => setModifyPanelOpen(true)}
+          disabled={nodes.length === 0}
+          title="Modify scenario with AI"
+          className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-violet-200 bg-violet-50 px-2 text-[11.5px] font-medium text-violet-800 transition-colors hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-violet-50"
+        >
+          <Sparkles className="h-3 w-3" />
+          <span className="hidden sm:inline">Modify with AI</span>
+        </button>
       </div>
 
       {/* RIGHT: destinations + format + transport tray + export */}
