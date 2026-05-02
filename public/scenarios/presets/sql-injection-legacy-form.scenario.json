@@ -1,0 +1,59 @@
+{
+  "name": "SQL Injection on Legacy Lookup Form",
+  "description": "A 2014-era ColdFusion partner-portal lookup form (still online behind the same edge) is vulnerable to boolean-based blind SQLi. An attacker sweeps it from a small set of VPS ranges and exfiltrates the partners table over ~12 minutes of slow trickle queries.",
+  "reasoning": "The portal is on its own subdomain but shares the MySQL backend with the modern API. The legacy app makes direct DBA-level queries (sa account from 2014). The simulation shows the legacy app under attack while the modern API and the DB stay 'up' but with anomalous query patterns from one source.",
+  "category": "security",
+  "difficulty": "medium",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "merged-corp-vpc", "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "edge-public",     "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "modern-app",      "parent": "vpc" },
+    { "id": "legnet",  "type": "subnet",  "label": "legacy-cf",       "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "shared-data",     "parent": "vpc" },
+    { "id": "lb",     "type": "service", "serviceType": "nginx",   "label": "edge-router",       "parent": "pubnet" },
+    { "id": "api",    "type": "service", "serviceType": "golang",  "label": "partner-api",       "parent": "appnet" },
+    { "id": "portal", "type": "service", "serviceType": "custom",  "label": "partner-portal-cf", "parent": "legnet",  "notes": "ColdFusion 11. SQL queries built with string concat. The 'sa' account." },
+    { "id": "db",     "type": "service", "serviceType": "mysql",   "label": "partners-mysql",    "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "lb",     "target": "api",    "protocol": "https", "port": 443,  "trafficRate": 80, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb",     "target": "portal", "protocol": "https", "port": 443,  "trafficRate": 8,  "trafficPattern": "steady",  "errorRate": 0.02  },
+    { "source": "api",    "target": "db",     "protocol": "tcp",   "port": 3306, "trafficRate": 35, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "portal", "target": "db",     "protocol": "tcp",   "port": 3306, "trafficRate": 6,  "trafficPattern": "steady",  "errorRate": 0.005 }
+  ],
+  "timeline": {
+    "duration": 1320,
+    "narrative": [
+      { "tick": 0,    "text": "Quiet baseline. Partner portal seeing ~6 req/min legitimate traffic." },
+      { "tick": 180,  "text": "WAF logs show ' OR 1=1-- and SLEEP(5) signatures from 185.234.218.0/24." },
+      { "tick": 300,  "text": "portal/lookup.cfm error rate climbs to 30%; payload variations indicate sqlmap." },
+      { "tick": 420,  "text": "Boolean-blind exfil starts: thousands of slow paginated queries return tiny response bodies." },
+      { "tick": 660,  "text": "MySQL slow query log fills with single-row LIKE 'a%' patterns from one connection pool." },
+      { "tick": 840,  "text": "DBA notices the anomaly; query kill + IP block-list pushed at the WAF." },
+      { "tick": 1020, "text": "Forensics: ~14K partner records read. partner-api itself uses parameterised queries — unaffected." },
+      { "tick": 1200, "text": "Legacy portal taken offline pending refactor; emergency notification to partners drafted." }
+    ],
+    "lanes": {
+      "portal": [
+        { "start": 0,    "duration": 180, "state": "healthy" },
+        { "start": 180,  "duration": 240, "state": "under_attack", "note": "SQLi probes" },
+        { "start": 420,  "duration": 420, "state": "compromised",  "note": "blind exfil in progress" },
+        { "start": 840,  "duration": 360, "state": "throttled",    "note": "blocked at WAF" },
+        { "start": 1200, "duration": 120, "state": "down",         "note": "taken offline" }
+      ],
+      "db": [
+        { "start": 0,    "duration": 420, "state": "healthy" },
+        { "start": 420,  "duration": 420, "state": "under_attack", "note": "anomalous slow LIKE queries from portal" },
+        { "start": 840,  "duration": 480, "state": "healthy" }
+      ],
+      "api": [
+        { "start": 0,    "duration": 1320, "state": "healthy", "note": "parameterised queries — unaffected" }
+      ],
+      "lb": [
+        { "start": 0,    "duration": 180, "state": "healthy" },
+        { "start": 180,  "duration": 660, "state": "under_attack" },
+        { "start": 840,  "duration": 480, "state": "healthy" }
+      ]
+    }
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "name": "Disk Full From Runaway Debug Logs",
+  "description": "A junior dev pushed a config that switched the order service to log_level=DEBUG. Twelve hours later /var/log on mysql-srv-04 is 100% full, the binlog can't be written, the database goes read-only, and the app fleet starts rejecting writes.",
+  "reasoning": "Two stateless app instances write to a single MySQL host that also acts as the central rsyslog target. The log volume from DEBUG mode hits MySQL's data partition because of a legacy mount layout and starves the binlog writer.",
+  "category": "incident",
+  "difficulty": "medium",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "old-prod-vpc",     "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "DMZ-public",       "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "internal-app-net", "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "internal-data-net","parent": "vpc" },
+    { "id": "lb",   "type": "service", "serviceType": "nginx",  "label": "haproxy-edge-01",  "parent": "pubnet",  "notes": "Yes it's labelled nginx, it's actually HAProxy. Nobody renamed it in 2019." },
+    { "id": "app1", "type": "service", "serviceType": "nodejs", "label": "orders-app-srv-07", "parent": "appnet" },
+    { "id": "app2", "type": "service", "serviceType": "nodejs", "label": "orders-app-srv-08", "parent": "appnet" },
+    { "id": "db",   "type": "service", "serviceType": "mysql",  "label": "mysql-srv-04",     "parent": "datanet", "notes": "MySQL 5.7 on RHEL 7. /var/log shares the same volume as binlogs." }
+  ],
+  "edges": [
+    { "source": "lb",   "target": "app1", "protocol": "http", "port": 3000, "trafficRate": 70, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb",   "target": "app2", "protocol": "http", "port": 3000, "trafficRate": 70, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "app1", "target": "db",   "protocol": "tcp",  "port": 3306, "trafficRate": 35, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "app2", "target": "db",   "protocol": "tcp",  "port": 3306, "trafficRate": 35, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1500,
+    "narrative": [
+      { "tick": 0,    "text": "Day-shift baseline. mysql-srv-04 / partition is sitting at 71%." },
+      { "tick": 240,  "text": "Disk usage crosses 90% — a Nagios warning fires but nobody acks." },
+      { "tick": 480,  "text": "Disk hits 100%. MySQL flips to read-only ('Can't create/write to file: No space left on device')." },
+      { "tick": 540,  "text": "Order writes start failing. App-srv-07 returns 500s on POST /orders." },
+      { "tick": 720,  "text": "Engineer rotates and gzips old debug logs; gains 14% headroom." },
+      { "tick": 900,  "text": "DEBUG logging reverted to INFO via Salt. MySQL exits read-only." },
+      { "tick": 1140, "text": "Backlog of failed orders re-queued; latency still elevated as queue drains." },
+      { "tick": 1380, "text": "All green. PM tracks a follow-up to split log volume from data volume." }
+    ],
+    "lanes": {
+      "db": [
+        { "start": 0,    "duration": 480,  "state": "healthy" },
+        { "start": 480,  "duration": 420,  "state": "down",       "note": "read-only, disk full" },
+        { "start": 900,  "duration": 360,  "state": "recovering" },
+        { "start": 1260, "duration": 240,  "state": "healthy" }
+      ],
+      "app1": [
+        { "start": 0,    "duration": 540,  "state": "healthy" },
+        { "start": 540,  "duration": 360,  "state": "degraded",   "note": "writes 500ing" },
+        { "start": 900,  "duration": 360,  "state": "recovering" },
+        { "start": 1260, "duration": 240,  "state": "healthy" }
+      ],
+      "app2": [
+        { "start": 0,    "duration": 540,  "state": "healthy" },
+        { "start": 540,  "duration": 360,  "state": "degraded" },
+        { "start": 900,  "duration": 360,  "state": "recovering" },
+        { "start": 1260, "duration": 240,  "state": "healthy" }
+      ]
+    }
+  }
+}

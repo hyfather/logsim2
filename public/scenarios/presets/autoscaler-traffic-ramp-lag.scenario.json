@@ -1,0 +1,75 @@
+{
+  "name": "Autoscaler Lags a Black Friday Ramp",
+  "description": "Black Friday 00:00 UTC. Promo emails fire and traffic ramps from 200 rps to 4500 rps in under five minutes. The HPA's 60-second scale window plus the 90-second pod warm-up means the existing replicas eat the spike — p95 latency hits the SLA cliff.",
+  "reasoning": "An nginx ingress, four Go API replicas, and a Postgres + Redis. As traffic ramps, the four existing replicas saturate; the autoscaler eventually adds capacity but with a visible delay.",
+  "category": "deploy",
+  "difficulty": "medium",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "ecom-prod-vpc", "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "ecom-edge",     "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "ecom-app",      "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "ecom-data",     "parent": "vpc" },
+    { "id": "lb",   "type": "service", "serviceType": "nginx",    "label": "ecom-edge-lb", "parent": "pubnet" },
+    { "id": "a1",   "type": "service", "serviceType": "golang",   "label": "checkout-1",   "parent": "appnet" },
+    { "id": "a2",   "type": "service", "serviceType": "golang",   "label": "checkout-2",   "parent": "appnet" },
+    { "id": "a3",   "type": "service", "serviceType": "golang",   "label": "checkout-3",   "parent": "appnet" },
+    { "id": "a4",   "type": "service", "serviceType": "golang",   "label": "checkout-4",   "parent": "appnet" },
+    { "id": "db",   "type": "service", "serviceType": "postgres", "label": "checkout-db",  "parent": "datanet" },
+    { "id": "rd",   "type": "service", "serviceType": "redis",    "label": "checkout-cache","parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "lb", "target": "a1", "protocol": "http", "port": 8080, "trafficRate": 60, "trafficPattern": "bursty", "errorRate": 0.005 },
+    { "source": "lb", "target": "a2", "protocol": "http", "port": 8080, "trafficRate": 60, "trafficPattern": "bursty", "errorRate": 0.005 },
+    { "source": "lb", "target": "a3", "protocol": "http", "port": 8080, "trafficRate": 60, "trafficPattern": "bursty", "errorRate": 0.005 },
+    { "source": "lb", "target": "a4", "protocol": "http", "port": 8080, "trafficRate": 60, "trafficPattern": "bursty", "errorRate": 0.005 },
+    { "source": "a1", "target": "db", "protocol": "tcp",  "port": 5432, "trafficRate": 30, "trafficPattern": "bursty", "errorRate": 0.001 },
+    { "source": "a2", "target": "db", "protocol": "tcp",  "port": 5432, "trafficRate": 30, "trafficPattern": "bursty", "errorRate": 0.001 },
+    { "source": "a3", "target": "db", "protocol": "tcp",  "port": 5432, "trafficRate": 30, "trafficPattern": "bursty", "errorRate": 0.001 },
+    { "source": "a4", "target": "db", "protocol": "tcp",  "port": 5432, "trafficRate": 30, "trafficPattern": "bursty", "errorRate": 0.001 },
+    { "source": "a1", "target": "rd", "protocol": "tcp",  "port": 6379, "trafficRate": 180,"trafficPattern": "bursty", "errorRate": 0.0005 },
+    { "source": "a2", "target": "rd", "protocol": "tcp",  "port": 6379, "trafficRate": 180,"trafficPattern": "bursty", "errorRate": 0.0005 },
+    { "source": "a3", "target": "rd", "protocol": "tcp",  "port": 6379, "trafficRate": 180,"trafficPattern": "bursty", "errorRate": 0.0005 },
+    { "source": "a4", "target": "rd", "protocol": "tcp",  "port": 6379, "trafficRate": 180,"trafficPattern": "bursty", "errorRate": 0.0005 }
+  ],
+  "timeline": {
+    "duration": 1500,
+    "narrative": [
+      { "tick": 0,    "text": "Pre-Black-Friday warmup: 4 checkout replicas, traffic ~250 rps total." },
+      { "tick": 180,  "text": "00:00 UTC — promo emails go out. Traffic climbs through 1.5K rps in 90s." },
+      { "tick": 240,  "text": "All four replicas saturate; p95 latency 2.4s; cart errors visible to customers." },
+      { "tick": 300,  "text": "HPA adds 4 more replicas; pod warm-up adds another 90s before they take traffic." },
+      { "tick": 480,  "text": "8 replicas serving; p95 back to 250ms; queue draining." },
+      { "tick": 720,  "text": "Traffic plateaus at ~3.8K rps; HPA stable at 14 replicas." },
+      { "tick": 1140, "text": "Wave subsides; autoscaler scales back down with the cooldown." },
+      { "tick": 1440, "text": "Steady state. Action: pre-warm to 2x baseline before known sale events." }
+    ],
+    "lanes": {
+      "a1": [
+        { "start": 0,    "duration": 180, "state": "healthy" },
+        { "start": 180,  "duration": 300, "state": "degraded",  "note": "saturated CPU" },
+        { "start": 480,  "duration": 720, "state": "healthy" },
+        { "start": 1200, "duration": 300, "state": "healthy" }
+      ],
+      "a2": [
+        { "start": 0,    "duration": 180, "state": "healthy" },
+        { "start": 180,  "duration": 300, "state": "degraded" },
+        { "start": 480,  "duration": 1020,"state": "healthy" }
+      ],
+      "a3": [
+        { "start": 0,    "duration": 180, "state": "healthy" },
+        { "start": 180,  "duration": 300, "state": "degraded" },
+        { "start": 480,  "duration": 1020,"state": "healthy" }
+      ],
+      "a4": [
+        { "start": 0,    "duration": 180, "state": "healthy" },
+        { "start": 180,  "duration": 300, "state": "degraded" },
+        { "start": 480,  "duration": 1020,"state": "healthy" }
+      ],
+      "lb": [
+        { "start": 0,    "duration": 180, "state": "healthy" },
+        { "start": 180,  "duration": 300, "state": "throttled", "note": "queueing requests for slow upstream" },
+        { "start": 480,  "duration": 1020,"state": "healthy" }
+      ]
+    }
+  }
+}

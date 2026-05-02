@@ -1,0 +1,51 @@
+{
+  "name": "Identity Provider Support-Session Theft",
+  "description": "Lapsus$-style scenario: an attacker compromises a session at the IdP's third-party support contractor and uses the support console to view (and partially impersonate) corporate users. Suspicious password resets and admin actions hit the corp tenancy from the IdP's own infrastructure.",
+  "reasoning": "Identity provider tenancy is the affected service. Anomalous admin actions originate from the IdP's own back-end IPs, not the corp admin laptops — that's the tell.",
+  "category": "cloud",
+  "difficulty": "hard",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "corp-identity",   "parent": null },
+    { "id": "edgenet", "type": "subnet",  "label": "identity-edge",   "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "saas-bridge",     "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "audit-store",     "parent": "vpc" },
+    { "id": "edge",  "type": "service", "serviceType": "nginx",   "label": "okta-edge",        "parent": "edgenet" },
+    { "id": "okta",  "type": "service", "serviceType": "custom",  "label": "okta-tenancy",     "parent": "appnet" },
+    { "id": "supp",  "type": "service", "serviceType": "custom",  "label": "okta-support-tier-egress", "parent": "appnet",  "notes": "Okta's own support contractor source IPs." },
+    { "id": "ueba",  "type": "service", "serviceType": "custom",  "label": "id-ueba",          "parent": "appnet" },
+    { "id": "siem",  "type": "service", "serviceType": "custom",  "label": "siem-collector",   "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "edge", "target": "okta", "protocol": "https", "port": 443, "trafficRate": 70, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "supp", "target": "okta", "protocol": "https", "port": 443, "trafficRate": 6,  "trafficPattern": "steady",  "errorRate": 0.005 },
+    { "source": "okta", "target": "ueba", "protocol": "https", "port": 443, "trafficRate": 12, "trafficPattern": "steady",  "errorRate": 0.005 },
+    { "source": "ueba", "target": "siem", "protocol": "tcp",   "port": 9200,"trafficRate": 22, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1620,
+    "narrative": [
+      { "tick": 0,    "text": "Quiet baseline. Support sessions average ~2 admin reads per day." },
+      { "tick": 240,  "text": "Anomalous burst: 11 'View user as' actions from support egress IPs in 6 minutes." },
+      { "tick": 420,  "text": "Three of those users have password reset triggered + new MFA factor enrolled." },
+      { "tick": 600,  "text": "UEBA flags: 'admin actions from support tier on production tenancy spiked 8x baseline'." },
+      { "tick": 780,  "text": "Corp security pages IdP vendor; gets confirmation of a contractor-account compromise." },
+      { "tick": 1020, "text": "All sessions opened in the last 72h forcefully revoked across the entire corp tenancy." },
+      { "tick": 1260, "text": "Support-tier access from vendor temporarily disabled until vendor's investigation closes." },
+      { "tick": 1500, "text": "Re-enabled with stricter just-in-time access + corp-side approval for any 'view as'." }
+    ],
+    "lanes": {
+      "okta": [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 540, "state": "under_attack", "note": "support tier acting on user accounts" },
+        { "start": 780,  "duration": 240, "state": "compromised",  "note": "factors enrolled by attacker" },
+        { "start": 1020, "duration": 240, "state": "recovering" },
+        { "start": 1260, "duration": 360, "state": "healthy" }
+      ],
+      "supp": [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 1020,"state": "compromised", "note": "vendor session hijacked" },
+        { "start": 1260, "duration": 360, "state": "down",         "note": "vendor access disabled" }
+      ]
+    }
+  }
+}

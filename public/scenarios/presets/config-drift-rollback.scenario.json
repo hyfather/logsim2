@@ -1,0 +1,46 @@
+{
+  "name": "Config Drift Blows Up Terraform Apply",
+  "description": "Someone hand-edited the prod security group last quarter to debug a partner integration. The change was never reflected in Terraform. Today's apply tries to enforce the IaC-declared rule set, removes the extra rule, and breaks the partner integration mid-day.",
+  "reasoning": "Three modelled services (the API and partner-bridge plus a Postgres) sit behind security groups whose state is the focus. The simulation shows the partner-bridge going degraded the instant the SG drift is reconciled.",
+  "category": "deploy",
+  "difficulty": "medium",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "platform-prod-vpc", "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "platform-edge",     "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "platform-app",      "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "platform-data",     "parent": "vpc" },
+    { "id": "lb",      "type": "service", "serviceType": "nginx",    "label": "platform-edge-lb",    "parent": "pubnet" },
+    { "id": "api",     "type": "service", "serviceType": "golang",   "label": "platform-api",        "parent": "appnet" },
+    { "id": "partner", "type": "service", "serviceType": "golang",   "label": "partner-bridge-svc",  "parent": "appnet",  "notes": "Talks to partner.example.com over an undocumented SG hole." },
+    { "id": "db",      "type": "service", "serviceType": "postgres", "label": "platform-db",         "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "lb",      "target": "api",     "protocol": "http", "port": 8080, "trafficRate": 80, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb",      "target": "partner", "protocol": "http", "port": 8080, "trafficRate": 30, "trafficPattern": "steady",  "errorRate": 0.005 },
+    { "source": "api",     "target": "db",      "protocol": "tcp",  "port": 5432, "trafficRate": 40, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "partner", "target": "db",      "protocol": "tcp",  "port": 5432, "trafficRate": 15, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1200,
+    "narrative": [
+      { "tick": 0,    "text": "Steady traffic; partner-bridge succeeding through the manual SG rule." },
+      { "tick": 240,  "text": "Scheduled terraform apply runs; refreshes SG to declared state." },
+      { "tick": 300,  "text": "Manual rule allowing 198.51.100.0/24 → 8443 removed; partner integration starts failing." },
+      { "tick": 420,  "text": "Partner pages support; on-call diffs SG history and finds the apply." },
+      { "tick": 600,  "text": "Engineer adds the rule back to Terraform with a clear comment + ticket reference and applies." },
+      { "tick": 720,  "text": "Partner integration restored; backlog of failed jobs being retried." },
+      { "tick": 1020, "text": "Steady state. Action: enable Driftctl + nightly drift reports for prod accounts." }
+    ],
+    "lanes": {
+      "partner": [
+        { "start": 0,    "duration": 300, "state": "healthy" },
+        { "start": 300,  "duration": 420, "state": "down",       "note": "SG removed by IaC" },
+        { "start": 720,  "duration": 240, "state": "recovering" },
+        { "start": 960,  "duration": 240, "state": "healthy" }
+      ],
+      "api": [
+        { "start": 0,    "duration": 1200, "state": "healthy" }
+      ]
+    }
+  }
+}

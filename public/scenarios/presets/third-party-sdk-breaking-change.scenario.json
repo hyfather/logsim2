@@ -1,0 +1,49 @@
+{
+  "name": "Third-Party SDK Auto-Bump Breaks API",
+  "description": "Renovate opens a 'minor' bump for the auth SDK from 4.18 to 4.19. The release silently changes a default header from 'Authorization: Bearer ...' to 'X-Auth-Token: ...'. CI passes (mocks). In prod, every downstream call to the identity provider returns 401.",
+  "reasoning": "Edge nginx → Node.js API → external IdP (modelled as a service). The simulation shows the identity provider returning 401 for the API right after deploy, which cascades into 5xx for users.",
+  "category": "deploy",
+  "difficulty": "medium",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "saas-prod-vpc", "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "saas-edge",     "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "saas-app",      "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "saas-data",     "parent": "vpc" },
+    { "id": "lb",   "type": "service", "serviceType": "nginx",    "label": "saas-edge-lb", "parent": "pubnet" },
+    { "id": "api",  "type": "service", "serviceType": "nodejs",   "label": "saas-api",     "parent": "appnet" },
+    { "id": "idp",  "type": "service", "serviceType": "custom",   "label": "external-idp", "parent": "appnet",  "notes": "Auth0-style identity provider, called from saas-api on every request." },
+    { "id": "db",   "type": "service", "serviceType": "postgres", "label": "saas-db",      "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "lb",  "target": "api",  "protocol": "https", "port": 443, "trafficRate": 90, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "api", "target": "idp",  "protocol": "https", "port": 443, "trafficRate": 70, "trafficPattern": "steady",  "errorRate": 0.005 },
+    { "source": "api", "target": "db",   "protocol": "tcp",   "port": 5432,"trafficRate": 40, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1080,
+    "narrative": [
+      { "tick": 0,    "text": "Healthy baseline. Renovate-merged PR queues for deploy." },
+      { "tick": 180,  "text": "Deploy goes live. Calls to external-idp now return 401 'Authorization header missing'." },
+      { "tick": 300,  "text": "saas-api 5xx rate jumps from 0.5% to 92%; LB passes errors back to clients." },
+      { "tick": 480,  "text": "On-call diffs the change set; SDK bump is the obvious suspect. Pin to 4.18.x." },
+      { "tick": 660,  "text": "Hot-fix deploy to revert SDK; auth flow restored." },
+      { "tick": 840,  "text": "All green. Action: contract test against the IdP in CI before any auth-SDK upgrade." }
+    ],
+    "lanes": {
+      "api": [
+        { "start": 0,    "duration": 180, "state": "healthy" },
+        { "start": 180,  "duration": 480, "state": "down",       "note": "auth header rename, all 401s" },
+        { "start": 660,  "duration": 240, "state": "recovering" },
+        { "start": 900,  "duration": 180, "state": "healthy" }
+      ],
+      "idp": [
+        { "start": 0,    "duration": 1080, "state": "healthy", "note": "the IdP is fine — we're calling it wrong" }
+      ],
+      "lb": [
+        { "start": 0,    "duration": 180, "state": "healthy" },
+        { "start": 180,  "duration": 480, "state": "degraded",   "note": "high upstream 5xx" },
+        { "start": 660,  "duration": 420, "state": "healthy" }
+      ]
+    }
+  }
+}

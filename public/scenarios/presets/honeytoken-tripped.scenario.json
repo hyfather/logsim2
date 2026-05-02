@@ -1,0 +1,58 @@
+{
+  "name": "Honeytoken Tripped on Finance Share",
+  "description": "A canary file 'M&A-targets-Q3-DRAFT.docx' was planted on \\\\corp-fs01\\Finance$\\restricted three months ago. At 02:47 it's opened from a vendor-laptop network segment. The token beacons home and the SOC has its first solid lead on a quiet, long-dwell intrusion.",
+  "reasoning": "On-prem AD + a Windows file server. The canary is a single file that, when opened, makes an outbound HTTPS request to the canary-token vendor. The simulation shows quiet baseline → trip → containment.",
+  "category": "insider",
+  "difficulty": "hard",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "corp-onprem",       "parent": null },
+    { "id": "edgenet", "type": "subnet",  "label": "auth-edge",         "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "fileservers-net",   "parent": "vpc" },
+    { "id": "vnet",    "type": "subnet",  "label": "vendor-laptop-vlan","parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "siem-net",          "parent": "vpc" },
+    { "id": "ad",   "type": "service", "serviceType": "custom",  "label": "ad-dc-02",          "parent": "edgenet" },
+    { "id": "fs",   "type": "service", "serviceType": "custom",  "label": "corp-fs01",         "parent": "appnet",  "notes": "SMB share, including \\Finance$\\restricted." },
+    { "id": "lap",  "type": "service", "serviceType": "custom",  "label": "vendor-vpn-conc",   "parent": "vnet",    "notes": "Vendor laptop VLAN; remote access via VPN." },
+    { "id": "egress","type": "service","serviceType": "nginx", "label": "internet-egress",   "parent": "appnet",  "notes": "Outbound proxy. Sees the canary HTTPS beacon." },
+    { "id": "siem", "type": "service", "serviceType": "custom",  "label": "splunk-collector",  "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "ad",     "target": "fs",     "protocol": "tcp",   "port": 445,  "trafficRate": 25, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "lap",    "target": "fs",     "protocol": "tcp",   "port": 445,  "trafficRate": 5,  "trafficPattern": "bursty",  "errorRate": 0.005 },
+    { "source": "fs",     "target": "egress", "protocol": "https", "port": 443,  "trafficRate": 4,  "trafficPattern": "steady",  "errorRate": 0.002 },
+    { "source": "egress", "target": "siem",   "protocol": "tcp",   "port": 9997, "trafficRate": 10, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "fs",     "target": "siem",   "protocol": "tcp",   "port": 9997, "trafficRate": 14, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1500,
+    "narrative": [
+      { "tick": 0,    "text": "Quiet overnight. \\Finance$ activity is essentially zero." },
+      { "tick": 240,  "text": "02:47 — vendor-laptop session lists \\\\corp-fs01\\Finance$\\restricted, opens M&A-targets-Q3-DRAFT.docx." },
+      { "tick": 300,  "text": "Canary token beacons out via the egress proxy with 'callback to canarytokens.org'." },
+      { "tick": 360,  "text": "SOC paged immediately — single canary trip is 'high confidence' by policy." },
+      { "tick": 540,  "text": "Vendor laptop endpoint isolated. Network team kills the VPN session." },
+      { "tick": 780,  "text": "Forensics: laptop has a Cobalt-Strike beacon, ~31 days dwell. Other shares not touched yet." },
+      { "tick": 1020, "text": "Containment expands; EDR sweeps for the same beacon hash across the fleet." },
+      { "tick": 1260, "text": "No further hits. Vendor's machine wiped; tier-0 password rotation scheduled." }
+    ],
+    "lanes": {
+      "fs": [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 120, "state": "under_attack", "note": "canary file opened" },
+        { "start": 360,  "duration": 420, "state": "compromised",  "note": "active intrusion confirmed" },
+        { "start": 780,  "duration": 480, "state": "recovering" },
+        { "start": 1260, "duration": 240, "state": "healthy" }
+      ],
+      "lap": [
+        { "start": 0,    "duration": 240, "state": "healthy",     "note": "dormant beacon" },
+        { "start": 240,  "duration": 300, "state": "compromised", "note": "pre-existing implant active" },
+        { "start": 540,  "duration": 60,  "state": "down",        "note": "isolated by EDR" }
+      ],
+      "egress": [
+        { "start": 0,    "duration": 300, "state": "healthy" },
+        { "start": 300,  "duration": 240, "state": "under_attack", "note": "anomalous canary callback" },
+        { "start": 540,  "duration": 960, "state": "healthy" }
+      ]
+    }
+  }
+}

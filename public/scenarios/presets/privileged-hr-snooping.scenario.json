@@ -1,0 +1,47 @@
+{
+  "name": "HR Analyst Snooping on Exec Files",
+  "description": "Workday integration role gives one HR analyst broad read access to compensation files. Late on a Sunday they open 27 C-suite documents in 14 minutes, pull comp histories, then save them to a personal OneDrive folder.",
+  "reasoning": "The HRIS (Workday-style) and a file repository are the affected services. The simulation focuses on the access pattern: short window, off-hours, sensitive scope — even though every individual access is technically authorised.",
+  "category": "insider",
+  "difficulty": "easy",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "people-systems",  "parent": null },
+    { "id": "edgenet", "type": "subnet",  "label": "people-edge",     "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "people-app",      "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "people-data",     "parent": "vpc" },
+    { "id": "edge",    "type": "service", "serviceType": "nginx",   "label": "workday-sso-edge", "parent": "edgenet" },
+    { "id": "hris",    "type": "service", "serviceType": "custom",  "label": "workday-hris",     "parent": "appnet" },
+    { "id": "files",   "type": "service", "serviceType": "custom",  "label": "onedrive-corp",    "parent": "appnet" },
+    { "id": "siem",    "type": "service", "serviceType": "custom",  "label": "siem-collector",   "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "edge",  "target": "hris",  "protocol": "https", "port": 443, "trafficRate": 25, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "edge",  "target": "files", "protocol": "https", "port": 443, "trafficRate": 35, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "hris",  "target": "siem",  "protocol": "tcp",   "port": 9200,"trafficRate": 10, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "files", "target": "siem",  "protocol": "tcp",   "port": 9200,"trafficRate": 10, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1080,
+    "narrative": [
+      { "tick": 0,    "text": "Sunday 19:00 UTC. Almost no HR traffic; a couple of cron sync jobs only." },
+      { "tick": 240,  "text": "User k.chen@corp signs in from a residential IP; UEBA tags it 'unusual time, unusual location'." },
+      { "tick": 360,  "text": "Workday 'View Worker → Compensation' executed 27 times in 14 minutes against C-suite worker IDs." },
+      { "tick": 540,  "text": "Files downloaded: 9 PDFs from /Comp-Reviews-2025/; saved to a personal OneDrive folder." },
+      { "tick": 720,  "text": "Insider-risk dashboard escalates the session score to 'high'." },
+      { "tick": 840,  "text": "Manager + legal called; session revoked, device pulled, formal investigation opened." },
+      { "tick": 1020, "text": "All access revoked, audit trail preserved." }
+    ],
+    "lanes": {
+      "hris": [
+        { "start": 0,    "duration": 360, "state": "healthy" },
+        { "start": 360,  "duration": 360, "state": "under_attack", "note": "anomalous executive-record reads" },
+        { "start": 720,  "duration": 360, "state": "recovering" }
+      ],
+      "files": [
+        { "start": 0,    "duration": 540, "state": "healthy" },
+        { "start": 540,  "duration": 180, "state": "compromised", "note": "off-policy document copy" },
+        { "start": 720,  "duration": 360, "state": "recovering" }
+      ]
+    }
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "name": "NLB Cross-Zone Imbalance",
+  "description": "Cross-zone load balancing was disabled on the NLB during a cost-savings sweep last quarter. A client with sticky DNS resolution lands almost entirely on us-east-1c targets — that AZ saturates while the other two AZs sit at 20% CPU. P95 latency in 1c climbs and 5xx rates rise.",
+  "reasoning": "Three Go API targets, one in each AZ, all behind a single NLB. The simulation models the imbalance as healthy 1a/1b services and a saturated 1c service, with downstream Postgres taking uneven query load.",
+  "category": "incident",
+  "difficulty": "medium",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",    "label": "platform-prod-vpc", "parent": null },
+    { "id": "pubnet",  "type": "subnet", "label": "edge-public",       "parent": "vpc" },
+    { "id": "appa",    "type": "subnet", "label": "app-private-1a",    "parent": "vpc" },
+    { "id": "appb",    "type": "subnet", "label": "app-private-1b",    "parent": "vpc" },
+    { "id": "appc",    "type": "subnet", "label": "app-private-1c",    "parent": "vpc" },
+    { "id": "datanet", "type": "subnet", "label": "data-private",      "parent": "vpc" },
+    { "id": "lb",  "type": "service", "serviceType": "nginx",    "label": "platform-nlb",     "parent": "pubnet" },
+    { "id": "a1",  "type": "service", "serviceType": "golang",   "label": "platform-api-1a",  "parent": "appa" },
+    { "id": "a2",  "type": "service", "serviceType": "golang",   "label": "platform-api-1b",  "parent": "appb" },
+    { "id": "a3",  "type": "service", "serviceType": "golang",   "label": "platform-api-1c",  "parent": "appc",   "notes": "This AZ takes ~75% of traffic." },
+    { "id": "db",  "type": "service", "serviceType": "postgres", "label": "platform-db",      "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "lb", "target": "a1", "protocol": "http", "port": 8080, "trafficRate": 35,  "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb", "target": "a2", "protocol": "http", "port": 8080, "trafficRate": 35,  "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb", "target": "a3", "protocol": "http", "port": 8080, "trafficRate": 180, "trafficPattern": "diurnal", "errorRate": 0.02 },
+    { "source": "a1", "target": "db", "protocol": "tcp",  "port": 5432, "trafficRate": 18,  "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "a2", "target": "db", "protocol": "tcp",  "port": 5432, "trafficRate": 18,  "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "a3", "target": "db", "protocol": "tcp",  "port": 5432, "trafficRate": 90,  "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1200,
+    "narrative": [
+      { "tick": 0,    "text": "Morning ramp; no obvious issue, but 1c CPU sits noticeably higher than peers." },
+      { "tick": 240,  "text": "1c CPU pegs at 95%; p95 latency on platform-api-1c jumps from 80ms to 1.4s." },
+      { "tick": 360,  "text": "Pages fire. Customer reports correlate to a single AZ — Datadog shows the skew." },
+      { "tick": 540,  "text": "On-call discovers cross-zone is OFF; flips it on. NLB rebalances within 30s." },
+      { "tick": 720,  "text": "Latency normalises across 1a/1b/1c; 1c CPU drops to 55%." },
+      { "tick": 1020, "text": "Steady state. Action item: enable cross-zone in Terraform and add an AZ-balance alert." }
+    ],
+    "lanes": {
+      "a3": [
+        { "start": 0,    "duration": 240, "state": "degraded",   "note": "absorbing 75% of traffic" },
+        { "start": 240,  "duration": 300, "state": "under_attack", "note": "saturated CPU" },
+        { "start": 540,  "duration": 180, "state": "recovering" },
+        { "start": 720,  "duration": 480, "state": "healthy" }
+      ],
+      "a1": [
+        { "start": 0,    "duration": 1200, "state": "healthy" }
+      ],
+      "a2": [
+        { "start": 0,    "duration": 1200, "state": "healthy" }
+      ],
+      "lb": [
+        { "start": 0,    "duration": 360, "state": "degraded",   "note": "imbalanced upstream" },
+        { "start": 360,  "duration": 180, "state": "degraded" },
+        { "start": 540,  "duration": 180, "state": "recovering" },
+        { "start": 720,  "duration": 480, "state": "healthy" }
+      ]
+    }
+  }
+}

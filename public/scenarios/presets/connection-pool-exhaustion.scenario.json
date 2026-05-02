@@ -1,0 +1,55 @@
+{
+  "name": "Connection Pool Exhaustion",
+  "description": "A slow third-party tax API holds open HikariCP connections inside billing-svc. The pool fills, requests start blocking on getConnection() for the full 30 second timeout, and the upstream LB starts marking the service unhealthy.",
+  "reasoning": "Edge nginx → two billing service replicas → Postgres. The slow external dependency isn't shown explicitly; its effect is modelled as elevated latency in billing-svc that propagates back to the LB's health checks.",
+  "category": "incident",
+  "difficulty": "medium",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "fintech-prod-vpc", "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "fintech-edge",     "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "fintech-app",      "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "fintech-data",     "parent": "vpc" },
+    { "id": "lb",   "type": "service", "serviceType": "nginx",    "label": "billing-edge",   "parent": "pubnet" },
+    { "id": "b1",   "type": "service", "serviceType": "golang",   "label": "billing-svc-1",  "parent": "appnet",  "notes": "HikariCP pool size 30, timeout 30s." },
+    { "id": "b2",   "type": "service", "serviceType": "golang",   "label": "billing-svc-2",  "parent": "appnet",  "notes": "Identical config." },
+    { "id": "db",   "type": "service", "serviceType": "postgres", "label": "billing-db",     "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "lb",  "target": "b1", "protocol": "http", "port": 8080, "trafficRate": 60, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb",  "target": "b2", "protocol": "http", "port": 8080, "trafficRate": 60, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "b1",  "target": "db", "protocol": "tcp",  "port": 5432, "trafficRate": 35, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "b2",  "target": "db", "protocol": "tcp",  "port": 5432, "trafficRate": 35, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1080,
+    "narrative": [
+      { "tick": 0,    "text": "Steady billing traffic, p95 ~120ms." },
+      { "tick": 240,  "text": "External tax-API SLA breach; upstream calls climb from 80ms to 8s." },
+      { "tick": 360,  "text": "HikariCP active connections plateau at 30/30 on billing-svc-1." },
+      { "tick": 480,  "text": "p95 latency on billing-svc-1 hits the LB health-check threshold; LB ejects it." },
+      { "tick": 540,  "text": "billing-svc-2 absorbs all traffic; it saturates its pool too within ~3 minutes." },
+      { "tick": 720,  "text": "Operators add a circuit breaker (resilience4j) and set a 2s tax-API timeout. Restart rolls." },
+      { "tick": 900,  "text": "Pools recover; p95 back under 300ms. Tax calls now fast-fail." },
+      { "tick": 1020, "text": "All green. Action item: add a budgeted retry / fallback to cached tax rates." }
+    ],
+    "lanes": {
+      "b1": [
+        { "start": 0,    "duration": 360, "state": "healthy" },
+        { "start": 360,  "duration": 360, "state": "degraded",   "note": "pool saturated" },
+        { "start": 720,  "duration": 180, "state": "recovering" },
+        { "start": 900,  "duration": 180, "state": "healthy" }
+      ],
+      "b2": [
+        { "start": 0,    "duration": 540, "state": "healthy" },
+        { "start": 540,  "duration": 180, "state": "degraded",   "note": "soaking failed-over load" },
+        { "start": 720,  "duration": 180, "state": "recovering" },
+        { "start": 900,  "duration": 180, "state": "healthy" }
+      ],
+      "lb": [
+        { "start": 0,    "duration": 480, "state": "healthy" },
+        { "start": 480,  "duration": 240, "state": "degraded",   "note": "ejected b1" },
+        { "start": 720,  "duration": 360, "state": "healthy" }
+      ]
+    }
+  }
+}

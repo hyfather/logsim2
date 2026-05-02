@@ -1,0 +1,54 @@
+{
+  "name": "Subdomain Takeover via Dangling CNAME",
+  "description": "shop-old.acme.io still has a CNAME to a Heroku app that was deleted in 2021. An attacker registers the same Heroku app name, claims the dangling pointer, and starts serving a near-perfect phishing clone of the login page on a trusted-looking acme.io subdomain.",
+  "reasoning": "The corporate edge serves the modern shop, while the dangling subdomain is now under attacker control. The simulation models the attacker-controlled shop-old.acme.io as a 'compromised' edge node that customers reach via legitimate links shared in social engineering email.",
+  "category": "security",
+  "difficulty": "hard",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "consumer-prod",  "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "consumer-edge",  "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "consumer-app",   "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "consumer-data",  "parent": "vpc" },
+    { "id": "lb",         "type": "service", "serviceType": "nginx",   "label": "shop-edge",            "parent": "pubnet" },
+    { "id": "danglingcdn","type": "service", "serviceType": "nginx",   "label": "shop-old.acme.io",     "parent": "pubnet",  "notes": "Heroku CNAME — now attacker-controlled." },
+    { "id": "shop",       "type": "service", "serviceType": "nodejs",  "label": "shop-api",             "parent": "appnet" },
+    { "id": "auth",       "type": "service", "serviceType": "nodejs",  "label": "auth-svc",             "parent": "appnet" },
+    { "id": "db",         "type": "service", "serviceType": "postgres","label": "shop-db",              "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "lb",   "target": "shop", "protocol": "https", "port": 443,  "trafficRate": 110, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb",   "target": "auth", "protocol": "https", "port": 443,  "trafficRate": 50,  "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "shop", "target": "db",   "protocol": "tcp",   "port": 5432, "trafficRate": 50,  "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "auth", "target": "db",   "protocol": "tcp",   "port": 5432, "trafficRate": 30,  "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1620,
+    "narrative": [
+      { "tick": 0,    "text": "Quiet baseline. Modern shop sees normal diurnal traffic." },
+      { "tick": 240,  "text": "Bug-bounty researcher tweets a reachability test for shop-old.acme.io — 200 OK from Heroku app they just claimed." },
+      { "tick": 360,  "text": "Phishing wave begins; emails link to https://shop-old.acme.io/login (looks legit, valid TLS via Heroku-managed cert)." },
+      { "tick": 540,  "text": "Attacker mirrors the login UI, harvests creds, then redirects to real /login to mask the theft." },
+      { "tick": 780,  "text": "auth-svc sees a small spike of 'logged in twice in 4s from different IPs' — suspicious sessions opened." },
+      { "tick": 960,  "text": "Customer support ticket flood mentions 'weird login page'. Brand-protection routes it to security." },
+      { "tick": 1140, "text": "DNS team deletes the dangling CNAME; cert revoked on the attacker app via Heroku abuse-contact." },
+      { "tick": 1380, "text": "All sessions opened from the phishing window force-logged out; password reset emails sent." },
+      { "tick": 1560, "text": "Steady state. Action item: external attack-surface scanner alert on dangling CNAMEs." }
+    ],
+    "lanes": {
+      "danglingcdn": [
+        { "start": 0,    "duration": 240, "state": "healthy",     "note": "abandoned, harmless" },
+        { "start": 240,  "duration": 120, "state": "under_attack","note": "claimed by attacker" },
+        { "start": 360,  "duration": 780, "state": "compromised", "note": "phishing site live" },
+        { "start": 1140, "duration": 480, "state": "down",        "note": "CNAME removed" }
+      ],
+      "auth": [
+        { "start": 0,    "duration": 780, "state": "healthy" },
+        { "start": 780,  "duration": 360, "state": "under_attack","note": "credential reuse from harvested set" },
+        { "start": 1140, "duration": 480, "state": "recovering" }
+      ],
+      "shop": [
+        { "start": 0,    "duration": 1620, "state": "healthy" }
+      ]
+    }
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "name": "Helm Image Tag Typo → Fleet CrashLoopBackOff",
+  "description": "Engineer ships values.yaml with image.tag: '1.4.2-rc1' (which never made it to the registry). Helm rolls forward, every replica's pod hits ImagePullBackOff after the deployment progresses past the readiness threshold. Service goes black for 8 minutes.",
+  "reasoning": "Three replicas of a Go API behind nginx, deployed via a single Helm chart. The simulation shows the rolling update breaking each replica one by one until the LB has nothing healthy upstream.",
+  "category": "deploy",
+  "difficulty": "easy",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "checkout-prod-vpc", "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "checkout-edge",     "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "checkout-app",      "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "checkout-data",     "parent": "vpc" },
+    { "id": "lb",  "type": "service", "serviceType": "nginx",    "label": "checkout-edge-lb", "parent": "pubnet" },
+    { "id": "a1",  "type": "service", "serviceType": "golang",   "label": "checkout-api-1",   "parent": "appnet" },
+    { "id": "a2",  "type": "service", "serviceType": "golang",   "label": "checkout-api-2",   "parent": "appnet" },
+    { "id": "a3",  "type": "service", "serviceType": "golang",   "label": "checkout-api-3",   "parent": "appnet" },
+    { "id": "db",  "type": "service", "serviceType": "postgres", "label": "checkout-db",      "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "lb", "target": "a1", "protocol": "http", "port": 8080, "trafficRate": 50, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb", "target": "a2", "protocol": "http", "port": 8080, "trafficRate": 50, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb", "target": "a3", "protocol": "http", "port": 8080, "trafficRate": 50, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "a1", "target": "db", "protocol": "tcp",  "port": 5432, "trafficRate": 25, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "a2", "target": "db", "protocol": "tcp",  "port": 5432, "trafficRate": 25, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "a3", "target": "db", "protocol": "tcp",  "port": 5432, "trafficRate": 25, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 900,
+    "narrative": [
+      { "tick": 0,    "text": "Steady traffic. helm upgrade --wait kicks off." },
+      { "tick": 180,  "text": "Pod for a1 starts pulling image checkout-api:1.4.2-rc1 — registry returns 404." },
+      { "tick": 240,  "text": "Helm progresses (the new pod fails readiness, kubectl rollout doesn't notice fast enough)." },
+      { "tick": 300,  "text": "a1 replaced; lb removes from rotation. a2 starts the same path." },
+      { "tick": 420,  "text": "Both a1 and a2 stuck in ImagePullBackOff. Only a3 still serving — saturating." },
+      { "tick": 540,  "text": "Engineer runs helm rollback to the previous chart revision." },
+      { "tick": 720,  "text": "Pods come back; LB sees healthy upstreams again." },
+      { "tick": 840,  "text": "All green. Postmortem: enforce image-existence pre-check in CI." }
+    ],
+    "lanes": {
+      "a1": [
+        { "start": 0,    "duration": 180, "state": "healthy" },
+        { "start": 180,  "duration": 420, "state": "down",        "note": "ImagePullBackOff" },
+        { "start": 600,  "duration": 180, "state": "recovering" },
+        { "start": 780,  "duration": 120, "state": "healthy" }
+      ],
+      "a2": [
+        { "start": 0,    "duration": 300, "state": "healthy" },
+        { "start": 300,  "duration": 300, "state": "down",        "note": "ImagePullBackOff" },
+        { "start": 600,  "duration": 180, "state": "recovering" },
+        { "start": 780,  "duration": 120, "state": "healthy" }
+      ],
+      "a3": [
+        { "start": 0,    "duration": 420, "state": "healthy" },
+        { "start": 420,  "duration": 180, "state": "degraded",    "note": "absorbing all traffic" },
+        { "start": 600,  "duration": 300, "state": "healthy" }
+      ],
+      "lb": [
+        { "start": 0,    "duration": 420, "state": "healthy" },
+        { "start": 420,  "duration": 180, "state": "degraded",    "note": "only one upstream" },
+        { "start": 600,  "duration": 300, "state": "healthy" }
+      ]
+    }
+  }
+}

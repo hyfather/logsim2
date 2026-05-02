@@ -1,0 +1,47 @@
+{
+  "name": "Forgotten Cron on a 12-Year-Old Host",
+  "description": "A finance close-of-day cron job has been running on RH6-FIN-CRON-01 since 2013. The box is past EOL, was supposed to be retired in 2021, was forgotten, and tonight its disk finally gives up — the close fails for the first time in nine years.",
+  "reasoning": "An ancient host, a cron service running on it, and a downstream Postgres data warehouse. The simulation models the moment the legacy job stops emitting heartbeats, with cascade impact on a finance pipeline that nobody knew was downstream.",
+  "category": "deploy",
+  "difficulty": "easy",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "fin-onprem",       "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "fin-edge",         "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "fin-app",          "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "fin-data",         "parent": "vpc" },
+    { "id": "edge", "type": "service", "serviceType": "nginx",    "label": "fin-portal-edge",   "parent": "pubnet" },
+    { "id": "cron", "type": "service", "serviceType": "custom",   "label": "RH6-FIN-CRON-01",   "parent": "appnet",  "notes": "RHEL 6.5. Last patched in 2018." },
+    { "id": "etl",  "type": "service", "serviceType": "custom",   "label": "fin-etl-loader",    "parent": "appnet",  "notes": "Consumes the cron's output file." },
+    { "id": "dw",   "type": "service", "serviceType": "postgres", "label": "fin-data-warehouse","parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "edge", "target": "etl", "protocol": "http", "port": 8080, "trafficRate": 6,  "trafficPattern": "steady", "errorRate": 0.005 },
+    { "source": "etl",  "target": "dw",  "protocol": "tcp",  "port": 5432, "trafficRate": 8,  "trafficPattern": "steady", "errorRate": 0.001 },
+    { "source": "cron", "target": "etl", "protocol": "tcp",  "port": 8080, "trafficRate": 1,  "trafficPattern": "bursty", "errorRate": 0.002 }
+  ],
+  "timeline": {
+    "duration": 1500,
+    "narrative": [
+      { "tick": 0,    "text": "Quiet baseline. Cron hasn't missed a beat in nine years." },
+      { "tick": 240,  "text": "Disk smartd warning on RH6-FIN-CRON-01 (it's been firing all week, nobody is on the alias)." },
+      { "tick": 360,  "text": "Cron job starts: 'Cannot create temp file: input/output error'." },
+      { "tick": 480,  "text": "Output file never lands; etl-loader waits, then fails its scheduled pull." },
+      { "tick": 660,  "text": "Finance reports a missing entry in tonight's close. Trail leads back to the dead disk." },
+      { "tick": 900,  "text": "Job migrated by hand to a modern Linux VM; data backfilled from /var/log/cron's last known good tmpfile." },
+      { "tick": 1140, "text": "Close completes ~3 hours late; long-overdue retirement of RH6-FIN-CRON-01 scheduled." },
+      { "tick": 1380, "text": "Steady state. Action item: every cron job needs a heartbeat to a central monitor." }
+    ],
+    "lanes": {
+      "cron": [
+        { "start": 0,    "duration": 360, "state": "healthy" },
+        { "start": 360,  "duration": 540, "state": "down",       "note": "disk failure" },
+        { "start": 900,  "duration": 600, "state": "recovering", "note": "job migrated to new host" }
+      ],
+      "etl": [
+        { "start": 0,    "duration": 480, "state": "healthy" },
+        { "start": 480,  "duration": 660, "state": "degraded",   "note": "stuck on missing input" },
+        { "start": 1140, "duration": 360, "state": "healthy" }
+      ]
+    }
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "name": "GitHub PAT Leaked in CI Build Log",
+  "description": "A debug `set -x` left in a GitHub Actions workflow echoes a long-lived org-scoped PAT into a public build log. Within 90 seconds an automated scraper finds it. The token is used to clone 12 private repos and add a deploy key to one of them.",
+  "reasoning": "GitHub Enterprise + the Actions runner pool are the affected services. The simulation focuses on the post-leak misuse: a single token is now the most active git client on the planet for ~10 minutes.",
+  "category": "cloud",
+  "difficulty": "easy",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "scm-vpc",       "parent": null },
+    { "id": "edgenet", "type": "subnet",  "label": "scm-edge",      "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "scm-app",       "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "scm-audit",     "parent": "vpc" },
+    { "id": "edge",   "type": "service", "serviceType": "nginx",   "label": "github-edge",      "parent": "edgenet" },
+    { "id": "ghe",    "type": "service", "serviceType": "custom",  "label": "github-enterprise","parent": "appnet" },
+    { "id": "runner", "type": "service", "serviceType": "custom",  "label": "actions-runner-pool","parent": "appnet" },
+    { "id": "audit",  "type": "service", "serviceType": "postgres","label": "github-audit-log",  "parent": "datanet" },
+    { "id": "siem",   "type": "service", "serviceType": "custom",  "label": "siem-collector",   "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "edge",   "target": "ghe",    "protocol": "https", "port": 443, "trafficRate": 90, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "runner", "target": "ghe",    "protocol": "https", "port": 443, "trafficRate": 40, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "ghe",    "target": "audit",  "protocol": "tcp",   "port": 5432,"trafficRate": 22, "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "audit",  "target": "siem",   "protocol": "tcp",   "port": 9200,"trafficRate": 18, "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1080,
+    "narrative": [
+      { "tick": 0,    "text": "Steady baseline; CI pipelines green; ~40 actions runs in flight." },
+      { "tick": 240,  "text": "Public build run echoes 'Authorization: token ghp_***' to logs (set -x in the workflow)." },
+      { "tick": 270,  "text": "GitHub secret-scanning alert fires — but the token is also already being used elsewhere." },
+      { "tick": 360,  "text": "Token used from 23.224.x.x: rapid sequence of repo clones (12 private repos in 4 minutes)." },
+      { "tick": 540,  "text": "Attacker adds a deploy key to repo 'infra-prod' — would survive PAT revocation." },
+      { "tick": 720,  "text": "Audit team revokes PAT, removes the deploy key, force-pushes audit cleanup." },
+      { "tick": 900,  "text": "Repo-by-repo review of last 24h commits; nothing rewritten. Notification to affected owners." },
+      { "tick": 1020, "text": "All steady. Org-wide rule: no long-lived PATs; only fine-grained or App tokens." }
+    ],
+    "lanes": {
+      "ghe": [
+        { "start": 0,    "duration": 360, "state": "healthy" },
+        { "start": 360,  "duration": 360, "state": "under_attack", "note": "anomalous clone burst" },
+        { "start": 720,  "duration": 240, "state": "recovering",   "note": "PAT revoked, deploy key removed" },
+        { "start": 960,  "duration": 120, "state": "healthy" }
+      ],
+      "runner": [
+        { "start": 0,    "duration": 240, "state": "healthy" },
+        { "start": 240,  "duration": 60,  "state": "compromised",  "note": "leaked PAT in log artefact" },
+        { "start": 300,  "duration": 780, "state": "healthy" }
+      ]
+    }
+  }
+}

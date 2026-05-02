@@ -1,0 +1,45 @@
+{
+  "name": "Public S3 Bucket Discovered & Drained",
+  "description": "A backup bucket created by a contractor in 2022 (acme-mktg-archive-old) has been world-readable the whole time. A grayhat researcher finds it via bucket enumeration and starts pulling .sql.gz files. CloudTrail shows AnonymousIdentity GetObject events from a single IP block.",
+  "reasoning": "Two-tier: a static/marketing S3 'service' (modelled as nginx-style) and the corporate API. The S3 service spikes egress; the API stays calm. The simulation focuses on detection and rotation.",
+  "category": "security",
+  "difficulty": "easy",
+  "nodes": [
+    { "id": "vpc",     "type": "vpc",     "label": "marketing-vpc",  "parent": null },
+    { "id": "pubnet",  "type": "subnet",  "label": "mktg-public",    "parent": "vpc" },
+    { "id": "appnet",  "type": "subnet",  "label": "mktg-app",       "parent": "vpc" },
+    { "id": "datanet", "type": "subnet",  "label": "mktg-data",      "parent": "vpc" },
+    { "id": "lb",      "type": "service", "serviceType": "nginx",    "label": "mktg-edge-lb",          "parent": "pubnet" },
+    { "id": "site",    "type": "service", "serviceType": "nodejs",   "label": "marketing-site",        "parent": "appnet" },
+    { "id": "bucket",  "type": "service", "serviceType": "custom",   "label": "s3-acme-mktg-archive",  "parent": "datanet",  "notes": "World-readable. Holds gzipped DB dumps from 2022." },
+    { "id": "siem",    "type": "service", "serviceType": "custom",   "label": "cloudtrail-siem",       "parent": "datanet" }
+  ],
+  "edges": [
+    { "source": "lb",     "target": "site",   "protocol": "https", "port": 443, "trafficRate": 60, "trafficPattern": "diurnal", "errorRate": 0.005 },
+    { "source": "lb",     "target": "bucket", "protocol": "https", "port": 443, "trafficRate": 5,  "trafficPattern": "steady",  "errorRate": 0.001 },
+    { "source": "bucket", "target": "siem",   "protocol": "tcp",   "port": 9200,"trafficRate": 8,  "trafficPattern": "steady",  "errorRate": 0.001 }
+  ],
+  "timeline": {
+    "duration": 1080,
+    "narrative": [
+      { "tick": 0,    "text": "Quiet baseline. Bucket sees ~5 reads/min from internal jobs." },
+      { "tick": 180,  "text": "External IP starts ListObjectsV2 against the bucket — 4000 keys enumerated." },
+      { "tick": 300,  "text": "Sequential GetObject for *.sql.gz; egress spikes from 500 KB/s to 80 MB/s." },
+      { "tick": 480,  "text": "AWS GuardDuty 'Discovery:S3/AnomalousBehavior.Read' fires; SOC paged." },
+      { "tick": 660,  "text": "Bucket policy patched to deny public; credentials rotated for the contractor's old IAM user." },
+      { "tick": 840,  "text": "Forensics: 11 GB pulled, including a 2022 customer dump. Breach notification path opened." },
+      { "tick": 1020, "text": "Account-wide BlockPublicAccess turned on; SCP to forbid public buckets going forward." }
+    ],
+    "lanes": {
+      "bucket": [
+        { "start": 0,    "duration": 180, "state": "healthy" },
+        { "start": 180,  "duration": 480, "state": "compromised",  "note": "anonymous read in progress" },
+        { "start": 660,  "duration": 240, "state": "throttled",    "note": "public access blocked" },
+        { "start": 900,  "duration": 180, "state": "healthy" }
+      ],
+      "site": [
+        { "start": 0,    "duration": 1080, "state": "healthy" }
+      ]
+    }
+  }
+}
