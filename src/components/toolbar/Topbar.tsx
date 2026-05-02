@@ -1,5 +1,5 @@
 'use client'
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import {
   ChevronDown,
@@ -49,36 +49,9 @@ import { pickCriblPayload } from '@/lib/backendClient'
 import { canvasToScenarioYaml } from '@/lib/canvasToScenarioYaml'
 import { runStream } from '@/lib/runStream'
 import { logsAt } from '@/lib/logsAt'
-import { materializeProposedScenarioJson } from '@/lib/scenarioPrompt'
 import { ExportPreviewModal, type ExportTab } from '@/components/toolbar/ExportPreviewModal'
 import { RunLocallyModal } from '@/components/toolbar/RunLocallyModal'
 import { InstallLocallyModal } from '@/components/toolbar/InstallLocallyModal'
-
-interface PresetScenarioManifestEntry {
-  file: string
-  title: string
-  description: string
-  category: string
-  difficulty: 'easy' | 'medium' | 'hard'
-  durationTicks: number
-  serviceCount: number
-}
-
-interface PresetScenarioGroup {
-  id: string
-  label: string
-  description?: string
-  order?: number
-}
-
-const FALLBACK_GROUPS: PresetScenarioGroup[] = [
-  { id: 'incident', label: 'Production Incidents', order: 1 },
-  { id: 'deploy',   label: 'Deploys & Releases',  order: 2 },
-  { id: 'security', label: 'External Threats',    order: 3 },
-  { id: 'insider',  label: 'Insider & Abuse',     order: 4 },
-  { id: 'cloud',    label: 'Cloud & Identity',    order: 5 },
-  { id: 'baseline', label: 'Baselines',           order: 6 },
-]
 
 function LogoMark() {
   return (
@@ -105,8 +78,9 @@ function GithubMark({ className }: { className?: string }) {
 }
 
 export function Topbar() {
-  const { nodes, edges, metadata, setMetadata, resetScenario, loadScenario } = useScenarioStore()
-  const setDescribePanelOpen = useUIStore(s => s.setDescribePanelOpen)
+  const { nodes, edges, metadata, setMetadata, loadScenario } = useScenarioStore()
+  const setNewScenarioModalOpen = useUIStore(s => s.setNewScenarioModalOpen)
+  const setModifyPanelOpen = useUIStore(s => s.setModifyPanelOpen)
   const episode = useEpisodeStore(s => s.episode)
   const setEpisode = useEpisodeStore(s => s.setEpisode)
   const setTick = useEpisodeStore(s => s.setTick)
@@ -137,9 +111,6 @@ export function Topbar() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const titleInputRef = useRef<HTMLInputElement>(null)
 
-  const [presets, setPresets] = useState<PresetScenarioManifestEntry[]>([])
-  const [presetGroups, setPresetGroups] = useState<PresetScenarioGroup[]>(FALLBACK_GROUPS)
-  const [presetsLoaded, setPresetsLoaded] = useState(false)
   const [draftName, setDraftName] = useState(metadata.name)
   const [editingTitle, setEditingTitle] = useState(false)
   const [aboutOpen, setAboutOpen] = useState(false)
@@ -235,16 +206,8 @@ export function Topbar() {
   }, [loadScenario])
 
   const handleNewScenario = useCallback(() => {
-    if (nodes.length > 0) {
-      if (!confirm('Create a new scenario? Unsaved changes will be lost.')) return
-    }
-    // Allocate a fresh library id so the new scenario is tracked separately
-    // and the previous one stays available under "Recent Scenarios".
-    useScenarioLibraryStore.getState().startNew()
-    resetScenario()
-    useEpisodeStore.getState().resetEpisode()
-    setDescribePanelOpen(true)
-  }, [nodes.length, resetScenario, setDescribePanelOpen])
+    setNewScenarioModalOpen(true)
+  }, [setNewScenarioModalOpen])
 
   const handleLoadFromLibrary = useCallback((entry: SavedScenario) => {
     try {
@@ -263,70 +226,6 @@ export function Topbar() {
     if (!confirm(`Delete "${entry.name}" from your recent scenarios?`)) return
     useScenarioLibraryStore.getState().remove(entry.id)
   }, [])
-
-  // ── Example Scenarios (presets w/ embedded timelines) ───────────
-  const loadPresetsManifest = useCallback(async () => {
-    if (presetsLoaded) return
-    try {
-      const res = await fetch('/scenarios/presets/index.json', { cache: 'no-cache' })
-      if (res.ok) {
-        const json = await res.json()
-        // Accept both shapes: legacy flat array, or { groups, scenarios }.
-        if (Array.isArray(json)) {
-          setPresets(json)
-        } else if (json && Array.isArray(json.scenarios)) {
-          setPresets(json.scenarios)
-          if (Array.isArray(json.groups) && json.groups.length > 0) {
-            setPresetGroups(json.groups)
-          }
-        }
-      }
-    } catch { /* ignore */ }
-    setPresetsLoaded(true)
-  }, [presetsLoaded])
-
-  const groupedPresets = useMemo(() => {
-    const order = new Map<string, number>()
-    presetGroups.forEach((g, i) => order.set(g.id, g.order ?? i))
-    const buckets = new Map<string, PresetScenarioManifestEntry[]>()
-    for (const p of presets) {
-      const list = buckets.get(p.category) ?? []
-      list.push(p)
-      buckets.set(p.category, list)
-    }
-    // Materialise in declared group order; surface any unknown categories at the end.
-    const known = presetGroups
-      .map(g => ({ group: g, items: buckets.get(g.id) ?? [] }))
-      .filter(b => b.items.length > 0)
-    const unknownIds = Array.from(buckets.keys()).filter(id => !order.has(id))
-    const unknown = unknownIds.map(id => ({
-      group: { id, label: id.charAt(0).toUpperCase() + id.slice(1) } as PresetScenarioGroup,
-      items: buckets.get(id) ?? [],
-    }))
-    return [...known, ...unknown]
-  }, [presets, presetGroups])
-
-  const loadExampleScenario = useCallback(async (entry: PresetScenarioManifestEntry) => {
-    try {
-      const res = await fetch(`/scenarios/presets/${entry.file}`, { cache: 'no-cache' })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const json = await res.json()
-      const result = materializeProposedScenarioJson(json)
-      const now = new Date().toISOString()
-      // Each preset load opens a new library entry so it shows up under
-      // "Recent" once the user starts editing it.
-      useScenarioLibraryStore.getState().startNew()
-      loadScenario(result.flowNodes, result.flowEdges, {
-        name: result.name?.trim() || entry.title,
-        description: result.description?.trim() || entry.description,
-        createdAt: now,
-        updatedAt: now,
-      })
-      if (result.episode) setEpisode(result.episode)
-    } catch (err) {
-      alert(`Failed to load preset scenario: ${String(err)}`)
-    }
-  }, [loadScenario, setEpisode])
 
   // ── Simulation control ─────────────────────────────────────────
   // Build the timeline-baked scenario YAML so the backend applies per-tick
@@ -349,6 +248,8 @@ export function Topbar() {
 
   const startPlayback = useCallback((nextSpeed: number) => {
     if (status === 'running') return
+    // Right rail is shared between chat and logs. Run swaps it back to logs.
+    setModifyPanelOpen(false)
     const enabledCribl = destinationsRef.current.find(d => d.enabled && d.type === 'cribl-hec')
     const cribl = pickCriblPayload(destinationsRef.current)
     const yaml = buildScenarioYaml()
@@ -407,7 +308,7 @@ export function Topbar() {
         setRunStatus('idle')
       },
     })
-  }, [addLogs, buildScenarioYaml, clearLogs, outputFormat, recordSent, setDestStatus, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, status])
+  }, [addLogs, buildScenarioYaml, clearLogs, outputFormat, recordSent, setDestStatus, setModifyPanelOpen, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, status])
 
   const stopPlayback = useCallback(() => {
     stopBackend()
@@ -589,7 +490,9 @@ export function Topbar() {
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-56 text-xs">
-            <DropdownMenuItem onClick={handleNewScenario} className="cursor-pointer text-xs">📄 New Scenario</DropdownMenuItem>
+            <DropdownMenuItem onClick={handleNewScenario} className="cursor-pointer text-xs">
+              📄 New Scenario…
+            </DropdownMenuItem>
             <DropdownMenuItem onClick={handleOpenScenario} className="cursor-pointer text-xs">📂 Open Scenario…</DropdownMenuItem>
             <DropdownMenuItem onClick={handleSaveScenario} className="cursor-pointer text-xs">💾 Save Scenario  ⌘S</DropdownMenuItem>
             <DropdownMenuSeparator />
@@ -648,77 +551,6 @@ export function Topbar() {
                       </DropdownMenuItem>
                     )
                   })
-                )}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger
-                onMouseEnter={loadPresetsManifest}
-                onFocus={loadPresetsManifest}
-                className="cursor-pointer text-xs"
-              >
-                📚 Example Scenarios
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="w-64 text-xs">
-                <DropdownMenuLabel className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
-                  Browse by category
-                </DropdownMenuLabel>
-                {!presetsLoaded ? (
-                  <div className="px-2 py-1.5 text-[11px] text-slate-400">Loading…</div>
-                ) : groupedPresets.length === 0 ? (
-                  <div className="px-2 py-1.5 text-[11px] text-slate-400">No example scenarios found.</div>
-                ) : (
-                  groupedPresets.map(({ group, items }) => (
-                    <DropdownMenuSub key={group.id}>
-                      <DropdownMenuSubTrigger className="cursor-pointer text-xs">
-                        <span className="flex w-full items-center justify-between gap-2">
-                          <span className="flex items-center gap-1.5 font-medium">
-                            <span className={cn(
-                              'inline-block h-2 w-2 rounded-full',
-                              group.id === 'security' ? 'bg-rose-500'
-                                : group.id === 'incident' ? 'bg-amber-500'
-                                : group.id === 'deploy' ? 'bg-violet-500'
-                                : group.id === 'insider' ? 'bg-emerald-500'
-                                : group.id === 'cloud' ? 'bg-sky-500'
-                                : 'bg-slate-400',
-                            )} aria-hidden />
-                            {group.label}
-                          </span>
-                          <span className="text-[10px] text-slate-400">{items.length}</span>
-                        </span>
-                      </DropdownMenuSubTrigger>
-                      <DropdownMenuSubContent className="max-w-md text-xs">
-                        {group.description && (
-                          <DropdownMenuLabel className="whitespace-normal text-[10px] leading-tight text-slate-500">
-                            {group.description}
-                          </DropdownMenuLabel>
-                        )}
-                        {items.map(p => (
-                          <DropdownMenuItem
-                            key={p.file}
-                            onClick={() => loadExampleScenario(p)}
-                            className="flex cursor-pointer flex-col items-start gap-0.5 text-xs"
-                          >
-                            <span className="flex items-center gap-1.5 font-medium">
-                              {p.title}
-                              <span className={cn(
-                                'rounded px-1 py-px text-[9px] font-semibold uppercase tracking-wide',
-                                p.difficulty === 'hard' ? 'bg-rose-100 text-rose-700'
-                                  : p.difficulty === 'medium' ? 'bg-amber-100 text-amber-800'
-                                  : 'bg-emerald-100 text-emerald-700',
-                              )}>{p.difficulty}</span>
-                            </span>
-                            <span className="whitespace-normal text-[10px] leading-tight text-slate-500">
-                              {p.description}
-                            </span>
-                            <span className="text-[10px] text-slate-400">
-                              {p.serviceCount} services · {Math.round(p.durationTicks / 60)} min
-                            </span>
-                          </DropdownMenuItem>
-                        ))}
-                      </DropdownMenuSubContent>
-                    </DropdownMenuSub>
-                  ))
                 )}
               </DropdownMenuSubContent>
             </DropdownMenuSub>

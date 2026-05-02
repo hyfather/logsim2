@@ -5,7 +5,8 @@ import { Canvas } from '@/components/canvas/Canvas'
 import { Palette } from '@/components/palette/Palette'
 import { NodeInspectorPanel } from '@/components/panels/NodeInspectorPanel'
 import { Topbar } from '@/components/toolbar/Topbar'
-import { DescribeScenarioPanel } from '@/components/canvas/DescribeScenarioPanel'
+import { ModifyScenarioPanel } from '@/components/canvas/ModifyScenarioPanel'
+import { NewScenarioModal } from '@/components/canvas/NewScenarioModal'
 import { EpisodeTimeline } from '@/components/episodes/EpisodeTimeline'
 import { BlockInspector } from '@/components/episodes/BlockInspector'
 import { ScrubbedLogs } from '@/components/episodes/ScrubbedLogs'
@@ -16,7 +17,7 @@ import { useSimulationStore } from '@/store/useSimulationStore'
 import { useDestinationsStore } from '@/store/useDestinationsStore'
 import { forwardToHec } from '@/lib/criblForwarder'
 import type { CriblHecDestination } from '@/types/destinations'
-import { PanelLeftOpen, PanelRightOpen, ChevronDown, ChevronUp } from 'lucide-react'
+import { PanelLeftOpen, PanelRightOpen, ChevronDown, ChevronUp, Sparkles } from 'lucide-react'
 import { deserializeScenario } from '@/lib/serialization'
 import { scenarioToFlow } from '@/lib/flow-data'
 import { materializeProposedScenarioJson } from '@/lib/scenarioPrompt'
@@ -35,7 +36,8 @@ export default function EditorPageClient() {
     timelineHeight, setTimelineHeight,
     timelineCollapsed, setTimelineCollapsed,
     canvasCollapsed, setCanvasCollapsed,
-    describePanelOpen, setDescribePanelOpen,
+    modifyPanelOpen, setModifyPanelOpen,
+    newScenarioModalOpen, setNewScenarioModalOpen,
   } = useUIStore()
   const selectedBlockId = useEpisodeStore(s => s.selectedBlockId)
   const setEpisode = useEpisodeStore(s => s.setEpisode)
@@ -57,37 +59,34 @@ export default function EditorPageClient() {
   logBufferRef.current = logBuffer
   destinationsRef.current = destinations
 
-  // Bootstrap: prefer ?scenario=<slug> from the landing page, else fall back to autosave.
+  // Bootstrap: prefer ?scenario=<slug>, else last library entry, else legacy
+  // autosave migration, else drop a first-time visitor into an intro template.
   useEffect(() => {
+    let cancelled = false
     const params = new URLSearchParams(window.location.search)
-    if (params.get('ai') === '1') {
-      setDescribePanelOpen(true)
-      params.delete('ai')
-      const next = params.toString()
-      const url = next ? `${window.location.pathname}?${next}` : window.location.pathname
-      window.history.replaceState(null, '', url)
+
+    const loadPresetBySlug = async (slug: string, fallbackName?: string) => {
+      const res = await fetch(`/scenarios/presets/${slug}.scenario.json`, { cache: 'no-cache' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const json = await res.json()
+      if (cancelled) return
+      const result = materializeProposedScenarioJson(json)
+      const now = new Date().toISOString()
+      useScenarioLibraryStore.getState().startNew()
+      loadScenario(result.flowNodes, result.flowEdges, {
+        name: result.name?.trim() || fallbackName || slug,
+        description: result.description?.trim() || '',
+        createdAt: now,
+        updatedAt: now,
+      })
+      if (result.episode) setEpisode(result.episode)
     }
+
     const slug = params.get('scenario')
     if (slug) {
-      let cancelled = false
       ;(async () => {
         try {
-          const res = await fetch(`/scenarios/presets/${slug}.scenario.json`, { cache: 'no-cache' })
-          if (!res.ok) throw new Error(`HTTP ${res.status}`)
-          const json = await res.json()
-          if (cancelled) return
-          const result = materializeProposedScenarioJson(json)
-          const now = new Date().toISOString()
-          // Loading a preset from the URL begins a fresh library entry so the
-          // user's previous in-progress scenario stays in "Recent".
-          useScenarioLibraryStore.getState().startNew()
-          loadScenario(result.flowNodes, result.flowEdges, {
-            name: result.name?.trim() || slug,
-            description: result.description?.trim() || '',
-            createdAt: now,
-            updatedAt: now,
-          })
-          if (result.episode) setEpisode(result.episode)
+          await loadPresetBySlug(slug, slug)
         } catch (err) {
           console.warn('Failed to load preset from URL:', err)
         } finally {
@@ -110,15 +109,16 @@ export default function EditorPageClient() {
         const { flowNodes, flowEdges } = scenarioToFlow(current.scenario)
         loadScenario(flowNodes, flowEdges, current.scenario.metadata)
         setEpisode(current.episode)
-        return
+        return () => { cancelled = true }
       } catch {
-        // fall through to migration / blank canvas
+        // fall through to migration / first-visit intro
       }
     }
 
     // One-time migration: import the legacy `logsim-autosave` key (canvas-only)
     // into the library so users don't lose work when this version ships. The
     // legacy entry is then removed.
+    let migrated = false
     const saved = localStorage.getItem('logsim-autosave')
     const savedTime = localStorage.getItem('logsim-autosave-time')
     if (saved && savedTime) {
@@ -132,6 +132,7 @@ export default function EditorPageClient() {
           // Defer; the next autosave will write this into the library under a
           // fresh id (allocated here so renames stick).
           lib.startNew()
+          migrated = true
         } catch {
           // ignore corrupted legacy data
         }
@@ -139,6 +140,18 @@ export default function EditorPageClient() {
       localStorage.removeItem('logsim-autosave')
       localStorage.removeItem('logsim-autosave-time')
     }
+    if (migrated) return () => { cancelled = true }
+
+    // First visit: no library entry, no legacy autosave. Drop the user into an
+    // intro template so they see a working scenario instead of a blank canvas.
+    ;(async () => {
+      try {
+        await loadPresetBySlug('db-slowdown-cascade', 'Database Slowdown Cascade')
+      } catch (err) {
+        console.warn('Failed to load intro template:', err)
+      }
+    })()
+    return () => { cancelled = true }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-save every 30 seconds
@@ -231,6 +244,17 @@ export default function EditorPageClient() {
       setCanvasOpen(false)
     }
   }, [setLogPanelWidth, setLogPanelOpen, setCanvasOpen])
+
+  // Modify-with-AI shares the right rail with logs (mutually exclusive). Opening
+  // the chat forces the rail open and bumps width to a chat-friendly minimum.
+  const handleOpenModify = useCallback(() => {
+    setModifyPanelOpen(true)
+    setLogPanelOpen(true)
+    setLogPanelWidth(Math.max(380, logPanelWidth))
+    if (window.matchMedia('(max-width: 767px)').matches) {
+      setCanvasOpen(false)
+    }
+  }, [setModifyPanelOpen, setLogPanelOpen, setLogPanelWidth, logPanelWidth, setCanvasOpen])
 
   const handleOpenCanvas = useCallback(() => {
     setCanvasOpen(true)
@@ -340,6 +364,15 @@ export default function EditorPageClient() {
                     <div className="relative flex-1 min-h-0 overflow-hidden">
                       <Canvas />
                       <Palette />
+                      <button
+                        type="button"
+                        onClick={handleOpenModify}
+                        title="Modify scenario with AI"
+                        className="group absolute bottom-4 right-4 z-30 inline-flex items-center gap-1.5 rounded-full border border-violet-200 bg-white/95 px-3 py-1.5 text-[12px] font-semibold text-violet-800 shadow-md backdrop-blur transition-all hover:-translate-y-0.5 hover:bg-violet-50 hover:shadow-lg"
+                      >
+                        <Sparkles className="h-3.5 w-3.5" />
+                        Modify with AI
+                      </button>
                     </div>
                   </div>
                 )}
@@ -379,17 +412,19 @@ export default function EditorPageClient() {
             )}
 
             {logPanelOpen && (
-              selectedBlockId
-                ? <BlockInspector />
-                : selectedNode
-                  ? <NodeInspectorPanel nodeData={selectedNode} />
-                  : <ScrubbedLogs />
+              modifyPanelOpen
+                ? <ModifyScenarioPanel onClose={() => setModifyPanelOpen(false)} />
+                : selectedBlockId
+                  ? <BlockInspector />
+                  : selectedNode
+                    ? <NodeInspectorPanel nodeData={selectedNode} />
+                    : <ScrubbedLogs />
             )}
           </div>
         </div>
       </div>
 
-      <DescribeScenarioPanel open={describePanelOpen} onClose={() => setDescribePanelOpen(false)} />
+      <NewScenarioModal open={newScenarioModalOpen} onClose={() => setNewScenarioModalOpen(false)} />
     </ReactFlowProvider>
   )
 }

@@ -446,6 +446,149 @@ export async function generateScenarioFromDescription(
   return materializeScenario(cleaned)
 }
 
+// ── Modify mode (chat-based scenario editing) ───────────────────────────────
+
+const MODIFY_SYSTEM_PROMPT = `${SYSTEM_PROMPT}
+
+═══════════════════════════════════════════════════════════════════════════
+MODIFY MODE
+═══════════════════════════════════════════════════════════════════════════
+
+You are revising an EXISTING scenario, not generating from scratch. The user will provide:
+  • The current scenario as JSON (same schema as your output above).
+  • A history of previous instructions they have already given you.
+  • A new instruction describing the change they want now.
+
+Rules for modify mode:
+  • Return the COMPLETE updated scenario JSON, not a diff. Preserve every
+    node, edge, and timeline element the user did NOT ask to change.
+  • Keep node \`id\` values stable when a node is being kept. Allocate fresh
+    short ids only for newly added nodes.
+  • Apply the change MINIMALLY. If the user says "add Redis", add Redis and
+    its edge — do not also restructure the rest of the topology.
+  • If the user's instruction is ambiguous, pick the most reasonable
+    interpretation consistent with the existing scenario's style.
+  • If the change implies a timeline update (e.g. "make it a DDoS instead"),
+    revise the timeline to match. Otherwise keep the existing timeline.
+
+Output: a single JSON object matching the schema. No prose.`
+
+export interface ModifyChatTurn {
+  role: 'user' | 'assistant'
+  text: string
+}
+
+/**
+ * Run one round of conversational scenario modification. The caller passes the
+ * live canvas as a ProposedScenario-shaped JSON snapshot, the prior chat history
+ * (text-only), and the new instruction. The model returns a complete revised
+ * scenario which goes through the same post-processing pipeline as the initial
+ * generator, so the result is ready to call \`loadScenario\` on.
+ */
+export async function modifyScenarioFromInstruction(
+  config: AIProviderConfig,
+  currentScenarioJson: unknown,
+  history: ModifyChatTurn[],
+  instruction: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<GenerateScenarioResult> {
+  const historyBlock = history.length === 0
+    ? '(no prior instructions in this session)'
+    : history.map((t, i) => `${i + 1}. ${t.role === 'user' ? 'User' : 'You'}: ${t.text.trim()}`).join('\n')
+
+  const userMessage = `Current scenario JSON:
+\`\`\`json
+${JSON.stringify(currentScenarioJson, null, 2)}
+\`\`\`
+
+Previous instructions in this session:
+${historyBlock}
+
+New instruction:
+${instruction.trim()}
+
+Return the complete updated scenario JSON.`
+
+  const completion = await complete(config, {
+    messages: [
+      { role: 'system', content: MODIFY_SYSTEM_PROMPT },
+      { role: 'user', content: userMessage },
+    ],
+    maxTokens: 8192,
+    jsonMode: true,
+    signal: options.signal,
+  })
+
+  const proposed = parseProposedScenario(completion.text)
+  // Skip the host-stripping post-process during modify so we preserve the
+  // user's existing virtual_servers when they had any.
+  return materializeScenario(proposed)
+}
+
+/**
+ * Convert the live canvas state into the same lightweight ProposedScenario
+ * JSON shape the AI emits. Used by modify-mode chat so the model sees a
+ * compact, schema-consistent snapshot rather than the full Scenario type.
+ */
+export function currentCanvasToProposedJson(
+  flowNodes: ScenarioFlowNode[],
+  flowEdges: ConnectionFlowEdge[],
+  episode: Episode,
+): unknown {
+  const nodes = flowNodes.map(fn => {
+    const data = fn.data
+    const out: Record<string, unknown> = {
+      id: fn.id,
+      type: data.type,
+      label: data.label,
+      parent: fn.parentId ?? null,
+    }
+    if (data.serviceType) out.serviceType = data.serviceType
+    return out
+  })
+
+  const edges: Array<Record<string, unknown>> = []
+  for (const fe of flowEdges) {
+    const c = fe.data
+    if (!c) continue
+    edges.push({
+      source: c.sourceId,
+      target: c.targetId,
+      protocol: c.protocol,
+      port: c.port,
+      trafficRate: c.trafficRate,
+      trafficPattern: c.trafficPattern,
+      errorRate: c.errorRate,
+    })
+  }
+
+  const lanes: Record<string, Array<Record<string, unknown>>> = {}
+  for (const [serviceId, blocks] of Object.entries(episode.lanes ?? {})) {
+    if (!blocks || blocks.length === 0) continue
+    lanes[serviceId] = blocks.map(b => ({
+      start: b.start,
+      duration: b.duration,
+      state: b.state,
+      errorRate: b.errorRate,
+      latencyMul: b.latencyMul,
+      logVolMul: b.logVolMul,
+      ...(b.note ? { note: b.note } : {}),
+    }))
+  }
+
+  return {
+    name: episode.name,
+    description: episode.description,
+    nodes,
+    edges,
+    timeline: {
+      duration: episode.duration,
+      narrative: (episode.narrative ?? []).map(b => ({ tick: b.tick, text: b.text })),
+      lanes,
+    },
+  }
+}
+
 /**
  * Materialize a static preset (same JSON shape the AI emits — nodes, edges,
  * and an optional timeline) into the canvas/episode types. Used by the
