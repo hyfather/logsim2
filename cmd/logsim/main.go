@@ -18,6 +18,7 @@ func main() {
 		newValidateCmd(),
 		newRunCmd(),
 		newServeCmd(),
+		newDestinationsCmd(),
 	)
 
 	if err := root.Execute(); err != nil {

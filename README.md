@@ -60,11 +60,45 @@ vercel dev
 This runs Next.js and the Go function together on one port, matching the
 production routing.
 
-To run the CLI (unchanged, independent of Vercel):
+To run the CLI (independent of Vercel):
 
 ```bash
 go run ./cmd/logsim run --scenario scenarios/web-service.yaml --ticks 60
 ```
+
+### CLI destinations
+
+The CLI keeps a destinations dotfile at `~/.config/logsim/destinations.yaml`
+(`$XDG_CONFIG_HOME/logsim/destinations.yaml` if set, or override the path with
+`$LOGSIM_CONFIG`). The file is created on demand by an interactive form:
+
+```bash
+go run ./cmd/logsim destinations add       # TUI form: name, URL, token, format, ...
+go run ./cmd/logsim destinations list
+go run ./cmd/logsim destinations test prod-cribl
+go run ./cmd/logsim destinations disable prod-cribl
+go run ./cmd/logsim destinations remove prod-cribl
+```
+
+Once a destination exists, `run` is one flag shorter:
+
+```bash
+# auto-uses the only enabled destination if there's exactly one
+go run ./cmd/logsim run --scenario scenarios/web-service.yaml
+
+# pick one or more by name (or `all` for every enabled destination)
+go run ./cmd/logsim run --scenario scenarios/web-service.yaml --to prod-cribl
+go run ./cmd/logsim run --scenario scenarios/web-service.yaml --to prod-cribl,staging
+
+# write a JSONL copy alongside whatever else you picked
+go run ./cmd/logsim run --scenario scenarios/web-service.yaml --to prod-cribl --tee out.jsonl
+```
+
+If no dotfile exists and you run `logsim run` interactively, you'll get a
+one-shot prompt offering to add a destination on the spot. Non-TTY runs (CI,
+pipes) skip the prompt and fall through to stdout. The legacy explicit form
+(`--output stdout|file|destination` with `--path` / `--destination` /
+`--config`) still works for scripts that depend on it.
 
 ## Known limits
 
