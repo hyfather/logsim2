@@ -10,6 +10,7 @@ import {
   Pencil,
   Play,
   RotateCcw,
+  Settings,
   StepForward,
   Terminal,
   Trash2,
@@ -51,6 +52,7 @@ import { logsAt } from '@/lib/logsAt'
 import { materializeProposedScenarioJson } from '@/lib/scenarioPrompt'
 import { ExportPreviewModal, type ExportTab } from '@/components/toolbar/ExportPreviewModal'
 import { RunLocallyModal } from '@/components/toolbar/RunLocallyModal'
+import { InstallLocallyModal } from '@/components/toolbar/InstallLocallyModal'
 
 interface PresetScenarioManifestEntry {
   file: string
@@ -124,6 +126,7 @@ export function Topbar() {
   const [draftName, setDraftName] = useState(metadata.name)
   const [editingTitle, setEditingTitle] = useState(false)
   const [aboutOpen, setAboutOpen] = useState(false)
+  const [installOpen, setInstallOpen] = useState(false)
 
   // Recent scenarios from the persistent library (newest first).
   const recentScenarios = useScenarioLibraryStore(s => s.scenarios)
@@ -484,7 +487,7 @@ export function Topbar() {
               <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-44 text-xs">
+          <DropdownMenuContent align="start" className="w-48 text-xs">
             <DropdownMenuItem
               onClick={() => setAboutOpen(true)}
               className="cursor-pointer text-xs"
@@ -492,6 +495,21 @@ export function Topbar() {
               <Info className="mr-2 h-3.5 w-3.5 text-slate-500" />
               About
             </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => setInstallOpen(true)}
+              className="cursor-pointer text-xs"
+            >
+              <Terminal className="mr-2 h-3.5 w-3.5 text-slate-500" />
+              Install locally…
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem asChild className="cursor-pointer text-xs">
+              <Link href="/settings">
+                <Settings className="mr-2 h-3.5 w-3.5 text-slate-500" />
+                Settings…
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
             <DropdownMenuItem asChild className="cursor-pointer text-xs">
               <a
                 href="https://github.com/hyfather/logsim2"
@@ -626,10 +644,6 @@ export function Topbar() {
                 )}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem asChild className="cursor-pointer text-xs">
-              <Link href="/settings">⚙️ Settings…</Link>
-            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
 
@@ -887,6 +901,12 @@ export function Topbar() {
         metadata={metadata}
         episode={episode}
         tickIntervalMs={1000}
+      />
+
+      {/* Install logsim2 locally modal */}
+      <InstallLocallyModal
+        open={installOpen}
+        onClose={() => setInstallOpen(false)}
       />
 
       {/* Run locally with CLI modal */}
