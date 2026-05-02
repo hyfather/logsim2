@@ -421,14 +421,12 @@ function fanBuilds(builds: FanBuild[]): void {
     applyFan(group, h, h === 'right' || h === 'left' ? 'sy' : 'sx')
   }
 
+  // bendX/bendY are stored as an offset from the source/target midpoint, so the
+  // elbow follows when a parent VPC/subnet is dragged.
   for (const b of builds) {
     const o = offsets.get(b)!
     if (o.dx === 0 && o.dy === 0) continue
-    const sCx = b.sRect.x + b.sRect.width / 2
-    const sCy = b.sRect.y + b.sRect.height / 2
-    const tCx = b.tRect.x + b.tRect.width / 2
-    const tCy = b.tRect.y + b.tRect.height / 2
-    b.bendX = (sCx + tCx) / 2 + o.dx
-    b.bendY = (sCy + tCy) / 2 + o.dy
+    b.bendX = o.dx
+    b.bendY = o.dy
   }
 }

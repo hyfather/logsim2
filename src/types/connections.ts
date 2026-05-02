@@ -14,6 +14,9 @@ export interface Connection {
   trafficPattern?: 'steady' | 'bursty' | 'diurnal' | 'incident'
   trafficRate?: number // requests per second
   topologyWarning?: boolean
+  /** Elbow offset from the natural source→target midpoint, in flow coords.
+   *  Stored as an offset (not absolute) so the bend follows when a parent
+   *  container is dragged. */
   bendX?: number
   bendY?: number
   config: Record<string, unknown>

@@ -9,7 +9,7 @@ export function serializeScenario(
   metadata: Scenario['metadata']
 ): Scenario {
   return {
-    version: 1,
+    version: 2,
     metadata: {
       ...metadata,
       updatedAt: new Date().toISOString(),
