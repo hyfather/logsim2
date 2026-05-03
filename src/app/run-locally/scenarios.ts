@@ -26,7 +26,7 @@ export interface ScenarioIndex {
   generatedAt?: string
 }
 
-const INDEX_PATH = path.join(process.cwd(), 'public', 'scenarios', 'yaml', 'index.json')
+const INDEX_PATH = path.join(process.cwd(), 'public', 's', 'index.json')
 
 let cached: ScenarioIndex | null = null
 

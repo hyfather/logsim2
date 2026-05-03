@@ -61,7 +61,7 @@ export default function RunLocallyClient({ index }: Props) {
   const installCmd = `curl -fsSL ${INSTALL_URL} | sh`
   const fromSourceCmd = `go install github.com/${REPO_SLUG}/cmd/logsim@latest`
   const verifyCmd = `logsim --help`
-  const featuredUrl = featured ? `${origin}/scenarios/yaml/${featured.file}` : ''
+  const featuredUrl = featured ? `${origin}/s/${featured.slug}.yaml` : ''
   const featuredCmd = featured ? `logsim run ${featuredUrl}` : ''
   const featuredOcsf = featured
     ? `logsim run ${featuredUrl} --ocsf -o ${featured.slug}.ocsf.json`
@@ -161,12 +161,13 @@ export default function RunLocallyClient({ index }: Props) {
         {/* Step 3 — Run from a URL */}
         <Step number={3} title="Run any default scenario by URL">
           <p className="mb-3 text-[13px] leading-relaxed text-slate-600">
-            Every built-in scenario is published as a runnable YAML at{' '}
-            <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[12px]">
-              {origin}/scenarios/yaml/&lt;slug&gt;.scenario.yaml
-            </code>
-            . Hand any of those URLs to <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[12px]">logsim run</code>{' '}
-            and it&rsquo;ll fetch, parse, and stream — no <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[12px]">git clone</code> needed.
+            Every built-in scenario lives at a short URL pair:{' '}
+            <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[12px]">{origin}/s/&lt;slug&gt;</code>{' '}
+            opens it in the canvas editor,{' '}
+            <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[12px]">{origin}/s/&lt;slug&gt;.yaml</code>{' '}
+            is the runnable YAML. Hand the YAML URL to{' '}
+            <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[12px]">logsim run</code> and it&rsquo;ll fetch,
+            parse, and stream — no <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[12px]">git clone</code> needed.
           </p>
           {featured && (
             <>
@@ -428,7 +429,8 @@ function ScenarioRow({
   origin: string
   groupLabel: string
 }) {
-  const url = `${origin}/scenarios/yaml/${scenario.file}`
+  const url = `${origin}/s/${scenario.slug}.yaml`
+  const editorUrl = `/s/${scenario.slug}`
   const cmd = `logsim run ${url}`
   const [copied, setCopied] = useState<'cmd' | 'url' | null>(null)
   const onCopy = async (kind: 'cmd' | 'url', text: string) => {
@@ -470,8 +472,15 @@ function ScenarioRow({
             {scenario.durationTicks !== undefined && (
               <span>{Math.round(scenario.durationTicks / 60)}m timeline</span>
             )}
+            <Link
+              href={editorUrl}
+              className="inline-flex items-center gap-0.5 hover:text-slate-700"
+            >
+              <Globe className="h-3 w-3" />
+              Open in editor
+            </Link>
             <a
-              href={`/scenarios/yaml/${scenario.file}`}
+              href={`/s/${scenario.slug}.yaml`}
               target="_blank"
               rel="noreferrer noopener"
               className="inline-flex items-center gap-0.5 hover:text-slate-700"

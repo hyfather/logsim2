@@ -80,7 +80,7 @@ Examples:
   logsim run scenarios/web-service.yaml | jq .
 
   # run a default scenario straight from the LogSim site
-  logsim run https://logsim.app/scenarios/yaml/db-slowdown-cascade.scenario.yaml
+  logsim run https://logsim.app/s/db-slowdown-cascade.yaml
 
   # emit OCSF or OTEL to stdout
   logsim run scenarios/web-service.yaml --ocsf

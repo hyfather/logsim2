@@ -70,13 +70,14 @@ go run ./cmd/logsim run scenarios/web-service.yaml --ticks 60
 default scenarios can be replayed straight off the deployed app:
 
 ```bash
-logsim run https://logsim.app/scenarios/yaml/db-slowdown-cascade.scenario.yaml
+logsim run https://logsim.app/s/db-slowdown-cascade.yaml
 ```
 
-Browse the full catalog at `/run-locally` — every preset is published as a
-runnable YAML at `/scenarios/yaml/<slug>.scenario.yaml`. The YAML files are
-generated from `public/scenarios/presets/*.scenario.json` by
-`npm run build:scenarios` and committed to the repo.
+Every preset has a short URL pair: `/s/<slug>` opens the scenario in the
+canvas editor, `/s/<slug>.yaml` is the runnable YAML for the CLI. Browse
+the full catalog at `/run-locally`. The YAML files are generated from
+`public/scenarios/presets/*.scenario.json` by `npm run build:scenarios`
+and committed to the repo.
 
 ### CLI destinations (optional)
 

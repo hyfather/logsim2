@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Convert each `public/scenarios/presets/<slug>.scenario.json` into a runnable
-// engine YAML at `public/scenarios/yaml/<slug>.scenario.yaml`. The CLI can
-// fetch these directly via `logsim run https://logsim.app/scenarios/yaml/<slug>.scenario.yaml`.
+// engine YAML at `public/s/<slug>.yaml`. The CLI can fetch these directly via
+// `logsim run https://logsim.app/s/<slug>.yaml`, and `/s/<slug>` opens the
+// same scenario in the canvas editor.
 //
 // The presets follow the AI-emitted "proposed scenario" shape: nodes
 // (vpc/subnet/service), edges, and an optional timeline with per-lane behavior
@@ -9,7 +10,7 @@
 // virtual_server), services with explicit hosts, connections, and per-service
 // timelines. This script bridges the two.
 
-import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs'
 import { resolve, dirname, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import yaml from 'js-yaml'
@@ -17,8 +18,13 @@ import yaml from 'js-yaml'
 const here = dirname(fileURLToPath(import.meta.url))
 const root = resolve(here, '..')
 const presetsDir = resolve(root, 'public/scenarios/presets')
-const outDir = resolve(root, 'public/scenarios/yaml')
+const outDir = resolve(root, 'public/s')
+const legacyDir = resolve(root, 'public/scenarios/yaml')
+
 mkdirSync(outDir, { recursive: true })
+// Sweep the prior layout (`public/scenarios/yaml/*.scenario.yaml`) so stale
+// files don't ship in production after a regeneration.
+if (existsSync(legacyDir)) rmSync(legacyDir, { recursive: true, force: true })
 
 // ── Defaults per service type ────────────────────────────────────────────────
 //
@@ -305,7 +311,7 @@ for (const entry of presetIndex.scenarios) {
   }
 
   const slug = entry.file.replace(/\.scenario\.json$/i, '')
-  const yamlFile = `${slug}.scenario.yaml`
+  const yamlFile = `${slug}.yaml`
   const outPath = resolve(outDir, yamlFile)
 
   try {
