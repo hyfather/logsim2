@@ -63,9 +63,12 @@ func newRunCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "run",
+		Use:   "run [scenario.yaml]",
 		Short: "Run a simulation and emit logs",
 		Long: `Run executes a scenario and emits log entries.
+
+The scenario YAML is the primary argument — pass it positionally, or use
+the legacy --scenario flag.
 
 Stdout is the default — pipe or redirect as you like. Pass -o/--out to write
 to a file (or "-" for stdout), or --to to forward to one or more named
@@ -73,28 +76,40 @@ destinations from the dotfile (which is entirely optional).
 
 Examples:
   # stdout (default) — pipe into anything
-  logsim run --scenario scenarios/web-service.yaml | jq .
+  logsim run scenarios/web-service.yaml | jq .
 
   # emit OCSF or OTEL to stdout
-  logsim run --scenario scenarios/web-service.yaml --ocsf
-  logsim run --scenario scenarios/web-service.yaml --otel
+  logsim run scenarios/web-service.yaml --ocsf
+  logsim run scenarios/web-service.yaml --otel
 
   # write to a file (format inferred from .ocsf.* / .otel.* suffix)
-  logsim run --scenario scenarios/web-service.yaml -o /tmp/logs.jsonl
-  logsim run --scenario scenarios/web-service.yaml -o /tmp/logs.ocsf.json
+  logsim run scenarios/web-service.yaml -o /tmp/logs.jsonl
+  logsim run scenarios/web-service.yaml -o /tmp/logs.ocsf.json
 
   # forward to a configured destination (opt-in via --to)
-  logsim run --scenario scenarios/web-service.yaml --to prod-cribl
-  logsim run --scenario scenarios/web-service.yaml --to all
+  logsim run scenarios/web-service.yaml --to prod-cribl
+  logsim run scenarios/web-service.yaml --to all
 
   # forward and keep a local copy
-  logsim run --scenario scenarios/web-service.yaml --to prod-cribl -o ./trace.jsonl`,
+  logsim run scenarios/web-service.yaml --to prod-cribl -o ./trace.jsonl`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if listFormats {
 				for _, f := range validFormats {
 					fmt.Fprintln(cmd.OutOrStdout(), f)
 				}
 				return nil
+			}
+
+			// Resolve scenario from the positional arg or legacy --scenario flag.
+			switch {
+			case len(args) == 1 && scenarioPath == "":
+				scenarioPath = args[0]
+			case len(args) == 1 && scenarioPath != "" && scenarioPath != args[0]:
+				return fmt.Errorf("scenario specified twice: positional %q and --scenario %q",
+					args[0], scenarioPath)
+			case len(args) == 0 && scenarioPath == "":
+				return errors.New("scenario is required: pass it positionally (`logsim run path/to/scenario.yaml`) or via --scenario")
 			}
 
 			// Resolve format shortcuts before validation.
@@ -170,8 +185,7 @@ Examples:
 		},
 	}
 
-	cmd.Flags().StringVar(&scenarioPath, "scenario", "", "path to scenario YAML (required)")
-	_ = cmd.MarkFlagRequired("scenario")
+	cmd.Flags().StringVar(&scenarioPath, "scenario", "", "path to scenario YAML (or pass it positionally)")
 	cmd.Flags().IntVar(&ticks, "ticks", 100, "number of ticks to emit")
 	cmd.Flags().StringVar(&tickInterval, "tick-interval", "1s", "simulated time per tick")
 	cmd.Flags().Float64Var(&rate, "rate", 0, "wall-clock pacing multiplier (0 = instant)")

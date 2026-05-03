@@ -63,7 +63,7 @@ production routing.
 To run the CLI (independent of Vercel):
 
 ```bash
-go run ./cmd/logsim run --scenario scenarios/web-service.yaml --ticks 60
+go run ./cmd/logsim run scenarios/web-service.yaml --ticks 60
 ```
 
 ### CLI destinations (optional)
@@ -89,11 +89,11 @@ Then opt in to a destination with `--to`:
 
 ```bash
 # pick one or more by name (or `all` for every enabled destination)
-go run ./cmd/logsim run --scenario scenarios/web-service.yaml --to prod-cribl
-go run ./cmd/logsim run --scenario scenarios/web-service.yaml --to prod-cribl,staging
+go run ./cmd/logsim run scenarios/web-service.yaml --to prod-cribl
+go run ./cmd/logsim run scenarios/web-service.yaml --to prod-cribl,staging
 
 # forward and keep a local copy at the same time
-go run ./cmd/logsim run --scenario scenarios/web-service.yaml --to prod-cribl -o ./trace.jsonl
+go run ./cmd/logsim run scenarios/web-service.yaml --to prod-cribl -o ./trace.jsonl
 ```
 
 #### Output targets
@@ -102,9 +102,9 @@ go run ./cmd/logsim run --scenario scenarios/web-service.yaml --to prod-cribl -o
 repeat / comma-separate to fan out:
 
 ```bash
-go run ./cmd/logsim run --scenario scenarios/web-service.yaml -o /tmp/logs.jsonl
-go run ./cmd/logsim run --scenario scenarios/web-service.yaml -o -            # explicit stdout
-go run ./cmd/logsim run --scenario scenarios/web-service.yaml -o a.jsonl,b.jsonl
+go run ./cmd/logsim run scenarios/web-service.yaml -o /tmp/logs.jsonl
+go run ./cmd/logsim run scenarios/web-service.yaml -o -            # explicit stdout
+go run ./cmd/logsim run scenarios/web-service.yaml -o a.jsonl,b.jsonl
 ```
 
 #### Schema (OCSF, OTEL, …)
@@ -112,8 +112,8 @@ go run ./cmd/logsim run --scenario scenarios/web-service.yaml -o a.jsonl,b.jsonl
 `--format` selects the wire schema. Two convenience shortcuts:
 
 ```bash
-go run ./cmd/logsim run --scenario scenarios/web-service.yaml --ocsf
-go run ./cmd/logsim run --scenario scenarios/web-service.yaml --otel
+go run ./cmd/logsim run scenarios/web-service.yaml --ocsf
+go run ./cmd/logsim run scenarios/web-service.yaml --otel
 go run ./cmd/logsim run --list-formats        # prints valid --format values
 ```
 
@@ -121,7 +121,7 @@ When you write to a file, the format is auto-inferred from a `.ocsf.*` or
 `.otel.*` suffix unless `--format` is set explicitly:
 
 ```bash
-go run ./cmd/logsim run --scenario scenarios/web-service.yaml -o trace.ocsf.json
+go run ./cmd/logsim run scenarios/web-service.yaml -o trace.ocsf.json
 # logsim: inferred --format=ocsf from trace.ocsf.json
 ```
 
