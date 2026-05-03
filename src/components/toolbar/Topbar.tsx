@@ -334,6 +334,11 @@ export function Topbar() {
       })
       if (result.episode) setEpisode(result.episode)
       window.dispatchEvent(new CustomEvent('logsim-autosave'))
+      // Reflect the loaded preset in the address bar so the URL is shareable.
+      // Use history.replaceState (not Next router) so we don't trigger a route
+      // transition that would dismount the editor and re-fetch the preset.
+      const slug = entry.file.replace(/\.scenario\.json$/, '')
+      window.history.replaceState(null, '', `/s/${slug}`)
     } catch (err) {
       alert(`Failed to load preset scenario: ${String(err)}`)
     }
