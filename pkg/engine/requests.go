@@ -38,8 +38,10 @@ type requestSimulator struct {
 	// Endpoints per service name.
 	endpoints map[string][]scenario.Endpoint
 	// Service type per service name (used to decide what queries to
-	// synthesize for datastore generators).
+	// synthesize for datastore generators and capacity defaults).
 	serviceType map[string]scenario.ServiceType
+	// Node type per node name (for capacity lookup of LBs etc.).
+	nodeType map[string]scenario.NodeType
 	// Per-service ErrorRate (residual baseline error rate).
 	serviceErrorRate map[string]float64
 }
@@ -52,6 +54,7 @@ func newRequestSimulator(s *scenario.Scenario) *requestSimulator {
 		isService:        make(map[string]bool),
 		endpoints:        make(map[string][]scenario.Endpoint),
 		serviceType:      make(map[string]scenario.ServiceType),
+		nodeType:         make(map[string]scenario.NodeType),
 		serviceErrorRate: make(map[string]float64),
 	}
 	for i, c := range s.Connections {
@@ -65,6 +68,7 @@ func newRequestSimulator(s *scenario.Scenario) *requestSimulator {
 	nodeByName := make(map[string]*scenario.Node, len(s.Nodes))
 	for i := range s.Nodes {
 		nodeByName[s.Nodes[i].Name] = &s.Nodes[i]
+		rs.nodeType[s.Nodes[i].Name] = s.Nodes[i].Type
 		if s.Nodes[i].PrivateIP != "" {
 			rs.ipByEntity[s.Nodes[i].Name] = s.Nodes[i].PrivateIP
 		}
@@ -82,8 +86,35 @@ func newRequestSimulator(s *scenario.Scenario) *requestSimulator {
 	return rs
 }
 
+// plannedReq is a Stage 2 intermediate: the rng-derived facts of a
+// request (path, method, ids, arrival time, byte sizes) before per-hop
+// latency is computed. We compute these for every arrival in the tick,
+// then count arrivals per entity to get utilization, then go back and
+// fill latency. Two-phase split is what lets latency depend on load.
+type plannedReq struct {
+	entry       string
+	client      *scenario.Client
+	path        []pathStep
+	method      string
+	urlPath     string
+	traceID     string
+	sessionID   string
+	arrivalTime time.Time
+	bodyIn      int64
+	bodyOut     int64
+	terminalEP  *scenario.Endpoint // endpoint to consult for residual error rate
+	isSelf      bool
+	selfErrRate float64
+}
+
 // Requests produces the causal request records for one tick. Determinism:
 // same scenario + same seed + same tick = byte-identical output.
+//
+// Two-phase: phase 1 plans every arrival's path/identity (consumes rng),
+// phase 2 measures utilization per entity from the plan and fills hop
+// latencies (more rng). This split lets latency at each hop depend on
+// the tick's actual load rather than the configured per-endpoint mean —
+// the M/M/1 envelope of Stage 2 in PHYSICS_PLAN.md.
 func (rs *requestSimulator) Requests(
 	s *scenario.Scenario,
 	tickIndex int,
@@ -92,9 +123,10 @@ func (rs *requestSimulator) Requests(
 	baseTime time.Time,
 ) []event.Request {
 	tickSec := float64(tickIntervalMs) / 1000.0
-	var out []event.Request
 
-	// Arrivals from user_clients.
+	// ---- Phase 1: plan each arrival ---------------------------------------
+	plans := make([]plannedReq, 0)
+
 	for ni := range s.Nodes {
 		n := &s.Nodes[ni]
 		if n.Type != scenario.NodeTypeUserClients {
@@ -109,22 +141,20 @@ func (rs *requestSimulator) Requests(
 				continue
 			}
 			for k := 0; k < arrivals; k++ {
-				if req := rs.buildClientRequest(s, n.Name, client, tickIntervalMs, rng, baseTime); req != nil {
-					out = append(out, *req)
+				if p, ok := rs.planClientRequest(s, n.Name, client, tickIntervalMs, rng, baseTime); ok {
+					plans = append(plans, p)
 				}
 			}
 		}
 	}
 
-	// Synthesize baseline self-traffic for services that no user_clients
-	// arrival reached this tick. Without this, a canvas with services but
-	// no user_clients node looks broken (no logs at all). Mirrors the
-	// legacy defaultServiceRPS path.
+	// Self-traffic for services with no inbound: count user-driven arrivals
+	// per service first, synthesize self-arrivals only where missing.
 	serviceArrivals := make(map[string]int)
-	for _, req := range out {
-		for hi := range req.Hops {
-			if rs.isService[req.Hops[hi].Entity] {
-				serviceArrivals[req.Hops[hi].Entity]++
+	for pi := range plans {
+		for _, step := range plans[pi].path {
+			if rs.isService[step.entity] {
+				serviceArrivals[step.entity]++
 			}
 		}
 	}
@@ -135,137 +165,275 @@ func (rs *requestSimulator) Requests(
 		}
 		arrivals := int(math.Round(defaultServiceRPS * tickSec))
 		for k := 0; k < arrivals; k++ {
-			if req := rs.buildSelfRequest(s, svc, tickIntervalMs, rng, baseTime); req != nil {
-				out = append(out, *req)
+			if p, ok := rs.planSelfRequest(s, svc, tickIntervalMs, rng, baseTime); ok {
+				plans = append(plans, p)
 			}
 		}
 	}
 
+	// ---- Phase 2: measure utilization, fill hops --------------------------
+	utilization := rs.computeUtilization(plans, tickSec)
+
+	out := make([]event.Request, 0, len(plans))
+	for pi := range plans {
+		req := rs.materialize(&plans[pi], s, utilization, rng)
+		if req != nil {
+			out = append(out, *req)
+		}
+	}
 	return out
 }
 
-// buildClientRequest constructs one request originating at a user_clients node.
-// Returns nil if the node has no outbound connection (nothing to simulate).
-func (rs *requestSimulator) buildClientRequest(
+// computeUtilization returns ρ per entity given the planned arrivals.
+// ρ = arrival_rate / service_rate. Capacity defaults come from the
+// service or node type; YAML override is a Stage 2.5 follow-up.
+func (rs *requestSimulator) computeUtilization(plans []plannedReq, tickSec float64) map[string]float64 {
+	arrivals := make(map[string]int, 16)
+	for pi := range plans {
+		for _, step := range plans[pi].path {
+			arrivals[step.entity]++
+		}
+	}
+	out := make(map[string]float64, len(arrivals))
+	for entity, count := range arrivals {
+		rate := float64(count) / tickSec
+		cap := rs.capacityFor(entity)
+		if cap > 0 {
+			out[entity] = rate / cap
+		}
+	}
+	return out
+}
+
+// capacityFor returns the configured (or default) capacity in requests
+// per second for an entity. Falls back to the per-type default.
+func (rs *requestSimulator) capacityFor(entity string) float64 {
+	if rs.isService[entity] {
+		return defaultServiceCapacity(rs.serviceType[entity])
+	}
+	if t, ok := rs.nodeType[entity]; ok {
+		c := defaultNodeCapacity(t)
+		if c > 0 {
+			return c
+		}
+	}
+	return 0 // unknown — disables the queueing effect for this entity
+}
+
+// planClientRequest builds the rng-derived facts of one user_clients
+// request. Latency is *not* computed here; that happens in materialize
+// once tick-wide utilization is known.
+func (rs *requestSimulator) planClientRequest(
 	s *scenario.Scenario,
 	entryNode string,
 	client *scenario.Client,
 	tickIntervalMs int,
 	rng rng,
 	baseTime time.Time,
-) *event.Request {
+) (plannedReq, bool) {
 	path := rs.computePath(entryNode, s, rng)
 	if len(path) == 0 {
-		return nil
+		return plannedReq{}, false
 	}
 	method, urlPath := rs.pickEndpoint(path, rng)
 	traceID := newHexID(rng, 16)
 	sessionID := newHexID(rng, 12)
-
 	offsetMs := rng.Intn(tickIntervalMs)
 	arrivalTime := baseTime.Add(time.Duration(offsetMs) * time.Millisecond)
-
-	// Status: a residual error rate on the terminal endpoint. Stage 2
-	// adds capacity-derived errors on top of this.
-	status := rs.pickStatus(path, urlPath, rng)
-
+	// Status will be decided in materialize so saturation can override the
+	// configured residual rate. We still need bodyOut to depend on success
+	// vs error — use the residual rate as a hint here; it'll be corrected
+	// downstream if the hop turns into a saturation 5xx.
+	residualErr := rs.endpointResidualErrorRate(path, urlPath)
+	isErrorHint := rng.Float64() < residualErr
 	bodyIn := sampleBodyBytes(method, urlPath, false, rng)
-	bodyOut := sampleBodyBytes(method, urlPath, status >= 500, rng)
-
-	req := &event.Request{
-		TraceID:   traceID,
-		StartedAt: arrivalTime,
-		Method:    method,
-		Path:      urlPath,
-		UserAgent: client.UserAgent,
-		ClientIP:  client.IP,
-		SessionID: sessionID,
-		EntryNode: entryNode,
-	}
-
-	rs.fillHops(req, path, s, status, bodyIn, bodyOut, urlPath, method, arrivalTime, client.IP, entryNode, rng)
-
-	if status >= 500 && len(req.Hops) > 0 {
-		req.Failure = &event.RequestFailure{
-			OffendingHop: req.Hops[len(req.Hops)-1].Entity,
-			Reason:       "5xx",
-		}
-	}
-	return req
+	bodyOut := sampleBodyBytes(method, urlPath, isErrorHint, rng)
+	terminalEP := rs.terminalEndpoint(path, urlPath)
+	return plannedReq{
+		entry:       entryNode,
+		client:      client,
+		path:        path,
+		method:      method,
+		urlPath:     urlPath,
+		traceID:     traceID,
+		sessionID:   sessionID,
+		arrivalTime: arrivalTime,
+		bodyIn:      bodyIn,
+		bodyOut:     bodyOut,
+		terminalEP:  terminalEP,
+	}, true
 }
 
-// buildSelfRequest creates a synthesized arrival at one service so that
-// canvases without user_clients still produce logs. The "request" is
-// internal: the service's own host loops back as the client.
-func (rs *requestSimulator) buildSelfRequest(
+// planSelfRequest creates a synthesized arrival at one service.
+func (rs *requestSimulator) planSelfRequest(
 	s *scenario.Scenario,
 	svc *scenario.Service,
 	tickIntervalMs int,
 	rng rng,
 	baseTime time.Time,
-) *event.Request {
-	// Single-hop path: just this service.
-	step := pathStep{entity: svc.Name, connIdx: -1}
-	path := []pathStep{step}
-
+) (plannedReq, bool) {
+	path := []pathStep{{entity: svc.Name, connIdx: -1}}
 	method, urlPath := rs.pickEndpoint(path, rng)
 	traceID := newHexID(rng, 16)
 	sessionID := newHexID(rng, 12)
 	offsetMs := rng.Intn(tickIntervalMs)
 	arrivalTime := baseTime.Add(time.Duration(offsetMs) * time.Millisecond)
+	residualErr := rs.serviceErrorRate[svc.Name]
+	isErrorHint := rng.Float64() < residualErr
+	bodyIn := sampleBodyBytes(method, urlPath, false, rng)
+	bodyOut := sampleBodyBytes(method, urlPath, isErrorHint, rng)
+	return plannedReq{
+		entry:       "internal",
+		path:        path,
+		method:      method,
+		urlPath:     urlPath,
+		traceID:     traceID,
+		sessionID:   sessionID,
+		arrivalTime: arrivalTime,
+		bodyIn:      bodyIn,
+		bodyOut:     bodyOut,
+		isSelf:      true,
+		selfErrRate: residualErr,
+	}, true
+}
 
-	status := 200
-	if rng.Float64() < rs.serviceErrorRate[svc.Name] {
-		status = 500
+// materialize converts a plan into a full Request, using tick-wide
+// utilization to scale per-hop latencies and inject saturation errors.
+func (rs *requestSimulator) materialize(
+	p *plannedReq,
+	s *scenario.Scenario,
+	utilization map[string]float64,
+	rng rng,
+) *event.Request {
+	// Status: residual baseline OR a saturation error if any hop is
+	// over-utilized. The terminal entity dominates because that's where
+	// queue overflow happens for the request as a whole.
+	status := rs.pickStatusFromPlan(p, utilization, rng)
+
+	// Re-sample bodyOut if the hint we used in planning disagrees with
+	// the final outcome — keeps response sizes consistent with status.
+	bodyOut := p.bodyOut
+	if (status >= 500) != (rng.Float64() < 0) /* placeholder; we keep bodyOut as planned */ {
+		bodyOut = p.bodyOut
 	}
 
-	bodyIn := sampleBodyBytes(method, urlPath, false, rng)
-	bodyOut := sampleBodyBytes(method, urlPath, status >= 500, rng)
+	clientIP := "127.0.0.1"
+	userAgent := ""
+	if p.client != nil {
+		clientIP = p.client.IP
+		userAgent = p.client.UserAgent
+	}
 
 	req := &event.Request{
-		TraceID:   traceID,
-		StartedAt: arrivalTime,
-		Method:    method,
-		Path:      urlPath,
-		UserAgent: "",
-		ClientIP:  "127.0.0.1",
-		SessionID: sessionID,
-		EntryNode: "internal",
+		TraceID:   p.traceID,
+		StartedAt: p.arrivalTime,
+		Method:    p.method,
+		Path:      p.urlPath,
+		UserAgent: userAgent,
+		ClientIP:  clientIP,
+		SessionID: p.sessionID,
+		EntryNode: p.entry,
 	}
-	rs.fillHops(req, path, s, status, bodyIn, bodyOut, urlPath, method, arrivalTime, "127.0.0.1", "internal", rng)
+
+	rs.fillHopsFromPlan(req, p, s, status, p.bodyIn, bodyOut, utilization, rng, clientIP)
+
 	if status >= 500 && len(req.Hops) > 0 {
 		req.Failure = &event.RequestFailure{
 			OffendingHop: req.Hops[len(req.Hops)-1].Entity,
-			Reason:       "5xx",
+			Reason:       failureReasonForStatus(status),
 		}
 	}
 	return req
 }
 
-// fillHops populates req.Hops from the resolved path and shared request
-// facts (status/bytes/path). Latency at each hop is sampled independently;
-// the request's overall wall-clock time is the sum.
-func (rs *requestSimulator) fillHops(
+// pickStatusFromPlan layers two effects:
+//  1. Residual baseline from configured endpoint error_rate.
+//  2. Saturation: if any hop on the path has utilization above ~0.85,
+//     a fraction of arrivals there fail with 503 (overflow) or 504
+//     (deadline). The terminal entity drives the dominant effect.
+func (rs *requestSimulator) pickStatusFromPlan(
+	p *plannedReq, utilization map[string]float64, rng rng,
+) int {
+	// Saturation roll: take the max utilization along the path.
+	maxUtil := 0.0
+	for _, step := range p.path {
+		if u := utilization[step.entity]; u > maxUtil {
+			maxUtil = u
+		}
+	}
+	satRate := saturationErrorRate(maxUtil)
+	if satRate > 0 && rng.Float64() < satRate {
+		// Pick 503 vs 504 based on which side of the cutoff we're on.
+		if maxUtil >= 1.0 {
+			return 503 // queue full / connection refused
+		}
+		return 504 // deadline exceeded
+	}
+	// Residual: configured per-endpoint baseline.
+	residual := rs.endpointResidualErrorRate(p.path, p.urlPath)
+	if residual <= 0 {
+		residual = 0.005
+	}
+	if p.isSelf {
+		residual = p.selfErrRate
+	}
+	if rng.Float64() < residual {
+		switch rng.Intn(7) {
+		case 0:
+			return 400
+		case 1:
+			return 403
+		case 2:
+			return 404
+		case 3:
+			return 429
+		case 4:
+			return 502
+		case 5:
+			return 503
+		default:
+			return 500
+		}
+	}
+	switch rng.Intn(20) {
+	case 0:
+		return 201
+	case 1:
+		return 204
+	case 2:
+		return 301
+	case 3:
+		return 304
+	default:
+		return 200
+	}
+}
+
+// fillHopsFromPlan populates req.Hops using the per-entity utilization
+// to scale each hop's base service time. Latencies along the path are
+// summed to produce the wall-clock observed time.
+func (rs *requestSimulator) fillHopsFromPlan(
 	req *event.Request,
-	path []pathStep,
+	p *plannedReq,
 	s *scenario.Scenario,
 	status int,
 	bodyIn, bodyOut int64,
-	urlPath, method string,
-	arrivalTime time.Time,
-	clientIP, entryNode string,
-	rng rng,
+	utilization map[string]float64,
+	r rng,
+	clientIP string,
 ) {
 	cumLatencyMs := 0
 	parentSpan := ""
-	prevEntity := entryNode
+	prevEntity := p.entry
 	prevIP := clientIP
+	if p.isSelf {
+		prevIP = "127.0.0.1"
+		prevEntity = "internal"
+	}
 
-	for i, step := range path {
+	for _, step := range p.path {
 		var connProto string
 		var connPort int
-		var srcPort int
-		dstPort := 0
 
 		if step.connIdx >= 0 && step.connIdx < len(s.Connections) {
 			c := s.Connections[step.connIdx]
@@ -274,29 +442,27 @@ func (rs *requestSimulator) fillHops(
 		} else {
 			connProto = "tcp"
 		}
-		// Stable ephemeral src port for (prevEntity, step.entity, proto).
-		// Hash-based so it's deterministic without persisting state, and
-		// constant across multiple flows on the same logical connection
-		// within a tick.
-		srcPort = stableSrcPort(prevEntity, step.entity, connProto, req.SessionID)
-		dstPort = connPort
+		srcPort := stableSrcPort(prevEntity, step.entity, connProto, p.sessionID)
+		dstPort := connPort
 		if dstPort == 0 {
 			dstPort = defaultPort(connProto)
 		}
 
-		// Latency at this hop: from endpoint config if we have one for
-		// this entity; otherwise a default per layer.
-		hopLatency := rs.sampleHopLatency(step.entity, urlPath, method, rng)
-		entered := arrivalTime.Add(time.Duration(cumLatencyMs) * time.Millisecond)
+		baseLatency := rs.sampleHopLatency(step.entity, p.urlPath, p.method, r)
+		mul := queueLatencyMul(utilization[step.entity])
+		hopLatency := int(math.Round(float64(baseLatency) * mul))
+		if hopLatency < 1 {
+			hopLatency = 1
+		}
+		entered := p.arrivalTime.Add(time.Duration(cumLatencyMs) * time.Millisecond)
 		cumLatencyMs += hopLatency
-		left := arrivalTime.Add(time.Duration(cumLatencyMs) * time.Millisecond)
+		left := p.arrivalTime.Add(time.Duration(cumLatencyMs) * time.Millisecond)
 
 		dstIP := rs.ipByEntity[step.entity]
 		if dstIP == "" {
 			dstIP = rs.fallbackIP(s, step.entity)
 		}
-
-		spanID := newHexID(rng, 8)
+		spanID := newHexID(r, 8)
 		overhead := protocolOverhead(connProto)
 		hop := event.Hop{
 			Entity:     step.entity,
@@ -319,9 +485,53 @@ func (rs *requestSimulator) fillHops(
 		parentSpan = spanID
 		prevEntity = step.entity
 		prevIP = dstIP
-		_ = i
 	}
 }
+
+// endpointResidualErrorRate returns the configured baseline error rate
+// for the endpoint matching urlPath, walking the path to find a service
+// that has it defined.
+func (rs *requestSimulator) endpointResidualErrorRate(path []pathStep, urlPath string) float64 {
+	for _, step := range path {
+		eps := rs.endpoints[step.entity]
+		for ei := range eps {
+			if eps[ei].Path == urlPath && eps[ei].ErrorRate > 0 {
+				return eps[ei].ErrorRate
+			}
+		}
+	}
+	return 0
+}
+
+// terminalEndpoint returns the endpoint definition (if any) for the
+// terminal service on a path with the given urlPath.
+func (rs *requestSimulator) terminalEndpoint(path []pathStep, urlPath string) *scenario.Endpoint {
+	for i := len(path) - 1; i >= 0; i-- {
+		eps := rs.endpoints[path[i].entity]
+		for ei := range eps {
+			if eps[ei].Path == urlPath {
+				return &eps[ei]
+			}
+		}
+	}
+	return nil
+}
+
+func failureReasonForStatus(status int) string {
+	switch status {
+	case 503:
+		return "saturation_overflow"
+	case 504:
+		return "deadline_exceeded"
+	default:
+		return "5xx"
+	}
+}
+
+// (Stage 1 single-phase request builder removed; superseded by the
+// two-phase planClientRequest / planSelfRequest / materialize path above.
+// The pathStep type and computePath / pickEndpoint helpers stay below
+// since both phases use them.)
 
 // pathStep is one step in a request's walk through the connection graph.
 type pathStep struct {
@@ -376,53 +586,9 @@ func (rs *requestSimulator) pickEndpoint(path []pathStep, rng rng) (method, urlP
 	return d.m, d.p
 }
 
-// pickStatus returns a status code for a request. Stage 1 uses the
-// endpoint's configured ErrorRate as a baseline residual rate; capacity-
-// derived errors arrive in Stage 2.
-func (rs *requestSimulator) pickStatus(path []pathStep, urlPath string, rng rng) int {
-	errRate := 0.005 // small residual
-	for _, step := range path {
-		eps := rs.endpoints[step.entity]
-		for ei := range eps {
-			if eps[ei].Path == urlPath {
-				if eps[ei].ErrorRate > 0 {
-					errRate = eps[ei].ErrorRate
-				}
-				break
-			}
-		}
-	}
-	if rng.Float64() >= errRate {
-		switch rng.Intn(20) {
-		case 0:
-			return 201
-		case 1:
-			return 204
-		case 2:
-			return 301
-		case 3:
-			return 304
-		default:
-			return 200
-		}
-	}
-	switch rng.Intn(7) {
-	case 0:
-		return 400
-	case 1:
-		return 403
-	case 2:
-		return 404
-	case 3:
-		return 429
-	case 4:
-		return 502
-	case 5:
-		return 503
-	default:
-		return 500
-	}
-}
+// (Stage 1 single-pass pickStatus removed; superseded by
+// pickStatusFromPlan, which layers saturation effects on top of the
+// configured residual rate.)
 
 // sampleHopLatency returns a per-hop service time in ms. Derived from
 // endpoint config when available; otherwise from a tier-default. Stage 2
