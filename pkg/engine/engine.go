@@ -141,13 +141,17 @@ func (e *Engine) Run(ctx context.Context, totalTicks int, sinkList []sinks.Sink)
 		}
 
 		ts := e.cfg.StartTime.Add(time.Duration(tick) * tickInterval)
-		flows := e.traffic.Flows(e.scenario, tick, e.cfg.TickIntervalMs, e.rng, ts)
+		// Stage 1 of PHYSICS_PLAN.md: requests are the per-tick primitive,
+		// flows are derived. Both views are populated on TickContext so
+		// generators can consume whichever fits their model.
+		requests, flows := e.traffic.RequestsAndFlows(e.scenario, tick, e.cfg.TickIntervalMs, e.rng, ts)
 		baseCtx := event.TickContext{
 			TickIndex:      tick,
 			Timestamp:      ts,
 			TickIntervalMs: e.cfg.TickIntervalMs,
 			Rng:            e.rng,
 			AllFlows:       flows,
+			Requests:       requests,
 		}
 		entries := e.generateTick(flows, baseCtx)
 

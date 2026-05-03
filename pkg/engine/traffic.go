@@ -1,260 +1,155 @@
 package engine
 
 import (
-	"math"
-	"net"
 	"time"
 
 	"github.com/nikhilm/logsim2/pkg/event"
 	"github.com/nikhilm/logsim2/pkg/scenario"
 )
 
-// trafficSimulator computes per-tick Flows for all connections in a scenario.
+// trafficSimulator wraps the request simulator (Stage 1 of PHYSICS_PLAN.md)
+// and exposes the per-tick aggregate flow view that VPC flow logs and any
+// remaining flow-consuming generators rely on. Flows are derived from the
+// per-request Hop chain so the two views are consistent by construction —
+// a connection's RequestCount equals the number of hops on it this tick,
+// and bytes are the sum of hop bytes within a small overhead envelope.
 type trafficSimulator struct {
-	// Pre-computed per-connection pattern and base RPS.
-	connMeta []connMeta
-	// IP pools per entity name (drawn from private_ip or subnet CIDR).
-	ipByEntity map[string]string
-	// Subnet CIDR blocks for auto-assigning IPs.
-	subnetCIDR map[string]string
-}
-
-type connMeta struct {
-	pat    pattern
-	baseRPS float64
+	rs *requestSimulator
 }
 
 func newTrafficSimulator(s *scenario.Scenario) *trafficSimulator {
-	ts := &trafficSimulator{
-		connMeta:   make([]connMeta, len(s.Connections)),
-		ipByEntity: make(map[string]string),
-		subnetCIDR: make(map[string]string),
-	}
-
-	// Index subnet CIDRs.
-	for _, n := range s.Nodes {
-		if n.Type == scenario.NodeTypeSubnet && n.CIDRBlock != "" {
-			ts.subnetCIDR[n.Name] = n.CIDRBlock
-		}
-	}
-
-	// Build IP map for nodes that have a private_ip or belong to a subnet.
-	nodeByName := make(map[string]*scenario.Node, len(s.Nodes))
-	for i := range s.Nodes {
-		nodeByName[s.Nodes[i].Name] = &s.Nodes[i]
-	}
-	for _, n := range s.Nodes {
-		if n.PrivateIP != "" {
-			ts.ipByEntity[n.Name] = n.PrivateIP
-		}
-	}
-	for _, svc := range s.Services {
-		if host, ok := nodeByName[svc.Host]; ok && host.PrivateIP != "" {
-			ts.ipByEntity[svc.Name] = host.PrivateIP
-		}
-	}
-
-	// Compute base RPS and pattern for each connection.
-	// Source of RPS: if source is a user_clients node → sum of client RPS.
-	// Otherwise → use total inbound RPS (propagated; computed at tick time).
-	userRPS := make(map[string]float64) // user_clients node name → total RPS
-	clientPattern := make(map[string]pattern)
-	for _, n := range s.Nodes {
-		if n.Type != scenario.NodeTypeUserClients {
-			continue
-		}
-		var total float64
-		pat := patternSteady
-		for _, c := range n.Clients {
-			total += c.RPS
-			pat = matchPattern(c.TrafficPattern)
-		}
-		userRPS[n.Name] = total
-		clientPattern[n.Name] = pat
-	}
-
-	for i, c := range s.Connections {
-		rps := userRPS[c.Source]
-		pat := clientPattern[c.Source]
-		ts.connMeta[i] = connMeta{pat: pat, baseRPS: rps}
-	}
-
-	return ts
+	return &trafficSimulator{rs: newRequestSimulator(s)}
 }
 
-// Flows generates traffic flows for one tick.
-// It propagates traffic through intermediate nodes (e.g. load balancers)
-// so downstream generators see realistic inbound flows.
+// Flows produces per-tick aggregate flows. Internally it generates
+// Requests then aggregates the Hops by connection — so callers that only
+// want the aggregate view get a consistent result without separately
+// caring about the request graph.
+//
+// Note: callers that want both the requests and the flows should use
+// RequestsAndFlows to avoid generating requests twice (and to keep
+// determinism — generating twice would consume rng twice).
 func (ts *trafficSimulator) Flows(
 	s *scenario.Scenario,
 	tickIndex int,
 	tickIntervalMs int,
-	rng interface{ Float64() float64; Intn(int) int },
-	ts2 time.Time,
+	r rng,
+	t time.Time,
 ) []event.Flow {
-	tickSec := float64(tickIntervalMs) / 1000.0
+	requests := ts.rs.Requests(s, tickIndex, tickIntervalMs, r, t)
+	return flowsFromRequests(s, requests, t)
+}
 
-	// Phase 1: compute direct flows from user_clients.
-	// inbound[name] = total request count flowing into that entity this tick.
-	inbound := make(map[string]int, len(s.Connections))
+// RequestsAndFlows produces both views in a single rng pass. Engine.Run
+// uses this so it can populate TickContext.Requests and TickContext.AllFlows
+// without consuming rng twice.
+func (ts *trafficSimulator) RequestsAndFlows(
+	s *scenario.Scenario,
+	tickIndex int,
+	tickIntervalMs int,
+	r rng,
+	t time.Time,
+) ([]event.Request, []event.Flow) {
+	requests := ts.rs.Requests(s, tickIndex, tickIntervalMs, r, t)
+	return requests, flowsFromRequests(s, requests, t)
+}
 
-	flows := make([]event.Flow, 0, len(s.Connections)*2)
+// flowsFromRequests aggregates request Hops into per-connection per-tick
+// flows. One Flow per (ConnectionIdx) — or per (src,dst,proto) tuple for
+// hops with no connection index (synthesized self-traffic).
+func flowsFromRequests(s *scenario.Scenario, requests []event.Request, baseTime time.Time) []event.Flow {
+	type aggKey struct {
+		connIdx         int
+		src, dst, proto string
+		port            int
+	}
+	type agg struct {
+		req   int
+		errs  int
+		bsent int64
+		brecv int64
+		srcIP string
+		dstIP string
+		ts    time.Time
+	}
+	bucket := make(map[aggKey]*agg)
+	order := make([]aggKey, 0)
 
-	for i, c := range s.Connections {
-		meta := ts.connMeta[i]
-		if meta.baseRPS <= 0 {
-			continue // not directly from a user_clients; handled in phase 2
-		}
-		mult := multiplier(meta.pat, tickIndex, rng)
-		reqCount := int(math.Round(meta.baseRPS * tickSec * mult))
-		if reqCount < 0 {
-			reqCount = 0
-		}
-		errCount := int(math.Round(float64(reqCount) * 0.01))
-
-		f := event.Flow{
-			ConnectionIdx: i,
-			SourceName:    c.Source,
-			TargetName:    c.Target,
-			Protocol:      c.Protocol,
-			Port:          c.Port,
-			RequestCount:  reqCount,
-			BytesSent:     int64(reqCount) * int64(500+rng.Intn(2000)),
-			BytesReceived: int64(reqCount) * int64(200+rng.Intn(1000)),
-			ErrorCount:    errCount,
-			SrcIP:         ts.ipForEntity(c.Source, s),
-			DstIP:         ts.ipForEntity(c.Target, s),
-			Timestamp:     ts2,
-		}
-		flows = append(flows, f)
-		inbound[c.Target] += reqCount
+	// Index connections for fast (src,dst,proto)→idx lookup.
+	type ckey struct{ src, dst, proto string }
+	cidx := make(map[ckey]int, len(s.Connections))
+	for ci := range s.Connections {
+		c := &s.Connections[ci]
+		cidx[ckey{c.Source, c.Target, c.Protocol}] = ci
 	}
 
-	// Phase 2: propagate traffic through intermediate nodes.
-	// Any entity that received inbound traffic also forwards on its outbound connections
-	// (proportionally if there are multiple upstreams; for now distribute evenly).
-	outboundConns := make(map[string][]int) // entity → connection indices
-	for i, c := range s.Connections {
-		if ts.connMeta[i].baseRPS > 0 {
-			continue // already handled above
-		}
-		outboundConns[c.Source] = append(outboundConns[c.Source], i)
-	}
-
-	// Iterate until no new traffic propagates (handles simple chains, not cycles).
-	changed := true
-	for changed {
-		changed = false
-		for src, conns := range outboundConns {
-			total := inbound[src]
-			if total == 0 {
+	for ri := range requests {
+		r := &requests[ri]
+		for hi := range r.Hops {
+			h := &r.Hops[hi]
+			if h.SrcEntity == "" {
 				continue
 			}
-			perConn := total / len(conns)
-			if perConn == 0 {
-				perConn = 1
+			connIdx := -1
+			if v, ok := cidx[ckey{h.SrcEntity, h.Entity, h.Protocol}]; ok {
+				connIdx = v
 			}
-			for _, ci := range conns {
-				c := s.Connections[ci]
-				if inbound[c.Target] == 0 {
-					changed = true
-				}
-				errCount := int(math.Round(float64(perConn) * 0.01))
-				f := event.Flow{
-					ConnectionIdx: ci,
-					SourceName:    c.Source,
-					TargetName:    c.Target,
-					Protocol:      c.Protocol,
-					Port:          c.Port,
-					RequestCount:  perConn,
-					BytesSent:     int64(perConn) * int64(500+rng.Intn(2000)),
-					BytesReceived: int64(perConn) * int64(200+rng.Intn(1000)),
-					ErrorCount:    errCount,
-					SrcIP:         ts.ipForEntity(c.Source, s),
-					DstIP:         ts.ipForEntity(c.Target, s),
-					Timestamp:     ts2,
-				}
-				flows = append(flows, f)
-				inbound[c.Target] += perConn
+			var k aggKey
+			if connIdx >= 0 {
+				k = aggKey{connIdx: connIdx}
+			} else {
+				k = aggKey{connIdx: -1, src: h.SrcEntity, dst: h.Entity, proto: h.Protocol, port: h.DstPort}
 			}
-			// Zero out so we don't re-propagate this tick.
-			delete(outboundConns, src)
+			a, ok := bucket[k]
+			if !ok {
+				a = &agg{ts: baseTime, srcIP: h.SrcIP, dstIP: h.DstIP}
+				bucket[k] = a
+				order = append(order, k)
+			}
+			a.req++
+			if h.Status >= 500 {
+				a.errs++
+			}
+			a.bsent += h.BytesIn
+			a.brecv += h.BytesOut
+			if h.EnteredAt.Before(a.ts) {
+				a.ts = h.EnteredAt
+			}
 		}
 	}
 
-	// Phase 3: synthesize baseline self-traffic for services with no real
-	// inbound flows. Without this, a canvas that has services but no
-	// user_clients node produces only startup heartbeats — looks broken to
-	// the user. Real connections (when present) always win.
-	for i := range s.Services {
-		svc := &s.Services[i]
-		if inbound[svc.Name] > 0 {
-			continue
+	out := make([]event.Flow, 0, len(order))
+	for _, k := range order {
+		a := bucket[k]
+		flow := event.Flow{
+			ConnectionIdx: k.connIdx,
+			RequestCount:  a.req,
+			BytesSent:     a.bsent,
+			BytesReceived: a.brecv,
+			ErrorCount:    a.errs,
+			SrcIP:         a.srcIP,
+			DstIP:         a.dstIP,
+			Timestamp:     a.ts,
 		}
-		reqCount := int(math.Round(defaultServiceRPS * tickSec))
-		if reqCount <= 0 {
-			continue
+		if k.connIdx >= 0 && k.connIdx < len(s.Connections) {
+			c := s.Connections[k.connIdx]
+			flow.SourceName = c.Source
+			flow.TargetName = c.Target
+			flow.Protocol = c.Protocol
+			flow.Port = c.Port
+		} else {
+			flow.SourceName = k.src
+			flow.TargetName = k.dst
+			flow.Protocol = k.proto
+			flow.Port = k.port
 		}
-		errCount := int(math.Round(float64(reqCount) * 0.01))
-		flows = append(flows, event.Flow{
-			ConnectionIdx: -1,
-			SourceName:    "internal",
-			TargetName:    svc.Name,
-			Protocol:      "tcp",
-			RequestCount:  reqCount,
-			BytesSent:     int64(reqCount) * int64(500+rng.Intn(2000)),
-			BytesReceived: int64(reqCount) * int64(200+rng.Intn(1000)),
-			ErrorCount:    errCount,
-			SrcIP:         "127.0.0.1",
-			DstIP:         ts.ipForEntity(svc.Name, s),
-			Timestamp:     ts2,
-		})
-		inbound[svc.Name] = reqCount
+		out = append(out, flow)
 	}
-
-	return flows
+	return out
 }
 
-// defaultServiceRPS is the baseline request rate synthesized for services
-// that have no real inbound traffic. Picked so a single service on the
-// canvas produces ~10 logs/sec — enough to feel "live" without spamming.
+// defaultServiceRPS is the baseline arrival rate synthesized at services
+// with no upstream user_clients reaching them, so a canvas containing only
+// services still produces logs. Picked so a single service produces ~10
+// logs/sec — enough to feel "live" without spamming.
 const defaultServiceRPS = 10.0
-
-func (ts *trafficSimulator) ipForEntity(name string, s *scenario.Scenario) string {
-	if ip, ok := ts.ipByEntity[name]; ok {
-		return ip
-	}
-	// Try to find the entity's subnet and pick an IP from the CIDR.
-	for _, n := range s.Nodes {
-		if n.Name == name && n.Subnet != "" {
-			if cidr, ok := ts.subnetCIDR[n.Subnet]; ok {
-				return firstUsableIP(cidr)
-			}
-		}
-	}
-	// For user_clients, look up their first client's IP.
-	for _, n := range s.Nodes {
-		if n.Name == name && n.Type == scenario.NodeTypeUserClients && len(n.Clients) > 0 {
-			return n.Clients[0].IP
-		}
-	}
-	return "0.0.0.0"
-}
-
-func firstUsableIP(cidr string) string {
-	ip, ipNet, err := net.ParseCIDR(cidr)
-	if err != nil {
-		return "0.0.0.0"
-	}
-	ip = ip.Mask(ipNet.Mask)
-	// Increment to first usable host.
-	inc := make(net.IP, len(ip))
-	copy(inc, ip)
-	for i := len(inc) - 1; i >= 0; i-- {
-		inc[i]++
-		if inc[i] != 0 {
-			break
-		}
-	}
-	return inc.String()
-}
