@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const installScriptURL = "https://raw.githubusercontent.com/hyfather/logsim2/main/scripts/install.sh"
+const installScriptURL = "https://raw.githubusercontent.com/hyfather/logsim2/master/scripts/install.sh"
 
 func newUpgradeCmd() *cobra.Command {
 	var targetVersion string
