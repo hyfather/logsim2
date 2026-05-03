@@ -24,6 +24,13 @@ interface ScenarioState {
   edges: FlowEdge[]
   /** Increments every time loadScenario runs — observers (Canvas) use it to fitView. */
   loadCounter: number
+  /** Slug of the preset this scenario was loaded from (e.g. `/s/<slug>.yaml`),
+   *  or null if the scenario was created/imported by the user. Cleared on every
+   *  loadScenario; preset loaders re-set it via markPresetOrigin. */
+  presetSlug: string | null
+  /** YAML snapshot captured immediately after the preset loaded, used to detect
+   *  whether the user has modified the canned scenario. */
+  pristineYaml: string | null
   // Actions
   setMetadata: (metadata: Partial<ScenarioMetadata>) => void
   onNodesChange: (changes: NodeChange[]) => void
@@ -37,6 +44,7 @@ interface ScenarioState {
   renameNode: (id: string, label: string) => void
   reparentNode: (nodeId: string, newParentId: string | null) => void
   loadScenario: (nodes: FlowNode[], edges: FlowEdge[], metadata: ScenarioMetadata) => void
+  markPresetOrigin: (slug: string, pristineYaml: string) => void
   organizeLayout: () => void
   resetScenario: () => void
 }
@@ -110,6 +118,8 @@ export const useScenarioStore = create<ScenarioState>()(
     nodes: [],
     edges: [],
     loadCounter: 0,
+    presetSlug: null,
+    pristineYaml: null,
 
     setMetadata: (meta) => {
       set(state => ({
@@ -283,7 +293,15 @@ export const useScenarioStore = create<ScenarioState>()(
         edges,
         metadata,
         loadCounter: state.loadCounter + 1,
+        // Any new load resets the preset origin. Preset loaders re-stamp it
+        // via markPresetOrigin once their post-load state has settled.
+        presetSlug: null,
+        pristineYaml: null,
       }))
+    },
+
+    markPresetOrigin: (slug, pristineYaml) => {
+      set({ presetSlug: slug, pristineYaml })
     },
 
     organizeLayout: () => {
@@ -303,6 +321,8 @@ export const useScenarioStore = create<ScenarioState>()(
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         },
+        presetSlug: null,
+        pristineYaml: null,
       })
     },
   }))

@@ -22,6 +22,7 @@ import { PanelLeftOpen, PanelRightOpen, ChevronDown, ChevronUp, Sparkles } from 
 import { deserializeScenario } from '@/lib/serialization'
 import { scenarioToFlow } from '@/lib/flow-data'
 import { materializeProposedScenarioJson } from '@/lib/scenarioPrompt'
+import { canvasToScenarioYaml } from '@/lib/canvasToScenarioYaml'
 import { useScenarioLibraryStore } from '@/store/useScenarioLibraryStore'
 import { cn } from '@/lib/utils'
 import { useIsMobile } from '@/hooks/useMediaQuery'
@@ -95,6 +96,15 @@ export default function EditorPageClient({ initialScenarioSlug }: EditorPageClie
         updatedAt: now,
       })
       if (result.episode) setEpisode(result.episode)
+      // Stamp the preset origin + a YAML snapshot so Run-locally can offer the
+      // URL-based shortcut as long as the user hasn't modified the canvas.
+      const sc = useScenarioStore.getState()
+      const ep = useEpisodeStore.getState().episode
+      const pristineYaml = canvasToScenarioYaml(sc.nodes, sc.edges, sc.metadata, {
+        episode: ep,
+        tickIntervalMs: 1000,
+      })
+      sc.markPresetOrigin(slug, pristineYaml)
       // Immediately persist so the scenario shows up under "Recent" without
       // waiting for the 30s autosave tick.
       window.dispatchEvent(new CustomEvent('logsim-autosave'))
