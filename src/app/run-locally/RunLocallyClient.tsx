@@ -4,10 +4,10 @@ import Link from 'next/link'
 import {
   ArrowLeft,
   Check,
+  ChevronRight,
   Copy,
   Download,
   ExternalLink,
-  FileCode,
   Globe,
   Search,
   Terminal,
@@ -432,19 +432,21 @@ function ScenarioRow({
   const url = `${origin}/s/${scenario.slug}.yaml`
   const editorUrl = `/s/${scenario.slug}`
   const cmd = `logsim run ${url}`
-  const [copied, setCopied] = useState<'cmd' | 'url' | null>(null)
-  const onCopy = async (kind: 'cmd' | 'url', text: string) => {
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopied(kind)
-      setTimeout(() => setCopied(null), 1500)
-    } catch {
-      // ignore
-    }
-  }
+  const [expanded, setExpanded] = useState(false)
   return (
-    <li className="px-4 py-3 hover:bg-slate-50">
-      <div className="flex flex-wrap items-start gap-x-4 gap-y-2">
+    <li>
+      <button
+        type="button"
+        onClick={() => setExpanded(v => !v)}
+        aria-expanded={expanded}
+        className="flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-slate-50"
+      >
+        <ChevronRight
+          className={cn(
+            'mt-1 h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform',
+            expanded && 'rotate-90',
+          )}
+        />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
             <span className="text-[13.5px] font-semibold text-slate-900">{scenario.title}</span>
@@ -467,59 +469,69 @@ function ScenarioRow({
             )}
           </div>
           <p className="mt-1 text-[12.5px] leading-relaxed text-slate-600">{scenario.description}</p>
-          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-400">
-            {scenario.serviceCount !== undefined && <span>{scenario.serviceCount} services</span>}
-            {scenario.durationTicks !== undefined && (
-              <span>{Math.round(scenario.durationTicks / 60)}m timeline</span>
-            )}
+        </div>
+      </button>
+      {expanded && (
+        <div className="space-y-2 border-t border-slate-100 bg-slate-50/60 px-4 py-3 pl-11">
+          <RowCommand label="URL" command={url} icon={<Globe className="h-3 w-3" />} />
+          <RowCommand label="CLI" command={cmd} icon={<Terminal className="h-3 w-3" />} />
+          <div className="pt-1">
             <Link
               href={editorUrl}
-              className="inline-flex items-center gap-0.5 hover:text-slate-700"
+              className="inline-flex items-center gap-1 text-[11.5px] font-medium text-blue-600 hover:underline"
             >
-              <Globe className="h-3 w-3" />
+              <ExternalLink className="h-3 w-3" />
               Open in editor
             </Link>
-            <a
-              href={`/s/${scenario.slug}.yaml`}
-              target="_blank"
-              rel="noreferrer noopener"
-              className="inline-flex items-center gap-0.5 hover:text-slate-700"
-            >
-              <FileCode className="h-3 w-3" />
-              View YAML
-            </a>
           </div>
         </div>
-        <div className="flex shrink-0 flex-col gap-1.5 sm:flex-row sm:items-center">
-          <button
-            type="button"
-            onClick={() => onCopy('url', url)}
-            className={cn(
-              'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors',
-              copied === 'url'
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100',
-            )}
-          >
-            {copied === 'url' ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-            URL
-          </button>
-          <button
-            type="button"
-            onClick={() => onCopy('cmd', cmd)}
-            className={cn(
-              'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors',
-              copied === 'cmd'
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                : 'border-slate-900 bg-slate-900 text-white hover:bg-slate-800',
-            )}
-          >
-            {copied === 'cmd' ? <Check className="h-3 w-3" /> : <Terminal className="h-3 w-3" />}
-            Copy CLI
-          </button>
-        </div>
-      </div>
+      )}
     </li>
+  )
+}
+
+function RowCommand({
+  label,
+  command,
+  icon,
+}: {
+  label: string
+  command: string
+  icon: React.ReactNode
+}) {
+  const [copied, setCopied] = useState(false)
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(command)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      // ignore
+    }
+  }
+  return (
+    <div className="flex items-center gap-2">
+      <span className="inline-flex w-10 shrink-0 items-center gap-1 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-slate-500">
+        {icon}
+        {label}
+      </span>
+      <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap rounded border border-slate-200 bg-white px-2 py-1 font-mono text-[11.5px] text-slate-700">
+        {command}
+      </code>
+      <button
+        type="button"
+        onClick={onCopy}
+        className={cn(
+          'inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors',
+          copied
+            ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+            : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100',
+        )}
+      >
+        {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+    </div>
   )
 }
 
