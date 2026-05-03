@@ -12,9 +12,20 @@ func newValidateCmd() *cobra.Command {
 	var scenarioPath string
 
 	cmd := &cobra.Command{
-		Use:   "validate",
+		Use:   "validate [scenario.yaml]",
 		Short: "Parse and validate a scenario YAML",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			switch {
+			case len(args) == 1 && scenarioPath == "":
+				scenarioPath = args[0]
+			case len(args) == 1 && scenarioPath != "" && scenarioPath != args[0]:
+				return fmt.Errorf("scenario specified twice: positional %q and --scenario %q",
+					args[0], scenarioPath)
+			case len(args) == 0 && scenarioPath == "":
+				return fmt.Errorf("scenario is required: pass it positionally (`logsim validate path/to/scenario.yaml`) or via --scenario")
+			}
+
 			s, err := scenario.ValidateFile(scenarioPath)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "validation failed:", err)
@@ -26,8 +37,7 @@ func newValidateCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&scenarioPath, "scenario", "", "path to scenario YAML (required)")
-	_ = cmd.MarkFlagRequired("scenario")
+	cmd.Flags().StringVar(&scenarioPath, "scenario", "", "path to scenario YAML (or pass it positionally)")
 
 	return cmd
 }

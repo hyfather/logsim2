@@ -7,18 +7,32 @@ import (
 	"io"
 	"math/rand"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 
 	"github.com/nikhilm/logsim2/pkg/config"
+	"github.com/nikhilm/logsim2/pkg/encoders"
 	"github.com/nikhilm/logsim2/pkg/engine"
 	"github.com/nikhilm/logsim2/pkg/scenario"
 	"github.com/nikhilm/logsim2/pkg/sinks"
 )
+
+// validFormats is the canonical set accepted by --format. Order is the order
+// shown in --help and in error messages.
+var validFormats = []string{"jsonl", "raw", "ocsf", "otel", "udm", "asim"}
+
+func isValidFormat(s string) bool {
+	for _, f := range validFormats {
+		if f == s {
+			return true
+		}
+	}
+	return false
+}
 
 func newRunCmd() *cobra.Command {
 	var (
@@ -27,32 +41,100 @@ func newRunCmd() *cobra.Command {
 		tickInterval string
 		rate         float64
 
-		// Output selection. Two ergonomic flags layered on top of the
-		// explicit --output: --to <name>[,<name>] picks dotfile destinations,
-		// --tee <path> additionally writes JSONL to a file.
+		// Modern, intent-driven flags.
+		out     []string // -o/--out: "-" stdout, path = file, may repeat / comma-split
+		to      string   // dotfile destination(s) by name; "all" = every enabled
+		tee     string   // additional file copy
+		useOCSF bool     // shortcut for --format=ocsf
+		useOTEL bool     // shortcut for --format=otel
+
+		// Legacy escape hatches retained for back-compat.
 		output      string
 		filePath    string
 		appendMode  bool
-		destination string // legacy single-name; --to is the modern form
-		to          string
-		tee         string
+		destination string
 
 		configPath   string
 		sourceFilter string
 		seed         int64
 		format       string
 		quiet        bool
+		listFormats  bool
 	)
 
 	cmd := &cobra.Command{
-		Use:   "run",
+		Use:   "run [scenario.yaml]",
 		Short: "Run a simulation and emit logs",
-		Long: "Run executes a scenario and writes the resulting log entries to one\n" +
-			"or more sinks. With no flags, output goes to stdout — unless exactly\n" +
-			"one enabled destination exists in the dotfile, in which case it is\n" +
-			"used. Use --to to pick destinations explicitly, --tee to also write\n" +
-			"a copy to a file, or --output for the explicit stdout/file/destination form.",
+		Long: `Run executes a scenario and emits log entries.
+
+The scenario YAML is the primary argument — pass it positionally, or use
+the legacy --scenario flag.
+
+Stdout is the default — pipe or redirect as you like. Pass -o/--out to write
+to a file (or "-" for stdout), or --to to forward to one or more named
+destinations from the dotfile (which is entirely optional).
+
+Examples:
+  # stdout (default) — pipe into anything
+  logsim run scenarios/web-service.yaml | jq .
+
+  # emit OCSF or OTEL to stdout
+  logsim run scenarios/web-service.yaml --ocsf
+  logsim run scenarios/web-service.yaml --otel
+
+  # write to a file (format inferred from .ocsf.* / .otel.* suffix)
+  logsim run scenarios/web-service.yaml -o /tmp/logs.jsonl
+  logsim run scenarios/web-service.yaml -o /tmp/logs.ocsf.json
+
+  # forward to a configured destination (opt-in via --to)
+  logsim run scenarios/web-service.yaml --to prod-cribl
+  logsim run scenarios/web-service.yaml --to all
+
+  # forward and keep a local copy
+  logsim run scenarios/web-service.yaml --to prod-cribl -o ./trace.jsonl`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if listFormats {
+				for _, f := range validFormats {
+					fmt.Fprintln(cmd.OutOrStdout(), f)
+				}
+				return nil
+			}
+
+			// Resolve scenario from the positional arg or legacy --scenario flag.
+			switch {
+			case len(args) == 1 && scenarioPath == "":
+				scenarioPath = args[0]
+			case len(args) == 1 && scenarioPath != "" && scenarioPath != args[0]:
+				return fmt.Errorf("scenario specified twice: positional %q and --scenario %q",
+					args[0], scenarioPath)
+			case len(args) == 0 && scenarioPath == "":
+				return errors.New("scenario is required: pass it positionally (`logsim run path/to/scenario.yaml`) or via --scenario")
+			}
+
+			// Resolve format shortcuts before validation.
+			if useOCSF && useOTEL {
+				return errors.New("--ocsf and --otel are mutually exclusive")
+			}
+			explicitFormat := cmd.Flags().Changed("format")
+			switch {
+			case useOCSF:
+				if explicitFormat && format != "ocsf" {
+					return fmt.Errorf("--ocsf conflicts with --format=%s", format)
+				}
+				format = "ocsf"
+			case useOTEL:
+				if explicitFormat && format != "otel" {
+					return fmt.Errorf("--otel conflicts with --format=%s", format)
+				}
+				format = "otel"
+			}
+
+			if !isValidFormat(format) {
+				return fmt.Errorf("--format %q: must be one of %s",
+					format, strings.Join(validFormats, ", "))
+			}
+
 			s, err := scenario.ValidateFile(scenarioPath)
 			if err != nil {
 				return fmt.Errorf("scenario: %w", err)
@@ -77,17 +159,19 @@ func newRunCmd() *cobra.Command {
 			eng := engine.New(s, cfg)
 
 			sinkList, err := buildSinks(buildSinksOpts{
-				Output:      output,
-				Format:      format,
-				FilePath:    filePath,
-				AppendMode:  appendMode,
-				Destination: destination,
-				To:          to,
-				Tee:         tee,
-				ConfigPath:  configPath,
-				Quiet:       quiet,
-				Stderr:      cmd.ErrOrStderr(),
-				Stdin:       cmd.InOrStdin(),
+				Output:         output,
+				Format:         format,
+				FormatExplicit: explicitFormat || useOCSF || useOTEL,
+				FilePath:       filePath,
+				Out:            out,
+				AppendMode:     appendMode,
+				Destination:    destination,
+				To:             to,
+				Tee:            tee,
+				ConfigPath:     configPath,
+				Quiet:          quiet,
+				Stderr:         cmd.ErrOrStderr(),
+				Stdin:          cmd.InOrStdin(),
 			})
 			if err != nil {
 				return err
@@ -101,90 +185,124 @@ func newRunCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&scenarioPath, "scenario", "", "path to scenario YAML (required)")
-	_ = cmd.MarkFlagRequired("scenario")
+	cmd.Flags().StringVar(&scenarioPath, "scenario", "", "path to scenario YAML (or pass it positionally)")
 	cmd.Flags().IntVar(&ticks, "ticks", 100, "number of ticks to emit")
 	cmd.Flags().StringVar(&tickInterval, "tick-interval", "1s", "simulated time per tick")
 	cmd.Flags().Float64Var(&rate, "rate", 0, "wall-clock pacing multiplier (0 = instant)")
 
-	cmd.Flags().StringVar(&output, "output", "", "explicit output kind: stdout | file | destination (auto-detected when omitted)")
-	cmd.Flags().StringVar(&filePath, "path", "", "output file path (when --output=file)")
-	cmd.Flags().BoolVar(&appendMode, "append", false, "append to file instead of truncating (when writing to a file)")
-	cmd.Flags().StringVar(&destination, "destination", "", "destination name (when --output=destination); prefer --to")
-	cmd.Flags().StringVar(&to, "to", "", "comma-separated list of destination names from the dotfile (or `all` for every enabled one)")
-	cmd.Flags().StringVar(&tee, "tee", "", "additionally write a copy of every log line to this file (JSONL by default; respects --format)")
+	// Modern outputs.
+	cmd.Flags().StringSliceVarP(&out, "out", "o", nil,
+		"output target: a file path, or \"-\" for stdout (repeat or comma-separate to fan out)")
+	cmd.Flags().StringVar(&to, "to", "",
+		"comma-separated list of dotfile destinations (or `all`)")
+	cmd.Flags().StringVar(&tee, "tee", "",
+		"additionally write a copy of every log line to this file")
+
+	// Format selection.
+	cmd.Flags().StringVarP(&format, "format", "f", "jsonl",
+		"line format: "+strings.Join(validFormats, " | "))
+	cmd.Flags().BoolVar(&useOCSF, "ocsf", false, "shortcut for --format=ocsf")
+	cmd.Flags().BoolVar(&useOTEL, "otel", false, "shortcut for --format=otel")
+	cmd.Flags().BoolVar(&listFormats, "list-formats", false, "print supported --format values and exit")
+	cmd.MarkFlagsMutuallyExclusive("ocsf", "otel")
+
+	// Legacy / explicit forms.
+	cmd.Flags().StringVar(&output, "output", "",
+		"explicit output kind: stdout | file | destination (legacy; prefer --out / --to)")
+	cmd.Flags().StringVar(&filePath, "path", "", "output file path (alias for --out when --output is unset)")
+	cmd.Flags().BoolVar(&appendMode, "append", false, "append to file instead of truncating")
+	cmd.Flags().StringVar(&destination, "destination", "", "destination name (legacy; prefer --to)")
 	cmd.Flags().StringVar(&configPath, "config", "", "destinations YAML (overrides the dotfile)")
 
 	cmd.Flags().StringVar(&sourceFilter, "source-filter", "*", "source path glob filter")
 	cmd.Flags().Int64Var(&seed, "seed", 0, "RNG seed (0 = random)")
-	cmd.Flags().StringVar(&format, "format", "jsonl", "line format: jsonl | raw | ocsf | otel | udm | asim")
 	cmd.Flags().BoolVar(&quiet, "quiet", false, "suppress informational log lines on stderr")
 
 	return cmd
 }
 
 type buildSinksOpts struct {
-	Output      string
-	Format      string
-	FilePath    string
-	AppendMode  bool
-	Destination string
-	To          string
-	Tee         string
-	ConfigPath  string
-	Quiet       bool
-	Stderr      io.Writer
-	Stdin       io.Reader
+	Output         string
+	Format         string
+	FormatExplicit bool
+	FilePath       string
+	Out            []string
+	AppendMode     bool
+	Destination    string
+	To             string
+	Tee            string
+	ConfigPath     string
+	Quiet          bool
+	Stderr         io.Writer
+	Stdin          io.Reader
 }
 
-// buildSinks resolves CLI flags into a concrete sink list. The decision tree
-// (in priority order):
+// buildSinks resolves CLI flags into a concrete sink list. Resolution order:
 //
-//  1. --output is set → strict legacy behavior (stdout|file|destination).
-//  2. --to is set → fan out to those dotfile destinations.
-//  3. --destination + --config or --destination alone (with dotfile) →
-//     single dotfile destination.
-//  4. Dotfile exists with exactly one enabled destination → use it.
-//  5. Dotfile is missing entirely and we're on a TTY → onboard, then re-resolve.
-//  6. Otherwise → stdout.
+//  1. Legacy --output (stdout|file|destination) is honored verbatim.
+//  2. --out and/or --path open file/stdout sinks.
+//  3. --to (or legacy --destination) adds dotfile destination sinks.
+//  4. With no output flags set, default to stdout. Stdout is a first-class
+//     mode (pipe into another tool, redirect, etc.) — destinations are
+//     entirely opt-in via --to and never auto-selected.
+//  5. --tee always appends a file sink.
 //
-// --tee is orthogonal; it always appends a file sink to whatever else was picked.
+// Format inference: if a single file path is given without an explicit
+// --format, a `.ocsf.*` or `.otel.*` suffix is honored.
 func buildSinks(opts buildSinksOpts) ([]sinks.Sink, error) {
-	fmtType := sinks.Format(opts.Format)
 	stderr := opts.Stderr
 	if stderr == nil {
 		stderr = os.Stderr
 	}
 
+	// --path is an alias for --out when --output isn't the explicit "file" form.
+	// This fixes the silent-drop bug where --path alone produced stdout.
+	outs := append([]string(nil), opts.Out...)
+	if opts.FilePath != "" && opts.Output != "file" {
+		outs = append(outs, opts.FilePath)
+	}
+	outs = splitAndTrim(outs)
+
+	// Format inference from a single file path.
+	fmtType := sinks.Format(opts.Format)
+	if !opts.FormatExplicit && len(outs) == 1 && outs[0] != "-" {
+		if inferred := inferFormatFromPath(outs[0]); inferred != "" {
+			fmtType = sinks.Format(inferred)
+			if !opts.Quiet {
+				fmt.Fprintf(stderr, "logsim: inferred --format=%s from %s\n", inferred, outs[0])
+			}
+		}
+	}
+
+	dotPath := config.DefaultPath()
+	if opts.ConfigPath != "" {
+		dotPath = opts.ConfigPath
+	}
+	dotCfg, _, err := loadDotOrConfig(opts.ConfigPath)
+	if err != nil {
+		return nil, err
+	}
+
 	var (
 		picked []sinks.Sink
-		closer []sinks.Sink // tracked for cleanup on later error
+		closer []sinks.Sink
 	)
 	addAndTrack := func(s sinks.Sink) {
 		picked = append(picked, s)
 		closer = append(closer, s)
 	}
 
-	// Resolve the destinations config once (dotfile or explicit --config).
-	dotPath := config.DefaultPath()
-	if opts.ConfigPath != "" {
-		dotPath = opts.ConfigPath
-	}
-	dotCfg, dotExists, err := loadDotOrConfig(opts.ConfigPath)
-	if err != nil {
-		return nil, err
-	}
-
-	switch {
-	case opts.Output == "stdout":
+	// (1) Legacy --output handling.
+	switch opts.Output {
+	case "stdout":
 		picked = append(picked, sinks.NewStdout(fmtType))
-	case opts.Output == "file":
+	case "file":
 		fs, err := openFileSink(opts.FilePath, fmtType, opts.AppendMode)
 		if err != nil {
 			return nil, err
 		}
 		addAndTrack(fs)
-	case opts.Output == "destination":
+	case "destination":
 		if opts.Destination == "" {
 			closeSinks(closer)
 			return nil, errors.New("--destination is required when --output=destination")
@@ -195,69 +313,54 @@ func buildSinks(opts buildSinksOpts) ([]sinks.Sink, error) {
 			return nil, err
 		}
 		addAndTrack(s)
-	case opts.Output != "":
-		closeSinks(closer)
-		return nil, fmt.Errorf("unknown --output %q", opts.Output)
-
-	case opts.To != "":
-		names := splitNames(opts.To, dotCfg)
-		if len(names) == 0 {
-			closeSinks(closer)
-			return nil, errors.New("--to resolved to zero destinations")
+	case "":
+		// Modern path: combine --out + --to.
+		for _, target := range outs {
+			if target == "-" {
+				picked = append(picked, sinks.NewStdout(fmtType))
+				continue
+			}
+			fs, err := openFileSink(target, fmtType, opts.AppendMode)
+			if err != nil {
+				closeSinks(closer)
+				return nil, err
+			}
+			addAndTrack(fs)
 		}
-		for _, n := range names {
-			s, err := sinkForName(dotCfg, n, dotPath)
+
+		switch {
+		case opts.To != "":
+			names := splitNames(opts.To, dotCfg)
+			if len(names) == 0 {
+				closeSinks(closer)
+				return nil, errors.New("--to resolved to zero destinations")
+			}
+			for _, n := range names {
+				s, err := sinkForName(dotCfg, n, dotPath)
+				if err != nil {
+					closeSinks(closer)
+					return nil, err
+				}
+				addAndTrack(s)
+			}
+		case opts.Destination != "":
+			s, err := sinkForName(dotCfg, opts.Destination, dotPath)
 			if err != nil {
 				closeSinks(closer)
 				return nil, err
 			}
 			addAndTrack(s)
+		case len(picked) == 0:
+			// No output flags. Default is stdout — destinations are opt-in
+			// via --to and never auto-selected.
+			picked = append(picked, sinks.NewStdout(fmtType))
 		}
-
-	case opts.Destination != "":
-		// Backwards-compatible: --destination alone uses dotfile.
-		s, err := sinkForName(dotCfg, opts.Destination, dotPath)
-		if err != nil {
-			closeSinks(closer)
-			return nil, err
-		}
-		addAndTrack(s)
-
 	default:
-		// Auto-detect from dotfile.
-		if !dotExists {
-			if maybeOnboard(stderr, opts.Stdin, dotPath) {
-				// Re-load after onboarding completes.
-				dotCfg, dotExists, err = loadDotOrConfig("")
-				if err != nil {
-					return nil, err
-				}
-			}
-		}
-		enabled := dotCfg.EnabledDestinations()
-		switch {
-		case len(enabled) == 1:
-			s, err := sinkBuild(&enabled[0])
-			if err != nil {
-				return nil, err
-			}
-			addAndTrack(s)
-			if !opts.Quiet {
-				fmt.Fprintf(stderr, "logsim: forwarding to %q from %s (--to to override)\n", enabled[0].Name, dotPath)
-			}
-		case len(enabled) > 1:
-			if !opts.Quiet {
-				names := destNames(enabled)
-				fmt.Fprintf(stderr, "logsim: %d enabled destinations in %s (%s); use --to to pick — defaulting to stdout\n",
-					len(enabled), dotPath, strings.Join(names, ","))
-			}
-			picked = append(picked, sinks.NewStdout(fmtType))
-		default:
-			picked = append(picked, sinks.NewStdout(fmtType))
-		}
+		closeSinks(closer)
+		return nil, fmt.Errorf("unknown --output %q (expected stdout, file, or destination)", opts.Output)
 	}
 
-	// --tee always layers in a file sink.
+	// (5) --tee always layers in a file sink.
 	if opts.Tee != "" {
 		fs, err := openFileSink(opts.Tee, fmtType, opts.AppendMode)
 		if err != nil {
@@ -271,11 +374,39 @@ func buildSinks(opts buildSinksOpts) ([]sinks.Sink, error) {
 	}
 
 	if len(picked) == 0 {
-		// Should be unreachable, but guard anyway.
 		picked = append(picked, sinks.NewStdout(fmtType))
 	}
 	_ = closer
 	return picked, nil
+}
+
+// inferFormatFromPath returns "ocsf"/"otel" when the path's stem ends in
+// ".ocsf" or ".otel" (e.g. logs.ocsf.json), else "".
+func inferFormatFromPath(p string) string {
+	base := strings.ToLower(filepath.Base(p))
+	stem := strings.TrimSuffix(base, filepath.Ext(base))
+	switch {
+	case strings.HasSuffix(stem, ".ocsf"):
+		return string(encoders.FormatOCSF)
+	case strings.HasSuffix(stem, ".otel"):
+		return string(encoders.FormatOTEL)
+	}
+	return ""
+}
+
+// splitAndTrim flattens comma-separated values inside any individual entry and
+// drops empties so callers can pass a mixed bag of `-o a,b -o c` and `-o a -o b`.
+func splitAndTrim(in []string) []string {
+	var out []string
+	for _, raw := range in {
+		for _, p := range strings.Split(raw, ",") {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
 }
 
 func openFileSink(path string, format sinks.Format, appendMode bool) (sinks.Sink, error) {
@@ -300,7 +431,7 @@ func loadDotOrConfig(explicit string) (*config.DestinationsConfig, bool, error) 
 func sinkForName(cfg *config.DestinationsConfig, name, sourcePath string) (sinks.Sink, error) {
 	d := cfg.Get(name)
 	if d == nil {
-		return nil, fmt.Errorf("destination %q not found in %s", name, sourcePath)
+		return nil, fmt.Errorf("destination %q not found in %s — try `logsim destinations list`", name, sourcePath)
 	}
 	if !d.Enabled {
 		return nil, fmt.Errorf("destination %q is disabled (run `logsim destinations enable %s`)", name, name)
@@ -322,6 +453,7 @@ func splitNames(spec string, cfg *config.DestinationsConfig) []string {
 		for _, d := range cfg.EnabledDestinations() {
 			out = append(out, d.Name)
 		}
+		sort.Strings(out)
 		return out
 	}
 	var out []string
@@ -334,67 +466,8 @@ func splitNames(spec string, cfg *config.DestinationsConfig) []string {
 	return out
 }
 
-func destNames(ds []config.Destination) []string {
-	out := make([]string, 0, len(ds))
-	for _, d := range ds {
-		out = append(out, d.Name)
-	}
-	return out
-}
-
 func closeSinks(list []sinks.Sink) {
 	for _, s := range list {
 		_ = s.Close()
 	}
-}
-
-// maybeOnboard runs an interactive prompt offering to add a first destination.
-// Returns true iff a destination was added (caller should reload). Falls
-// through silently when stdin/stderr aren't a TTY so scripted use of `logsim
-// run` is never blocked by a prompt.
-func maybeOnboard(stderr io.Writer, stdin io.Reader, dotPath string) bool {
-	if !isInteractive(stdin, stderr) {
-		return false
-	}
-
-	var add bool
-	confirm := huh.NewConfirm().
-		Title("No destinations configured.").
-		Description(fmt.Sprintf("Add one now? (writes to %s)", dotPath)).
-		Affirmative("Yes, add one").
-		Negative("No, just stdout").
-		Value(&add)
-	if err := huh.NewForm(huh.NewGroup(confirm)).Run(); err != nil {
-		fmt.Fprintf(stderr, "logsim: onboarding skipped: %v\n", err)
-		return false
-	}
-	if !add {
-		return false
-	}
-
-	cfg, _, _, _ := config.LoadDefault()
-	d, err := promptDestination(cfg)
-	if err != nil {
-		fmt.Fprintf(stderr, "logsim: onboarding aborted: %v\n", err)
-		return false
-	}
-	cfg.Upsert(d)
-	if err := cfg.Save(dotPath); err != nil {
-		fmt.Fprintf(stderr, "logsim: failed to save destination: %v\n", err)
-		return false
-	}
-	fmt.Fprintf(stderr, "logsim: saved destination %q to %s\n", d.Name, dotPath)
-	return true
-}
-
-func isInteractive(stdin io.Reader, stderr io.Writer) bool {
-	in, ok := stdin.(*os.File)
-	if !ok {
-		return false
-	}
-	out, ok := stderr.(*os.File)
-	if !ok {
-		return false
-	}
-	return term.IsTerminal(int(in.Fd())) && term.IsTerminal(int(out.Fd()))
 }

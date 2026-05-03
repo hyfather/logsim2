@@ -63,14 +63,19 @@ production routing.
 To run the CLI (independent of Vercel):
 
 ```bash
-go run ./cmd/logsim run --scenario scenarios/web-service.yaml --ticks 60
+go run ./cmd/logsim run scenarios/web-service.yaml --ticks 60
 ```
 
-### CLI destinations
+### CLI destinations (optional)
 
-The CLI keeps a destinations dotfile at `~/.config/logsim/destinations.yaml`
-(`$XDG_CONFIG_HOME/logsim/destinations.yaml` if set, or override the path with
-`$LOGSIM_CONFIG`). The file is created on demand by an interactive form:
+`logsim run` writes to stdout by default — pipe it into another tool, redirect
+to a file, whatever you like. Configuring a destination is entirely optional
+and only needed if you want `logsim` to forward to Cribl Stream / Splunk HEC
+on your behalf.
+
+If you do want forwarding, the CLI keeps a destinations dotfile at
+`~/.config/logsim/destinations.yaml` (`$XDG_CONFIG_HOME/logsim/destinations.yaml`
+if set, or override with `$LOGSIM_CONFIG`):
 
 ```bash
 go run ./cmd/logsim destinations add       # TUI form: name, URL, token, format, ...
@@ -80,25 +85,49 @@ go run ./cmd/logsim destinations disable prod-cribl
 go run ./cmd/logsim destinations remove prod-cribl
 ```
 
-Once a destination exists, `run` is one flag shorter:
+Then opt in to a destination with `--to`:
 
 ```bash
-# auto-uses the only enabled destination if there's exactly one
-go run ./cmd/logsim run --scenario scenarios/web-service.yaml
-
 # pick one or more by name (or `all` for every enabled destination)
-go run ./cmd/logsim run --scenario scenarios/web-service.yaml --to prod-cribl
-go run ./cmd/logsim run --scenario scenarios/web-service.yaml --to prod-cribl,staging
+go run ./cmd/logsim run scenarios/web-service.yaml --to prod-cribl
+go run ./cmd/logsim run scenarios/web-service.yaml --to prod-cribl,staging
 
-# write a JSONL copy alongside whatever else you picked
-go run ./cmd/logsim run --scenario scenarios/web-service.yaml --to prod-cribl --tee out.jsonl
+# forward and keep a local copy at the same time
+go run ./cmd/logsim run scenarios/web-service.yaml --to prod-cribl -o ./trace.jsonl
 ```
 
-If no dotfile exists and you run `logsim run` interactively, you'll get a
-one-shot prompt offering to add a destination on the spot. Non-TTY runs (CI,
-pipes) skip the prompt and fall through to stdout. The legacy explicit form
-(`--output stdout|file|destination` with `--path` / `--destination` /
-`--config`) still works for scripts that depend on it.
+#### Output targets
+
+`-o, --out` is the unified file/stdout flag — pass a path, `-` for stdout, or
+repeat / comma-separate to fan out:
+
+```bash
+go run ./cmd/logsim run scenarios/web-service.yaml -o /tmp/logs.jsonl
+go run ./cmd/logsim run scenarios/web-service.yaml -o -            # explicit stdout
+go run ./cmd/logsim run scenarios/web-service.yaml -o a.jsonl,b.jsonl
+```
+
+#### Schema (OCSF, OTEL, …)
+
+`--format` selects the wire schema. Two convenience shortcuts:
+
+```bash
+go run ./cmd/logsim run scenarios/web-service.yaml --ocsf
+go run ./cmd/logsim run scenarios/web-service.yaml --otel
+go run ./cmd/logsim run --list-formats        # prints valid --format values
+```
+
+When you write to a file, the format is auto-inferred from a `.ocsf.*` or
+`.otel.*` suffix unless `--format` is set explicitly:
+
+```bash
+go run ./cmd/logsim run scenarios/web-service.yaml -o trace.ocsf.json
+# logsim: inferred --format=ocsf from trace.ocsf.json
+```
+
+`logsim run` never prompts and stdout is the silent default — destinations
+are opt-in. The legacy `--output stdout|file|destination` form (with `--path`
+/ `--destination` / `--config`) still works for scripts.
 
 ## Known limits
 
