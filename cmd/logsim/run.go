@@ -65,25 +65,25 @@ func newRunCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Run a simulation and emit logs",
-		Long: `Run executes a scenario and writes the resulting log entries.
+		Long: `Run executes a scenario and emits log entries.
 
-By default logs go to stdout. Pass -o/--out to write to a file (or "-" for
-stdout), --to to forward to one or more named destinations from the dotfile,
-or combine them. Both fan out together.
+Stdout is the default — pipe or redirect as you like. Pass -o/--out to write
+to a file (or "-" for stdout), or --to to forward to one or more named
+destinations from the dotfile (which is entirely optional).
 
 Examples:
-  # stdout (default)
-  logsim run --scenario scenarios/web-service.yaml
-
-  # write to a file (format inferred from .ocsf.json / .otel.json suffix)
-  logsim run --scenario scenarios/web-service.yaml -o /tmp/logs.jsonl
-  logsim run --scenario scenarios/web-service.yaml -o /tmp/logs.ocsf.json
+  # stdout (default) — pipe into anything
+  logsim run --scenario scenarios/web-service.yaml | jq .
 
   # emit OCSF or OTEL to stdout
   logsim run --scenario scenarios/web-service.yaml --ocsf
   logsim run --scenario scenarios/web-service.yaml --otel
 
-  # forward to a configured destination (or all of them)
+  # write to a file (format inferred from .ocsf.* / .otel.* suffix)
+  logsim run --scenario scenarios/web-service.yaml -o /tmp/logs.jsonl
+  logsim run --scenario scenarios/web-service.yaml -o /tmp/logs.ocsf.json
+
+  # forward to a configured destination (opt-in via --to)
   logsim run --scenario scenarios/web-service.yaml --to prod-cribl
   logsim run --scenario scenarios/web-service.yaml --to all
 
@@ -228,8 +228,9 @@ type buildSinksOpts struct {
 //  1. Legacy --output (stdout|file|destination) is honored verbatim.
 //  2. --out and/or --path open file/stdout sinks.
 //  3. --to (or legacy --destination) adds dotfile destination sinks.
-//  4. If neither was set: with exactly one enabled dotfile destination, use it;
-//     otherwise stdout. We never prompt — `logsim destinations add` does that.
+//  4. With no output flags set, default to stdout. Stdout is a first-class
+//     mode (pipe into another tool, redirect, etc.) — destinations are
+//     entirely opt-in via --to and never auto-selected.
 //  5. --tee always appends a file sink.
 //
 // Format inference: if a single file path is given without an explicit
@@ -263,7 +264,7 @@ func buildSinks(opts buildSinksOpts) ([]sinks.Sink, error) {
 	if opts.ConfigPath != "" {
 		dotPath = opts.ConfigPath
 	}
-	dotCfg, dotExists, err := loadDotOrConfig(opts.ConfigPath)
+	dotCfg, _, err := loadDotOrConfig(opts.ConfigPath)
 	if err != nil {
 		return nil, err
 	}
@@ -336,30 +337,9 @@ func buildSinks(opts buildSinksOpts) ([]sinks.Sink, error) {
 			}
 			addAndTrack(s)
 		case len(picked) == 0:
-			// Auto-pick from dotfile when nothing else specified.
-			enabled := dotCfg.EnabledDestinations()
-			switch {
-			case len(enabled) == 1:
-				s, err := sinkBuild(&enabled[0])
-				if err != nil {
-					return nil, err
-				}
-				addAndTrack(s)
-				if !opts.Quiet {
-					fmt.Fprintf(stderr, "logsim: forwarding to %q from %s (--to to override)\n", enabled[0].Name, dotPath)
-				}
-			case len(enabled) > 1:
-				if !opts.Quiet {
-					fmt.Fprintf(stderr, "logsim: %d enabled destinations in %s (%s); use --to to pick — defaulting to stdout\n",
-						len(enabled), dotPath, strings.Join(destNames(enabled), ","))
-				}
-				picked = append(picked, sinks.NewStdout(fmtType))
-			default:
-				if !opts.Quiet && !dotExists {
-					fmt.Fprintf(stderr, "logsim: no destinations configured (%s) — writing to stdout. Run `logsim destinations add` to forward to Cribl/Splunk HEC.\n", dotPath)
-				}
-				picked = append(picked, sinks.NewStdout(fmtType))
-			}
+			// No output flags. Default is stdout — destinations are opt-in
+			// via --to and never auto-selected.
+			picked = append(picked, sinks.NewStdout(fmtType))
 		}
 	default:
 		closeSinks(closer)
@@ -468,14 +448,6 @@ func splitNames(spec string, cfg *config.DestinationsConfig) []string {
 		if n != "" {
 			out = append(out, n)
 		}
-	}
-	return out
-}
-
-func destNames(ds []config.Destination) []string {
-	out := make([]string, 0, len(ds))
-	for _, d := range ds {
-		out = append(out, d.Name)
 	}
 	return out
 }

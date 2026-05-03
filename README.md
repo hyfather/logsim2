@@ -66,11 +66,16 @@ To run the CLI (independent of Vercel):
 go run ./cmd/logsim run --scenario scenarios/web-service.yaml --ticks 60
 ```
 
-### CLI destinations
+### CLI destinations (optional)
 
-The CLI keeps a destinations dotfile at `~/.config/logsim/destinations.yaml`
-(`$XDG_CONFIG_HOME/logsim/destinations.yaml` if set, or override the path with
-`$LOGSIM_CONFIG`). The file is created on demand by an interactive form:
+`logsim run` writes to stdout by default — pipe it into another tool, redirect
+to a file, whatever you like. Configuring a destination is entirely optional
+and only needed if you want `logsim` to forward to Cribl Stream / Splunk HEC
+on your behalf.
+
+If you do want forwarding, the CLI keeps a destinations dotfile at
+`~/.config/logsim/destinations.yaml` (`$XDG_CONFIG_HOME/logsim/destinations.yaml`
+if set, or override with `$LOGSIM_CONFIG`):
 
 ```bash
 go run ./cmd/logsim destinations add       # TUI form: name, URL, token, format, ...
@@ -80,12 +85,9 @@ go run ./cmd/logsim destinations disable prod-cribl
 go run ./cmd/logsim destinations remove prod-cribl
 ```
 
-Once a destination exists, `run` is one flag shorter:
+Then opt in to a destination with `--to`:
 
 ```bash
-# auto-uses the only enabled destination if there's exactly one
-go run ./cmd/logsim run --scenario scenarios/web-service.yaml
-
 # pick one or more by name (or `all` for every enabled destination)
 go run ./cmd/logsim run --scenario scenarios/web-service.yaml --to prod-cribl
 go run ./cmd/logsim run --scenario scenarios/web-service.yaml --to prod-cribl,staging
@@ -123,9 +125,9 @@ go run ./cmd/logsim run --scenario scenarios/web-service.yaml -o trace.ocsf.json
 # logsim: inferred --format=ocsf from trace.ocsf.json
 ```
 
-`logsim run` never prompts. If no dotfile exists, it writes to stdout and
-suggests `logsim destinations add`. The legacy `--output stdout|file|destination`
-form (with `--path` / `--destination` / `--config`) still works for scripts.
+`logsim run` never prompts and stdout is the silent default — destinations
+are opt-in. The legacy `--output stdout|file|destination` form (with `--path`
+/ `--destination` / `--config`) still works for scripts.
 
 ## Known limits
 

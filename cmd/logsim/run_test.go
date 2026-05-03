@@ -113,8 +113,9 @@ func TestBuildSinks_ToUnknown(t *testing.T) {
 	}
 }
 
-// With a single enabled destination in the dotfile, no flags → that destination.
-func TestBuildSinks_AutoSingleDestination(t *testing.T) {
+// With no output flags, default is stdout — even when a single enabled
+// destination exists in the dotfile. Destinations are opt-in via --to.
+func TestBuildSinks_DefaultIsStdoutWithSingleDestination(t *testing.T) {
 	writeDotfile(t, dotfileOne)
 	var stderr bytes.Buffer
 	got, err := buildSinks(buildSinksOpts{
@@ -126,15 +127,15 @@ func TestBuildSinks_AutoSingleDestination(t *testing.T) {
 	}
 	defer closeSinks(got)
 	if len(got) != 1 {
-		t.Errorf("expected 1 sink, got %d", len(got))
+		t.Errorf("expected 1 stdout sink, got %d", len(got))
 	}
-	if !strings.Contains(stderr.String(), `forwarding to "solo"`) {
-		t.Errorf("expected stderr hint, got %q", stderr.String())
+	if strings.Contains(stderr.String(), "forwarding to") {
+		t.Errorf("did not expect auto-forwarding hint, got %q", stderr.String())
 	}
 }
 
-// With two enabled destinations and no --to, default to stdout (and warn).
-func TestBuildSinks_AutoMultipleFallsBackToStdout(t *testing.T) {
+// Stdout is silent — no apologetic warning about un-used destinations.
+func TestBuildSinks_DefaultIsSilentWithMultipleDestinations(t *testing.T) {
 	writeDotfile(t, dotfileTwo)
 	var stderr bytes.Buffer
 	got, err := buildSinks(buildSinksOpts{
@@ -148,8 +149,30 @@ func TestBuildSinks_AutoMultipleFallsBackToStdout(t *testing.T) {
 	if len(got) != 1 {
 		t.Errorf("expected 1 stdout sink, got %d", len(got))
 	}
-	if !strings.Contains(stderr.String(), "use --to") {
-		t.Errorf("expected --to hint, got %q", stderr.String())
+	if stderr.String() != "" {
+		t.Errorf("expected silent default, got stderr %q", stderr.String())
+	}
+}
+
+// With no dotfile at all, the default is plain stdout with no hint about
+// setting a destination up — destinations are entirely optional.
+func TestBuildSinks_DefaultIsSilentWithNoDotfile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("LOGSIM_CONFIG", filepath.Join(dir, "missing.yaml"))
+	var stderr bytes.Buffer
+	got, err := buildSinks(buildSinksOpts{
+		Format: "jsonl",
+		Stderr: &stderr,
+	})
+	if err != nil {
+		t.Fatalf("buildSinks: %v", err)
+	}
+	defer closeSinks(got)
+	if len(got) != 1 {
+		t.Errorf("expected 1 stdout sink, got %d", len(got))
+	}
+	if stderr.String() != "" {
+		t.Errorf("expected silent default, got stderr %q", stderr.String())
 	}
 }
 
