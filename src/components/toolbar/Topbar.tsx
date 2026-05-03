@@ -138,7 +138,6 @@ export function Topbar() {
     clearLogs,
     logBuffer,
     outputFormat,
-    setOutputFormat,
     setRunError,
   } = useSimulationStore()
   const {
@@ -878,31 +877,6 @@ export function Topbar() {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-
-        {/* Output schema toggle — generators emit a canonical event, the
-            backend maps it to Native / OCSF / OTEL / (later) UDM / ASIM
-            before the line reaches the UI. Switching clears the buffer
-            because formats don't mix cleanly. */}
-        <div className="hidden h-8 shrink-0 items-center gap-0.5 rounded-lg border border-slate-200 bg-slate-50 p-[3px] sm:flex">
-          {(['native', 'ocsf', 'otel'] as const).map(f => (
-            <button
-              key={f}
-              type="button"
-              onClick={() => setOutputFormat(f)}
-              className={cn(
-                'rounded-[5px] px-2 py-[2px] font-mono text-[10.5px] font-semibold uppercase transition-colors',
-                outputFormat === f
-                  ? 'bg-white text-slate-900 shadow-[0_1px_2px_rgba(15,23,42,0.05)]'
-                  : 'text-slate-500 hover:text-slate-900',
-              )}
-              title={
-                f === 'native' ? 'Generator-native log lines'
-                : f === 'ocsf' ? 'OCSF v1.x JSON events'
-                : 'OpenTelemetry OTLP/JSON LogRecords'
-              }
-            >{f}</button>
-          ))}
-        </div>
 
         {/* Transport tray — unified container with subtle dividers */}
         <div
