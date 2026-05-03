@@ -1,0 +1,178 @@
+name: Public S3 Bucket Discovered & Drained
+description: >-
+  A backup bucket created by a contractor in 2022 (acme-mktg-archive-old) has been world-readable the whole time. A
+  grayhat researcher finds it via bucket enumeration and starts pulling .sql.gz files. CloudTrail shows
+  AnonymousIdentity GetObject events from a single IP block.
+duration: 1080
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: marketing-vpc
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: mktg-public
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: mktg-app
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: mktg-data
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: mktg-edge-lb-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: mktg-public
+  - type: virtual_server
+    name: marketing-site-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: mktg-app
+  - type: virtual_server
+    name: s3-acme-mktg-archive-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: mktg-data
+  - type: virtual_server
+    name: cloudtrail-siem-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: mktg-data
+services:
+  - type: nginx
+    name: mktg-edge-lb
+    host: mktg-edge-lb-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+  - type: nodejs
+    name: marketing-site
+    host: marketing-site-host
+    generator:
+      type: nodejs
+      port: 3000
+      log_format: json
+      log_level: info
+      traffic_rate: 60
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /api/health
+          avg_latency_ms: 20
+          error_rate: 0.001
+        - method: GET
+          path: /api/users
+          avg_latency_ms: 100
+          error_rate: 0.01
+        - method: POST
+          path: /api/users
+          avg_latency_ms: 220
+          error_rate: 0.01
+    timeline:
+      - from: 0
+        to: 1080
+        state: healthy
+  - type: custom
+    name: s3-acme-mktg-archive
+    description: World-readable. Holds gzipped DB dumps from 2022.
+    host: s3-acme-mktg-archive-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 5
+      error_rate: 0.001
+      custom_type: s3-acme-mktg-archive-events
+    timeline:
+      - from: 0
+        to: 180
+        state: healthy
+      - from: 180
+        to: 660
+        state: compromised
+        note: anonymous read in progress
+      - from: 660
+        to: 900
+        state: throttled
+        note: public access blocked
+      - from: 900
+        to: 1080
+        state: healthy
+  - type: custom
+    name: cloudtrail-siem
+    host: cloudtrail-siem-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 8
+      error_rate: 0.001
+      custom_type: cloudtrail-siem-events
+connections:
+  - source: mktg-edge-lb
+    target: marketing-site
+    protocol: https
+    port: 443
+  - source: mktg-edge-lb
+    target: s3-acme-mktg-archive
+    protocol: https
+    port: 443
+  - source: s3-acme-mktg-archive
+    target: cloudtrail-siem
+    protocol: tcp
+    port: 9200
+custom_types:
+  - id: s3-acme-mktg-archive-events
+    name: s3-acme-mktg-archive
+    description: Generic event log for s3-acme-mktg-archive
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - s3-acme-mktg-archive request received
+          - s3-acme-mktg-archive processed event
+          - s3-acme-mktg-archive returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} s3-acme-mktg-archive [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} s3-acme-mktg-archive [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: cloudtrail-siem-events
+    name: cloudtrail-siem
+    description: Generic event log for cloudtrail-siem
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - cloudtrail-siem request received
+          - cloudtrail-siem processed event
+          - cloudtrail-siem returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} cloudtrail-siem [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} cloudtrail-siem [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true

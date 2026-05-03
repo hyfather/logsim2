@@ -1,0 +1,229 @@
+name: Departing Engineer — Bulk Repo & Doc Pull
+description: >-
+  Senior engineer gives notice on the 1st. Over the following two weeks they git-clone 87 internal repos, then on the
+  morning of their last day they pull 14 GB from SharePoint covering customer roadmaps, contract redlines and salary
+  bands.
+duration: 1800
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: corp-services
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: identity-edge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: saas-bridge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: audit-store
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: okta-sso-edge-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: identity-edge
+  - type: virtual_server
+    name: github-enterprise-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: saas-bridge
+  - type: virtual_server
+    name: sharepoint-online-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: saas-bridge
+  - type: virtual_server
+    name: dlp-egress-proxy-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: saas-bridge
+  - type: virtual_server
+    name: audit-events-db-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: audit-store
+services:
+  - type: nginx
+    name: okta-sso-edge
+    host: okta-sso-edge-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+  - type: custom
+    name: github-enterprise
+    host: github-enterprise-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 30
+      error_rate: 0.005
+      custom_type: github-enterprise-events
+    timeline:
+      - from: 0
+        to: 240
+        state: healthy
+      - from: 240
+        to: 960
+        state: under_attack
+        note: single user, anomalous repo-clone rate
+      - from: 1140
+        to: 1500
+        state: throttled
+        note: PAT revoked
+      - from: 1500
+        to: 1800
+        state: healthy
+  - type: custom
+    name: sharepoint-online
+    host: sharepoint-online-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 50
+      error_rate: 0.005
+      custom_type: sharepoint-online-events
+    timeline:
+      - from: 0
+        to: 960
+        state: healthy
+      - from: 960
+        to: 1320
+        state: under_attack
+        note: 14 GB anomalous read
+      - from: 1320
+        to: 1800
+        state: recovering
+  - type: custom
+    name: dlp-egress-proxy
+    host: dlp-egress-proxy-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 80
+      error_rate: 0.005
+      custom_type: dlp-egress-proxy-events
+    timeline:
+      - from: 0
+        to: 1140
+        state: healthy
+      - from: 1140
+        to: 1380
+        state: under_attack
+        note: DLP signal flood
+      - from: 1380
+        to: 1800
+        state: healthy
+  - type: postgres
+    name: audit-events-db
+    host: audit-events-db-host
+    generator:
+      type: postgres
+      port: 5432
+      slow_query_threshold: 1000
+      traffic_rate: 12
+      error_rate: 0.001
+connections:
+  - source: okta-sso-edge
+    target: github-enterprise
+    protocol: https
+    port: 443
+  - source: okta-sso-edge
+    target: sharepoint-online
+    protocol: https
+    port: 443
+  - source: github-enterprise
+    target: dlp-egress-proxy
+    protocol: https
+    port: 443
+  - source: sharepoint-online
+    target: dlp-egress-proxy
+    protocol: https
+    port: 443
+  - source: okta-sso-edge
+    target: audit-events-db
+    protocol: tcp
+    port: 5432
+custom_types:
+  - id: github-enterprise-events
+    name: github-enterprise
+    description: Generic event log for github-enterprise
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - github-enterprise request received
+          - github-enterprise processed event
+          - github-enterprise returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} github-enterprise [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} github-enterprise [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: sharepoint-online-events
+    name: sharepoint-online
+    description: Generic event log for sharepoint-online
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - sharepoint-online request received
+          - sharepoint-online processed event
+          - sharepoint-online returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} sharepoint-online [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} sharepoint-online [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: dlp-egress-proxy-events
+    name: dlp-egress-proxy
+    description: Generic event log for dlp-egress-proxy
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - dlp-egress-proxy request received
+          - dlp-egress-proxy processed event
+          - dlp-egress-proxy returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} dlp-egress-proxy [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} dlp-egress-proxy [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true

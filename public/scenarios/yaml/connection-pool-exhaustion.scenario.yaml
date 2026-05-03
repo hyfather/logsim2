@@ -1,0 +1,155 @@
+name: Connection Pool Exhaustion
+description: >-
+  A slow third-party tax API holds open HikariCP connections inside billing-svc. The pool fills, requests start blocking
+  on getConnection() for the full 30 second timeout, and the upstream LB starts marking the service unhealthy.
+duration: 1080
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: fintech-prod-vpc
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: fintech-edge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: fintech-app
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: fintech-data
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: billing-edge-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: fintech-edge
+  - type: virtual_server
+    name: billing-svc-1-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: fintech-app
+  - type: virtual_server
+    name: billing-svc-2-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: fintech-app
+  - type: virtual_server
+    name: billing-db-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: fintech-data
+services:
+  - type: nginx
+    name: billing-edge
+    host: billing-edge-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+    timeline:
+      - from: 0
+        to: 480
+        state: healthy
+      - from: 480
+        to: 720
+        state: degraded
+        note: ejected b1
+      - from: 720
+        to: 1080
+        state: healthy
+  - type: golang
+    name: billing-svc-1
+    description: HikariCP pool size 30, timeout 30s.
+    host: billing-svc-1-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 60
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 360
+        state: healthy
+      - from: 360
+        to: 720
+        state: degraded
+        note: pool saturated
+      - from: 720
+        to: 900
+        state: recovering
+      - from: 900
+        to: 1080
+        state: healthy
+  - type: golang
+    name: billing-svc-2
+    description: Identical config.
+    host: billing-svc-2-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 60
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 540
+        state: healthy
+      - from: 540
+        to: 720
+        state: degraded
+        note: soaking failed-over load
+      - from: 720
+        to: 900
+        state: recovering
+      - from: 900
+        to: 1080
+        state: healthy
+  - type: postgres
+    name: billing-db
+    host: billing-db-host
+    generator:
+      type: postgres
+      port: 5432
+      slow_query_threshold: 1000
+      traffic_rate: 70
+      error_rate: 0.001
+connections:
+  - source: billing-edge
+    target: billing-svc-1
+    protocol: http
+    port: 8080
+  - source: billing-edge
+    target: billing-svc-2
+    protocol: http
+    port: 8080
+  - source: billing-svc-1
+    target: billing-db
+    protocol: tcp
+    port: 5432
+  - source: billing-svc-2
+    target: billing-db
+    protocol: tcp
+    port: 5432

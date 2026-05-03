@@ -1,0 +1,278 @@
+name: JVM Memory Leak Death Spiral
+description: >-
+  A subtle memory leak in a custom Caffeine cache key (mutable LocalDate without equals/hashCode) bleeds heap on the
+  search service over ~25 minutes. GC pauses go from 50ms to 8s, then the JVM enters death-spiral GC and finally OOMs.
+duration: 1800
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: search-prod-vpc
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: search-edge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: search-app
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: search-data
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: search-edge-lb-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: search-edge
+  - type: virtual_server
+    name: search-svc-jvm-1-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: search-app
+  - type: virtual_server
+    name: search-svc-jvm-2-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: search-app
+  - type: virtual_server
+    name: search-svc-jvm-3-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: search-app
+  - type: virtual_server
+    name: es-cluster-vip-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: search-data
+services:
+  - type: nginx
+    name: search-edge-lb
+    host: search-edge-lb-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+  - type: custom
+    name: search-svc-jvm-1
+    description: Spring Boot 3.2, Caffeine cache 200K entries.
+    host: search-svc-jvm-1-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 60
+      error_rate: 0.005
+      custom_type: search-svc-jvm-1-events
+    timeline:
+      - from: 0
+        to: 300
+        state: healthy
+      - from: 300
+        to: 780
+        state: degraded
+        note: GC pressure
+      - from: 780
+        to: 840
+        state: down
+        note: OOM
+      - from: 840
+        to: 1380
+        state: degraded
+      - from: 1380
+        to: 1620
+        state: recovering
+      - from: 1620
+        to: 1800
+        state: healthy
+  - type: custom
+    name: search-svc-jvm-2
+    host: search-svc-jvm-2-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 60
+      error_rate: 0.005
+      custom_type: search-svc-jvm-2-events
+    timeline:
+      - from: 0
+        to: 900
+        state: healthy
+      - from: 900
+        to: 1140
+        state: degraded
+      - from: 1140
+        to: 1200
+        state: down
+        note: OOM
+      - from: 1200
+        to: 1380
+        state: degraded
+      - from: 1380
+        to: 1620
+        state: recovering
+      - from: 1620
+        to: 1800
+        state: healthy
+  - type: custom
+    name: search-svc-jvm-3
+    host: search-svc-jvm-3-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 60
+      error_rate: 0.005
+      custom_type: search-svc-jvm-3-events
+    timeline:
+      - from: 0
+        to: 900
+        state: healthy
+      - from: 900
+        to: 1380
+        state: degraded
+        note: GC death spiral
+      - from: 1380
+        to: 1620
+        state: recovering
+      - from: 1620
+        to: 1800
+        state: healthy
+  - type: custom
+    name: es-cluster-vip
+    description: Elasticsearch 8.11 backing store.
+    host: es-cluster-vip-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 90
+      error_rate: 0.001
+      custom_type: es-cluster-vip-events
+connections:
+  - source: search-edge-lb
+    target: search-svc-jvm-1
+    protocol: http
+    port: 8080
+  - source: search-edge-lb
+    target: search-svc-jvm-2
+    protocol: http
+    port: 8080
+  - source: search-edge-lb
+    target: search-svc-jvm-3
+    protocol: http
+    port: 8080
+  - source: search-svc-jvm-1
+    target: es-cluster-vip
+    protocol: http
+    port: 9200
+  - source: search-svc-jvm-2
+    target: es-cluster-vip
+    protocol: http
+    port: 9200
+  - source: search-svc-jvm-3
+    target: es-cluster-vip
+    protocol: http
+    port: 9200
+custom_types:
+  - id: search-svc-jvm-1-events
+    name: search-svc-jvm-1
+    description: Generic event log for search-svc-jvm-1
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - search-svc-jvm-1 request received
+          - search-svc-jvm-1 processed event
+          - search-svc-jvm-1 returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} search-svc-jvm-1 [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} search-svc-jvm-1 [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: search-svc-jvm-2-events
+    name: search-svc-jvm-2
+    description: Generic event log for search-svc-jvm-2
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - search-svc-jvm-2 request received
+          - search-svc-jvm-2 processed event
+          - search-svc-jvm-2 returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} search-svc-jvm-2 [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} search-svc-jvm-2 [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: search-svc-jvm-3-events
+    name: search-svc-jvm-3
+    description: Generic event log for search-svc-jvm-3
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - search-svc-jvm-3 request received
+          - search-svc-jvm-3 processed event
+          - search-svc-jvm-3 returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} search-svc-jvm-3 [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} search-svc-jvm-3 [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: es-cluster-vip-events
+    name: es-cluster-vip
+    description: Generic event log for es-cluster-vip
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - es-cluster-vip request received
+          - es-cluster-vip processed event
+          - es-cluster-vip returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} es-cluster-vip [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} es-cluster-vip [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true

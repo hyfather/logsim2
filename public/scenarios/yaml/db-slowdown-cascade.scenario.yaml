@@ -1,0 +1,195 @@
+name: Database Slowdown Cascade
+description: >-
+  Three-tier web app where the primary database starts returning slow queries, cascading degradation up through the API
+  tier until a read-replica failover restores service.
+duration: 1200
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: prod-vpc
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: public-subnet
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: app-subnet
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: data-subnet
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: edge-lb-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: public-subnet
+  - type: virtual_server
+    name: users-api-1-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: app-subnet
+  - type: virtual_server
+    name: users-api-2-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: app-subnet
+  - type: virtual_server
+    name: users-db-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: data-subnet
+  - type: virtual_server
+    name: session-cache-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: data-subnet
+services:
+  - type: nginx
+    name: edge-lb
+    description: Public HTTPS reverse proxy.
+    host: edge-lb-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+  - type: nodejs
+    name: users-api-1
+    description: Stateless user directory API.
+    host: users-api-1-host
+    generator:
+      type: nodejs
+      port: 3000
+      log_format: json
+      log_level: info
+      traffic_rate: 90
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /api/health
+          avg_latency_ms: 20
+          error_rate: 0.001
+        - method: GET
+          path: /api/users
+          avg_latency_ms: 100
+          error_rate: 0.01
+        - method: POST
+          path: /api/users
+          avg_latency_ms: 220
+          error_rate: 0.01
+    timeline:
+      - from: 0
+        to: 300
+        state: healthy
+      - from: 300
+        to: 720
+        state: degraded
+        note: DB latency cascade
+      - from: 720
+        to: 960
+        state: throttled
+        note: rate limit while DB drains
+      - from: 960
+        to: 1200
+        state: healthy
+  - type: nodejs
+    name: users-api-2
+    description: Stateless user directory API.
+    host: users-api-2-host
+    generator:
+      type: nodejs
+      port: 3000
+      log_format: json
+      log_level: info
+      traffic_rate: 90
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /api/health
+          avg_latency_ms: 20
+          error_rate: 0.001
+        - method: GET
+          path: /api/users
+          avg_latency_ms: 100
+          error_rate: 0.01
+        - method: POST
+          path: /api/users
+          avg_latency_ms: 220
+          error_rate: 0.01
+    timeline:
+      - from: 0
+        to: 300
+        state: healthy
+      - from: 300
+        to: 720
+        state: degraded
+        note: DB latency cascade
+      - from: 720
+        to: 960
+        state: throttled
+        note: rate limit while DB drains
+      - from: 960
+        to: 1200
+        state: healthy
+  - type: postgres
+    name: users-db
+    description: Primary user record store.
+    host: users-db-host
+    generator:
+      type: postgres
+      port: 5432
+      slow_query_threshold: 1000
+      traffic_rate: 90
+      error_rate: 0.001
+    timeline:
+      - from: 0
+        to: 240
+        state: healthy
+      - from: 240
+        to: 720
+        state: degraded
+        note: slow queries / lock waits
+      - from: 720
+        to: 960
+        state: recovering
+        note: failover in progress
+      - from: 960
+        to: 1200
+        state: healthy
+  - type: redis
+    name: session-cache
+    description: Session lookup cache.
+    host: session-cache-host
+    generator:
+      type: redis
+      port: 6379
+      max_memory: 256mb
+      eviction_policy: allkeys-lru
+      traffic_rate: 440
+      error_rate: 0.0005
+connections:
+  - source: edge-lb
+    target: users-api-1
+    protocol: http
+    port: 3000
+  - source: edge-lb
+    target: users-api-2
+    protocol: http
+    port: 3000
+  - source: users-api-1
+    target: users-db
+    protocol: tcp
+    port: 5432
+  - source: users-api-2
+    target: users-db
+    protocol: tcp
+    port: 5432
+  - source: users-api-1
+    target: session-cache
+    protocol: tcp
+    port: 6379
+  - source: users-api-2
+    target: session-cache
+    protocol: tcp
+    port: 6379

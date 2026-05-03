@@ -1,0 +1,191 @@
+name: NLB Cross-Zone Imbalance
+description: >-
+  Cross-zone load balancing was disabled on the NLB during a cost-savings sweep last quarter. A client with sticky DNS
+  resolution lands almost entirely on us-east-1c targets — that AZ saturates while the other two AZs sit at 20% CPU. P95
+  latency in 1c climbs and 5xx rates rise.
+duration: 1200
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: platform-prod-vpc
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: edge-public
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: app-private-1a
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: app-private-1b
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: app-private-1c
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: data-private
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: platform-nlb-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: edge-public
+  - type: virtual_server
+    name: platform-api-1a-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: app-private-1a
+  - type: virtual_server
+    name: platform-api-1b-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: app-private-1b
+  - type: virtual_server
+    name: platform-api-1c-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: app-private-1c
+  - type: virtual_server
+    name: platform-db-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: data-private
+services:
+  - type: nginx
+    name: platform-nlb
+    host: platform-nlb-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+    timeline:
+      - from: 0
+        to: 360
+        state: degraded
+        note: imbalanced upstream
+      - from: 360
+        to: 540
+        state: degraded
+      - from: 540
+        to: 720
+        state: recovering
+      - from: 720
+        to: 1200
+        state: healthy
+  - type: golang
+    name: platform-api-1a
+    host: platform-api-1a-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 35
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 1200
+        state: healthy
+  - type: golang
+    name: platform-api-1b
+    host: platform-api-1b-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 35
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 1200
+        state: healthy
+  - type: golang
+    name: platform-api-1c
+    description: This AZ takes ~75% of traffic.
+    host: platform-api-1c-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 180
+      error_rate: 0.02
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 240
+        state: degraded
+        note: absorbing 75% of traffic
+      - from: 240
+        to: 540
+        state: under_attack
+        note: saturated CPU
+      - from: 540
+        to: 720
+        state: recovering
+      - from: 720
+        to: 1200
+        state: healthy
+  - type: postgres
+    name: platform-db
+    host: platform-db-host
+    generator:
+      type: postgres
+      port: 5432
+      slow_query_threshold: 1000
+      traffic_rate: 126
+      error_rate: 0.001
+connections:
+  - source: platform-nlb
+    target: platform-api-1a
+    protocol: http
+    port: 8080
+  - source: platform-nlb
+    target: platform-api-1b
+    protocol: http
+    port: 8080
+  - source: platform-nlb
+    target: platform-api-1c
+    protocol: http
+    port: 8080
+  - source: platform-api-1a
+    target: platform-db
+    protocol: tcp
+    port: 5432
+  - source: platform-api-1b
+    target: platform-db
+    protocol: tcp
+    port: 5432
+  - source: platform-api-1c
+    target: platform-db
+    protocol: tcp
+    port: 5432

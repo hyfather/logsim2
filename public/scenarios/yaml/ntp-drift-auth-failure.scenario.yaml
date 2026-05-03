@@ -1,0 +1,164 @@
+name: NTP Drift Breaks Authentication
+description: >-
+  An ESXi host loses sync with the corporate NTP fleet and the VMs running on it slowly drift forward by ~6 minutes. JWT
+  validation starts failing with 'token used before nbf', Kerberos tickets get rejected by AD, and the affected app
+  servers can no longer authenticate to the database.
+duration: 1500
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: datacenter-iad-vpc
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: iad-dmz
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: iad-app
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: iad-data
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: iad-rev-proxy-01-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: iad-dmz
+  - type: virtual_server
+    name: win-app-iad-09-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: iad-app
+  - type: virtual_server
+    name: win-app-iad-10-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: iad-app
+  - type: virtual_server
+    name: pg-iad-main-01-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: iad-data
+services:
+  - type: nginx
+    name: iad-rev-proxy-01
+    host: iad-rev-proxy-01-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+  - type: nodejs
+    name: win-app-iad-09
+    description: Windows Server 2019 VM on host esx-iad-12.
+    host: win-app-iad-09-host
+    generator:
+      type: nodejs
+      port: 3000
+      log_format: json
+      log_level: info
+      traffic_rate: 50
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /api/health
+          avg_latency_ms: 20
+          error_rate: 0.001
+        - method: GET
+          path: /api/users
+          avg_latency_ms: 100
+          error_rate: 0.01
+        - method: POST
+          path: /api/users
+          avg_latency_ms: 220
+          error_rate: 0.01
+    timeline:
+      - from: 0
+        to: 540
+        state: healthy
+      - from: 540
+        to: 1020
+        state: degraded
+        note: JWT/Kerberos failures
+      - from: 1020
+        to: 1260
+        state: recovering
+      - from: 1260
+        to: 1500
+        state: healthy
+  - type: nodejs
+    name: win-app-iad-10
+    description: Same ESXi host.
+    host: win-app-iad-10-host
+    generator:
+      type: nodejs
+      port: 3000
+      log_format: json
+      log_level: info
+      traffic_rate: 50
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /api/health
+          avg_latency_ms: 20
+          error_rate: 0.001
+        - method: GET
+          path: /api/users
+          avg_latency_ms: 100
+          error_rate: 0.01
+        - method: POST
+          path: /api/users
+          avg_latency_ms: 220
+          error_rate: 0.01
+    timeline:
+      - from: 0
+        to: 540
+        state: healthy
+      - from: 540
+        to: 1020
+        state: degraded
+      - from: 1020
+        to: 1260
+        state: recovering
+      - from: 1260
+        to: 1500
+        state: healthy
+  - type: postgres
+    name: pg-iad-main-01
+    description: Auth via Kerberos against AD.
+    host: pg-iad-main-01-host
+    generator:
+      type: postgres
+      port: 5432
+      slow_query_threshold: 1000
+      traffic_rate: 50
+      error_rate: 0.001
+    timeline:
+      - from: 0
+        to: 660
+        state: healthy
+      - from: 660
+        to: 1020
+        state: degraded
+        note: rejecting auth from drifted hosts
+      - from: 1020
+        to: 1500
+        state: healthy
+connections:
+  - source: iad-rev-proxy-01
+    target: win-app-iad-09
+    protocol: http
+    port: 3000
+  - source: iad-rev-proxy-01
+    target: win-app-iad-10
+    protocol: http
+    port: 3000
+  - source: win-app-iad-09
+    target: pg-iad-main-01
+    protocol: tcp
+    port: 5432
+  - source: win-app-iad-10
+    target: pg-iad-main-01
+    protocol: tcp
+    port: 5432

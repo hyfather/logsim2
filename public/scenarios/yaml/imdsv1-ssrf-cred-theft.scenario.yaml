@@ -1,0 +1,246 @@
+name: SSRF → IMDSv1 → Stolen EC2 Role Credentials
+description: >-
+  An image-resize endpoint trusts a user-supplied URL and fetches it server-side. Attacker passes
+  http://169.254.169.254/latest/meta-data/iam/security-credentials/ec2-app-role and the app cheerfully returns AWS temp
+  credentials. They use them from a residential IP to enumerate S3.
+duration: 1500
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: media-services-vpc
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: media-edge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: media-app
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: media-data
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: media-edge-lb-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: media-edge
+  - type: virtual_server
+    name: image-resize-svc-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: media-app
+  - type: virtual_server
+    name: ec2-imdsv1-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: media-app
+  - type: virtual_server
+    name: s3-media-bucket-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: media-data
+  - type: virtual_server
+    name: cloudtrail-firehose-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: media-data
+services:
+  - type: nginx
+    name: media-edge-lb
+    host: media-edge-lb-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+  - type: nodejs
+    name: image-resize-svc
+    description: Fetches user-supplied URL. Hop limit not enforced; IMDSv1 enabled on the AMI.
+    host: image-resize-svc-host
+    generator:
+      type: nodejs
+      port: 3000
+      log_format: json
+      log_level: info
+      traffic_rate: 70
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /api/health
+          avg_latency_ms: 20
+          error_rate: 0.001
+        - method: GET
+          path: /api/users
+          avg_latency_ms: 100
+          error_rate: 0.01
+        - method: POST
+          path: /api/users
+          avg_latency_ms: 220
+          error_rate: 0.01
+    timeline:
+      - from: 0
+        to: 240
+        state: healthy
+      - from: 240
+        to: 540
+        state: under_attack
+        note: SSRF probes
+      - from: 540
+        to: 1020
+        state: compromised
+        note: credentials exfilled via metadata
+      - from: 1020
+        to: 1260
+        state: recovering
+        note: AMI updated to IMDSv2
+      - from: 1260
+        to: 1500
+        state: healthy
+  - type: custom
+    name: ec2-imdsv1
+    description: 169.254.169.254 endpoint. Returns temp creds for ec2-app-role.
+    host: ec2-imdsv1-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 1
+      error_rate: 0.005
+      custom_type: ec2-imdsv1-events
+    timeline:
+      - from: 0
+        to: 360
+        state: healthy
+      - from: 360
+        to: 1020
+        state: compromised
+        note: answering anon queries
+      - from: 1020
+        to: 1500
+        state: healthy
+        note: now requires PUT token
+  - type: custom
+    name: s3-media-bucket
+    host: s3-media-bucket-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 12
+      error_rate: 0.005
+      custom_type: s3-media-bucket-events
+    timeline:
+      - from: 0
+        to: 540
+        state: healthy
+      - from: 540
+        to: 1020
+        state: under_attack
+        note: credential reuse from outside VPC
+      - from: 1020
+        to: 1500
+        state: healthy
+  - type: custom
+    name: cloudtrail-firehose
+    host: cloudtrail-firehose-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 8
+      error_rate: 0.001
+      custom_type: cloudtrail-firehose-events
+connections:
+  - source: media-edge-lb
+    target: image-resize-svc
+    protocol: https
+    port: 443
+  - source: image-resize-svc
+    target: ec2-imdsv1
+    protocol: http
+    port: 80
+  - source: image-resize-svc
+    target: s3-media-bucket
+    protocol: https
+    port: 443
+  - source: s3-media-bucket
+    target: cloudtrail-firehose
+    protocol: https
+    port: 443
+custom_types:
+  - id: ec2-imdsv1-events
+    name: ec2-imdsv1
+    description: Generic event log for ec2-imdsv1
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - ec2-imdsv1 request received
+          - ec2-imdsv1 processed event
+          - ec2-imdsv1 returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} ec2-imdsv1 [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} ec2-imdsv1 [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: s3-media-bucket-events
+    name: s3-media-bucket
+    description: Generic event log for s3-media-bucket
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - s3-media-bucket request received
+          - s3-media-bucket processed event
+          - s3-media-bucket returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} s3-media-bucket [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} s3-media-bucket [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: cloudtrail-firehose-events
+    name: cloudtrail-firehose
+    description: Generic event log for cloudtrail-firehose
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - cloudtrail-firehose request received
+          - cloudtrail-firehose processed event
+          - cloudtrail-firehose returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} cloudtrail-firehose [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} cloudtrail-firehose [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true

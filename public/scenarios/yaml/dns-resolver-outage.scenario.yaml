@@ -1,0 +1,284 @@
+name: Internal DNS Resolver Outage
+description: >-
+  The corporate Unbound resolver pair goes silent after a config push. Pods, app servers and the LB all start failing
+  health checks because nothing can resolve internal SRV records. Failover to the secondary takes longer than anyone
+  expected.
+duration: 1380
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: corp-prod-use1
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: subnet-edge-a
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: subnet-app-priv
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: subnet-data-priv
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: subnet-shared-svc
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: edge-ingress-01-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: subnet-edge-a
+  - type: virtual_server
+    name: checkout-api-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: subnet-app-priv
+  - type: virtual_server
+    name: checkout-worker-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: subnet-app-priv
+  - type: virtual_server
+    name: checkout-pg-primary-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: subnet-data-priv
+  - type: virtual_server
+    name: checkout-cache-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: subnet-data-priv
+  - type: virtual_server
+    name: ns-resolver-01-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: subnet-shared-svc
+  - type: virtual_server
+    name: ns-resolver-02-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: subnet-shared-svc
+services:
+  - type: nginx
+    name: edge-ingress-01
+    host: edge-ingress-01-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+    timeline:
+      - from: 0
+        to: 420
+        state: healthy
+      - from: 420
+        to: 960
+        state: degraded
+        note: upstream resolution failing
+      - from: 960
+        to: 1380
+        state: healthy
+  - type: golang
+    name: checkout-api
+    host: checkout-api-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 110
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 290
+        state: healthy
+      - from: 290
+        to: 960
+        state: degraded
+        note: DNS lookups timing out
+      - from: 960
+        to: 1200
+        state: recovering
+      - from: 1200
+        to: 1380
+        state: healthy
+  - type: golang
+    name: checkout-worker
+    host: checkout-worker-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 10
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 290
+        state: healthy
+      - from: 290
+        to: 960
+        state: degraded
+      - from: 960
+        to: 1380
+        state: healthy
+  - type: postgres
+    name: checkout-pg-primary
+    host: checkout-pg-primary-host
+    generator:
+      type: postgres
+      port: 5432
+      slow_query_threshold: 1000
+      traffic_rate: 80
+      error_rate: 0.001
+  - type: redis
+    name: checkout-cache
+    host: checkout-cache-host
+    generator:
+      type: redis
+      port: 6379
+      max_memory: 256mb
+      eviction_policy: allkeys-lru
+      traffic_rate: 220
+      error_rate: 0.0005
+  - type: custom
+    name: ns-resolver-01
+    description: Unbound primary, listens on udp/53 + tcp/53.
+    host: ns-resolver-01-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 190
+      error_rate: 0.0005
+      custom_type: ns-resolver-01-events
+    timeline:
+      - from: 0
+        to: 240
+        state: healthy
+      - from: 240
+        to: 900
+        state: down
+        note: config push crashed unbound
+      - from: 900
+        to: 1380
+        state: recovering
+  - type: custom
+    name: ns-resolver-02
+    description: Cold standby; nobody has tested failover in months.
+    host: ns-resolver-02-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 5
+      custom_type: ns-resolver-02-events
+    timeline:
+      - from: 0
+        to: 660
+        state: healthy
+        note: cold standby, no zones
+      - from: 660
+        to: 900
+        state: recovering
+        note: force-syncing zones
+      - from: 900
+        to: 1380
+        state: healthy
+connections:
+  - source: edge-ingress-01
+    target: checkout-api
+    protocol: http
+    port: 8080
+  - source: checkout-api
+    target: checkout-pg-primary
+    protocol: tcp
+    port: 5432
+  - source: checkout-api
+    target: checkout-cache
+    protocol: tcp
+    port: 6379
+  - source: checkout-worker
+    target: checkout-pg-primary
+    protocol: tcp
+    port: 5432
+  - source: checkout-api
+    target: ns-resolver-01
+    protocol: udp
+    port: 53
+  - source: checkout-worker
+    target: ns-resolver-01
+    protocol: udp
+    port: 53
+  - source: edge-ingress-01
+    target: ns-resolver-01
+    protocol: udp
+    port: 53
+custom_types:
+  - id: ns-resolver-01-events
+    name: ns-resolver-01
+    description: Generic event log for ns-resolver-01
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - ns-resolver-01 request received
+          - ns-resolver-01 processed event
+          - ns-resolver-01 returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} ns-resolver-01 [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} ns-resolver-01 [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: ns-resolver-02-events
+    name: ns-resolver-02
+    description: Generic event log for ns-resolver-02
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - ns-resolver-02 request received
+          - ns-resolver-02 processed event
+          - ns-resolver-02 returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} ns-resolver-02 [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} ns-resolver-02 [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true

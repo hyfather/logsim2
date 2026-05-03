@@ -1,0 +1,265 @@
+name: Honeytoken Tripped on Finance Share
+description: >-
+  A canary file 'M&A-targets-Q3-DRAFT.docx' was planted on \\corp-fs01\Finance$\restricted three months ago. At 02:47
+  it's opened from a vendor-laptop network segment. The token beacons home and the SOC has its first solid lead on a
+  quiet, long-dwell intrusion.
+duration: 1500
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: corp-onprem
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: auth-edge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: fileservers-net
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: vendor-laptop-vlan
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: siem-net
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: ad-dc-02-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: auth-edge
+  - type: virtual_server
+    name: corp-fs01-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: fileservers-net
+  - type: virtual_server
+    name: vendor-vpn-conc-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: vendor-laptop-vlan
+  - type: virtual_server
+    name: internet-egress-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: fileservers-net
+  - type: virtual_server
+    name: splunk-collector-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: siem-net
+services:
+  - type: custom
+    name: ad-dc-02
+    host: ad-dc-02-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 5
+      custom_type: ad-dc-02-events
+  - type: custom
+    name: corp-fs01
+    description: SMB share, including \Finance$\restricted.
+    host: corp-fs01-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 30
+      error_rate: 0.003
+      custom_type: corp-fs01-events
+    timeline:
+      - from: 0
+        to: 240
+        state: healthy
+      - from: 240
+        to: 360
+        state: under_attack
+        note: canary file opened
+      - from: 360
+        to: 780
+        state: compromised
+        note: active intrusion confirmed
+      - from: 780
+        to: 1260
+        state: recovering
+      - from: 1260
+        to: 1500
+        state: healthy
+  - type: custom
+    name: vendor-vpn-conc
+    description: Vendor laptop VLAN; remote access via VPN.
+    host: vendor-vpn-conc-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 5
+      custom_type: vendor-vpn-conc-events
+    timeline:
+      - from: 0
+        to: 240
+        state: healthy
+        note: dormant beacon
+      - from: 240
+        to: 540
+        state: compromised
+        note: pre-existing implant active
+      - from: 540
+        to: 600
+        state: down
+        note: isolated by EDR
+  - type: nginx
+    name: internet-egress
+    description: Outbound proxy. Sees the canary HTTPS beacon.
+    host: internet-egress-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 4
+      error_rate: 0.002
+    timeline:
+      - from: 0
+        to: 300
+        state: healthy
+      - from: 300
+        to: 540
+        state: under_attack
+        note: anomalous canary callback
+      - from: 540
+        to: 1500
+        state: healthy
+  - type: custom
+    name: splunk-collector
+    host: splunk-collector-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 24
+      error_rate: 0.001
+      custom_type: splunk-collector-events
+connections:
+  - source: ad-dc-02
+    target: corp-fs01
+    protocol: tcp
+    port: 445
+  - source: vendor-vpn-conc
+    target: corp-fs01
+    protocol: tcp
+    port: 445
+  - source: corp-fs01
+    target: internet-egress
+    protocol: https
+    port: 443
+  - source: internet-egress
+    target: splunk-collector
+    protocol: tcp
+    port: 9997
+  - source: corp-fs01
+    target: splunk-collector
+    protocol: tcp
+    port: 9997
+custom_types:
+  - id: ad-dc-02-events
+    name: ad-dc-02
+    description: Generic event log for ad-dc-02
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - ad-dc-02 request received
+          - ad-dc-02 processed event
+          - ad-dc-02 returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} ad-dc-02 [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} ad-dc-02 [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: corp-fs01-events
+    name: corp-fs01
+    description: Generic event log for corp-fs01
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - corp-fs01 request received
+          - corp-fs01 processed event
+          - corp-fs01 returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} corp-fs01 [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} corp-fs01 [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: vendor-vpn-conc-events
+    name: vendor-vpn-conc
+    description: Generic event log for vendor-vpn-conc
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - vendor-vpn-conc request received
+          - vendor-vpn-conc processed event
+          - vendor-vpn-conc returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} vendor-vpn-conc [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} vendor-vpn-conc [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: splunk-collector-events
+    name: splunk-collector
+    description: Generic event log for splunk-collector
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - splunk-collector request received
+          - splunk-collector processed event
+          - splunk-collector returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} splunk-collector [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} splunk-collector [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true

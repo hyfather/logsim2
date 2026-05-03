@@ -1,0 +1,239 @@
+name: Conditional Access Policy Weakened 'For Testing'
+description: >-
+  An IT admin disables the 'require compliant device for all users' Conditional Access policy at 14:02 to debug a
+  partner integration. They forget. Six hours later attackers spray credentials from non-corporate devices and walk
+  straight into Exchange.
+duration: 1500
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: corp-identity
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: identity-edge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: saas-bridge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: audit-store
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: entra-edge-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: identity-edge
+  - type: virtual_server
+    name: entra-id-tenancy-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: saas-bridge
+  - type: virtual_server
+    name: exchange-online-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: saas-bridge
+  - type: virtual_server
+    name: id-ueba-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: saas-bridge
+  - type: virtual_server
+    name: siem-collector-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: audit-store
+services:
+  - type: nginx
+    name: entra-edge
+    host: entra-edge-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+  - type: custom
+    name: entra-id-tenancy
+    host: entra-id-tenancy-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 70
+      error_rate: 0.005
+      custom_type: entra-id-tenancy-events
+    timeline:
+      - from: 0
+        to: 540
+        state: healthy
+      - from: 540
+        to: 1080
+        state: under_attack
+        note: credential spray with weakened policy
+      - from: 1080
+        to: 1320
+        state: recovering
+      - from: 1320
+        to: 1500
+        state: healthy
+  - type: custom
+    name: exchange-online
+    host: exchange-online-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 40
+      error_rate: 0.005
+      custom_type: exchange-online-events
+    timeline:
+      - from: 0
+        to: 720
+        state: healthy
+      - from: 720
+        to: 1080
+        state: compromised
+        note: BEC forwarding rules
+      - from: 1080
+        to: 1500
+        state: recovering
+  - type: custom
+    name: id-ueba
+    host: id-ueba-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 12
+      error_rate: 0.005
+      custom_type: id-ueba-events
+  - type: custom
+    name: siem-collector
+    host: siem-collector-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 22
+      error_rate: 0.001
+      custom_type: siem-collector-events
+connections:
+  - source: entra-edge
+    target: entra-id-tenancy
+    protocol: https
+    port: 443
+  - source: entra-id-tenancy
+    target: exchange-online
+    protocol: https
+    port: 443
+  - source: entra-id-tenancy
+    target: id-ueba
+    protocol: https
+    port: 443
+  - source: id-ueba
+    target: siem-collector
+    protocol: tcp
+    port: 9200
+custom_types:
+  - id: entra-id-tenancy-events
+    name: entra-id-tenancy
+    description: Generic event log for entra-id-tenancy
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - entra-id-tenancy request received
+          - entra-id-tenancy processed event
+          - entra-id-tenancy returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} entra-id-tenancy [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} entra-id-tenancy [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: exchange-online-events
+    name: exchange-online
+    description: Generic event log for exchange-online
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - exchange-online request received
+          - exchange-online processed event
+          - exchange-online returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} exchange-online [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} exchange-online [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: id-ueba-events
+    name: id-ueba
+    description: Generic event log for id-ueba
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - id-ueba request received
+          - id-ueba processed event
+          - id-ueba returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} id-ueba [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} id-ueba [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: siem-collector-events
+    name: siem-collector
+    description: Generic event log for siem-collector
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - siem-collector request received
+          - siem-collector processed event
+          - siem-collector returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} siem-collector [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} siem-collector [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true

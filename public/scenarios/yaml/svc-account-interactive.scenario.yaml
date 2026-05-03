@@ -1,0 +1,232 @@
+name: Service Account Used Interactively
+description: >-
+  Backup service account svc_bkp_prod was supposed to run cron jobs only. A sysadmin needing fast access borrows the
+  credentials and uses them for an interactive RDP session into a Windows file server, then opens PowerShell and pokes
+  around.
+duration: 1200
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: corp-onprem-dc1
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: auth-edge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: win-server-net
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: siem-net
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: ad-dc-01-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: auth-edge
+  - type: virtual_server
+    name: win-fs-prod-04-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: win-server-net
+  - type: virtual_server
+    name: jump-rdp-01-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: win-server-net
+  - type: virtual_server
+    name: splunk-uf-collector-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: siem-net
+services:
+  - type: custom
+    name: ad-dc-01
+    description: Windows Server 2019 DC.
+    host: ad-dc-01-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 5
+      custom_type: ad-dc-01-events
+    timeline:
+      - from: 0
+        to: 1200
+        state: healthy
+  - type: custom
+    name: win-fs-prod-04
+    description: File server with RDP enabled.
+    host: win-fs-prod-04-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 35
+      error_rate: 0.0035
+      custom_type: win-fs-prod-04-events
+    timeline:
+      - from: 0
+        to: 300
+        state: healthy
+      - from: 300
+        to: 780
+        state: compromised
+        note: interactive logon by service account
+      - from: 780
+        to: 1200
+        state: recovering
+  - type: custom
+    name: jump-rdp-01
+    host: jump-rdp-01-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 8
+      error_rate: 0.005
+      custom_type: jump-rdp-01-events
+    timeline:
+      - from: 0
+        to: 300
+        state: healthy
+      - from: 300
+        to: 780
+        state: compromised
+        note: originated the misuse
+      - from: 780
+        to: 1200
+        state: recovering
+  - type: custom
+    name: splunk-uf-collector
+    host: splunk-uf-collector-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 30
+      error_rate: 0.001
+      custom_type: splunk-uf-collector-events
+connections:
+  - source: ad-dc-01
+    target: win-fs-prod-04
+    protocol: tcp
+    port: 445
+  - source: ad-dc-01
+    target: jump-rdp-01
+    protocol: tcp
+    port: 3389
+  - source: jump-rdp-01
+    target: win-fs-prod-04
+    protocol: tcp
+    port: 3389
+  - source: win-fs-prod-04
+    target: splunk-uf-collector
+    protocol: tcp
+    port: 9997
+  - source: ad-dc-01
+    target: splunk-uf-collector
+    protocol: tcp
+    port: 9997
+custom_types:
+  - id: ad-dc-01-events
+    name: ad-dc-01
+    description: Generic event log for ad-dc-01
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - ad-dc-01 request received
+          - ad-dc-01 processed event
+          - ad-dc-01 returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} ad-dc-01 [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} ad-dc-01 [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: win-fs-prod-04-events
+    name: WIN-FS-PROD-04
+    description: Generic event log for WIN-FS-PROD-04
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - WIN-FS-PROD-04 request received
+          - WIN-FS-PROD-04 processed event
+          - WIN-FS-PROD-04 returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} WIN-FS-PROD-04 [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} WIN-FS-PROD-04 [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: jump-rdp-01-events
+    name: JUMP-RDP-01
+    description: Generic event log for JUMP-RDP-01
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - JUMP-RDP-01 request received
+          - JUMP-RDP-01 processed event
+          - JUMP-RDP-01 returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} JUMP-RDP-01 [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} JUMP-RDP-01 [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: splunk-uf-collector-events
+    name: splunk-uf-collector
+    description: Generic event log for splunk-uf-collector
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - splunk-uf-collector request received
+          - splunk-uf-collector processed event
+          - splunk-uf-collector returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} splunk-uf-collector [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} splunk-uf-collector [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true

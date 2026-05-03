@@ -1,0 +1,265 @@
+name: Autoscaler Lags a Black Friday Ramp
+description: >-
+  Black Friday 00:00 UTC. Promo emails fire and traffic ramps from 200 rps to 4500 rps in under five minutes. The HPA's
+  60-second scale window plus the 90-second pod warm-up means the existing replicas eat the spike — p95 latency hits the
+  SLA cliff.
+duration: 1500
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: ecom-prod-vpc
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: ecom-edge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: ecom-app
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: ecom-data
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: ecom-edge-lb-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: ecom-edge
+  - type: virtual_server
+    name: checkout-1-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: ecom-app
+  - type: virtual_server
+    name: checkout-2-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: ecom-app
+  - type: virtual_server
+    name: checkout-3-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: ecom-app
+  - type: virtual_server
+    name: checkout-4-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: ecom-app
+  - type: virtual_server
+    name: checkout-db-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: ecom-data
+  - type: virtual_server
+    name: checkout-cache-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: ecom-data
+services:
+  - type: nginx
+    name: ecom-edge-lb
+    host: ecom-edge-lb-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+    timeline:
+      - from: 0
+        to: 180
+        state: healthy
+      - from: 180
+        to: 480
+        state: throttled
+        note: queueing requests for slow upstream
+      - from: 480
+        to: 1500
+        state: healthy
+  - type: golang
+    name: checkout-1
+    host: checkout-1-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 60
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 180
+        state: healthy
+      - from: 180
+        to: 480
+        state: degraded
+        note: saturated CPU
+      - from: 480
+        to: 1200
+        state: healthy
+      - from: 1200
+        to: 1500
+        state: healthy
+  - type: golang
+    name: checkout-2
+    host: checkout-2-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 60
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 180
+        state: healthy
+      - from: 180
+        to: 480
+        state: degraded
+      - from: 480
+        to: 1500
+        state: healthy
+  - type: golang
+    name: checkout-3
+    host: checkout-3-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 60
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 180
+        state: healthy
+      - from: 180
+        to: 480
+        state: degraded
+      - from: 480
+        to: 1500
+        state: healthy
+  - type: golang
+    name: checkout-4
+    host: checkout-4-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 60
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 180
+        state: healthy
+      - from: 180
+        to: 480
+        state: degraded
+      - from: 480
+        to: 1500
+        state: healthy
+  - type: postgres
+    name: checkout-db
+    host: checkout-db-host
+    generator:
+      type: postgres
+      port: 5432
+      slow_query_threshold: 1000
+      traffic_rate: 120
+      error_rate: 0.001
+  - type: redis
+    name: checkout-cache
+    host: checkout-cache-host
+    generator:
+      type: redis
+      port: 6379
+      max_memory: 256mb
+      eviction_policy: allkeys-lru
+      traffic_rate: 720
+      error_rate: 0.0005
+connections:
+  - source: ecom-edge-lb
+    target: checkout-1
+    protocol: http
+    port: 8080
+  - source: ecom-edge-lb
+    target: checkout-2
+    protocol: http
+    port: 8080
+  - source: ecom-edge-lb
+    target: checkout-3
+    protocol: http
+    port: 8080
+  - source: ecom-edge-lb
+    target: checkout-4
+    protocol: http
+    port: 8080
+  - source: checkout-1
+    target: checkout-db
+    protocol: tcp
+    port: 5432
+  - source: checkout-2
+    target: checkout-db
+    protocol: tcp
+    port: 5432
+  - source: checkout-3
+    target: checkout-db
+    protocol: tcp
+    port: 5432
+  - source: checkout-4
+    target: checkout-db
+    protocol: tcp
+    port: 5432
+  - source: checkout-1
+    target: checkout-cache
+    protocol: tcp
+    port: 6379
+  - source: checkout-2
+    target: checkout-cache
+    protocol: tcp
+    port: 6379
+  - source: checkout-3
+    target: checkout-cache
+    protocol: tcp
+    port: 6379
+  - source: checkout-4
+    target: checkout-cache
+    protocol: tcp
+    port: 6379

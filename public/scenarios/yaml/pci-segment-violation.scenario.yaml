@@ -1,0 +1,249 @@
+name: PCI Segment Violation
+description: >-
+  A developer working on a payments feature SSHes into a CDE-segment EC2 instance and from there opens a TCP connection
+  to a non-CDE Elasticsearch cluster (because that's where their dashboard lives). PCI-DSS doesn't care about intent —
+  that flow violates segmentation.
+duration: 1080
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: payments-cde-vpc
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: cde-edge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: cde-app
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: cde-data
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: shared-svcs-net
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: cde-edge-lb-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: cde-edge
+  - type: virtual_server
+    name: payments-svc-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: cde-app
+  - type: virtual_server
+    name: cde-jumphost-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: cde-app
+  - type: virtual_server
+    name: payments-db-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: cde-data
+  - type: virtual_server
+    name: shared-elasticsearch-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: shared-svcs-net
+  - type: virtual_server
+    name: vpc-flow-collector-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: shared-svcs-net
+services:
+  - type: nginx
+    name: cde-edge-lb
+    host: cde-edge-lb-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+  - type: golang
+    name: payments-svc
+    host: payments-svc-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 52
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 1080
+        state: healthy
+  - type: custom
+    name: cde-jumphost
+    host: cde-jumphost-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 5
+      custom_type: cde-jumphost-events
+    timeline:
+      - from: 0
+        to: 240
+        state: healthy
+      - from: 240
+        to: 480
+        state: compromised
+        note: PCI segment crossing
+      - from: 480
+        to: 840
+        state: throttled
+        note: SG block applied
+      - from: 840
+        to: 1080
+        state: healthy
+  - type: postgres
+    name: payments-db
+    host: payments-db-host
+    generator:
+      type: postgres
+      port: 5432
+      slow_query_threshold: 1000
+      traffic_rate: 30
+      error_rate: 0.001
+  - type: custom
+    name: shared-elasticsearch
+    description: Non-CDE logging cluster.
+    host: shared-elasticsearch-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 4
+      error_rate: 0.005
+      custom_type: shared-elasticsearch-events
+    timeline:
+      - from: 0
+        to: 360
+        state: healthy
+      - from: 360
+        to: 480
+        state: under_attack
+        note: received CDE-origin traffic
+      - from: 480
+        to: 1080
+        state: healthy
+  - type: custom
+    name: vpc-flow-collector
+    host: vpc-flow-collector-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 12
+      error_rate: 0.001
+      custom_type: vpc-flow-collector-events
+connections:
+  - source: cde-edge-lb
+    target: payments-svc
+    protocol: https
+    port: 443
+  - source: payments-svc
+    target: payments-db
+    protocol: tcp
+    port: 5432
+  - source: cde-jumphost
+    target: payments-svc
+    protocol: tcp
+    port: 22
+  - source: cde-jumphost
+    target: shared-elasticsearch
+    protocol: http
+    port: 9200
+  - source: shared-elasticsearch
+    target: vpc-flow-collector
+    protocol: tcp
+    port: 9997
+custom_types:
+  - id: cde-jumphost-events
+    name: cde-jumphost
+    description: Generic event log for cde-jumphost
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - cde-jumphost request received
+          - cde-jumphost processed event
+          - cde-jumphost returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} cde-jumphost [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} cde-jumphost [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: shared-elasticsearch-events
+    name: shared-elasticsearch
+    description: Generic event log for shared-elasticsearch
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - shared-elasticsearch request received
+          - shared-elasticsearch processed event
+          - shared-elasticsearch returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} shared-elasticsearch [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} shared-elasticsearch [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: vpc-flow-collector-events
+    name: vpc-flow-collector
+    description: Generic event log for vpc-flow-collector
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - vpc-flow-collector request received
+          - vpc-flow-collector processed event
+          - vpc-flow-collector returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} vpc-flow-collector [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} vpc-flow-collector [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true

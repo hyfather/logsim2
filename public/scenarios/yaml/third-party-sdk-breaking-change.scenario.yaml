@@ -1,0 +1,163 @@
+name: Third-Party SDK Auto-Bump Breaks API
+description: >-
+  Renovate opens a 'minor' bump for the auth SDK from 4.18 to 4.19. The release silently changes a default header from
+  'Authorization: Bearer ...' to 'X-Auth-Token: ...'. CI passes (mocks). In prod, every downstream call to the identity
+  provider returns 401.
+duration: 1080
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: saas-prod-vpc
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: saas-edge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: saas-app
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: saas-data
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: saas-edge-lb-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: saas-edge
+  - type: virtual_server
+    name: saas-api-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: saas-app
+  - type: virtual_server
+    name: external-idp-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: saas-app
+  - type: virtual_server
+    name: saas-db-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: saas-data
+services:
+  - type: nginx
+    name: saas-edge-lb
+    host: saas-edge-lb-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+    timeline:
+      - from: 0
+        to: 180
+        state: healthy
+      - from: 180
+        to: 660
+        state: degraded
+        note: high upstream 5xx
+      - from: 660
+        to: 1080
+        state: healthy
+  - type: nodejs
+    name: saas-api
+    host: saas-api-host
+    generator:
+      type: nodejs
+      port: 3000
+      log_format: json
+      log_level: info
+      traffic_rate: 90
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /api/health
+          avg_latency_ms: 20
+          error_rate: 0.001
+        - method: GET
+          path: /api/users
+          avg_latency_ms: 100
+          error_rate: 0.01
+        - method: POST
+          path: /api/users
+          avg_latency_ms: 220
+          error_rate: 0.01
+    timeline:
+      - from: 0
+        to: 180
+        state: healthy
+      - from: 180
+        to: 660
+        state: down
+        note: auth header rename, all 401s
+      - from: 660
+        to: 900
+        state: recovering
+      - from: 900
+        to: 1080
+        state: healthy
+  - type: custom
+    name: external-idp
+    description: Auth0-style identity provider, called from saas-api on every request.
+    host: external-idp-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 70
+      error_rate: 0.005
+      custom_type: external-idp-events
+    timeline:
+      - from: 0
+        to: 1080
+        state: healthy
+        note: the IdP is fine — we're calling it wrong
+  - type: postgres
+    name: saas-db
+    host: saas-db-host
+    generator:
+      type: postgres
+      port: 5432
+      slow_query_threshold: 1000
+      traffic_rate: 40
+      error_rate: 0.001
+connections:
+  - source: saas-edge-lb
+    target: saas-api
+    protocol: https
+    port: 443
+  - source: saas-api
+    target: external-idp
+    protocol: https
+    port: 443
+  - source: saas-api
+    target: saas-db
+    protocol: tcp
+    port: 5432
+custom_types:
+  - id: external-idp-events
+    name: external-idp
+    description: Generic event log for external-idp
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - external-idp request received
+          - external-idp processed event
+          - external-idp returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} external-idp [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} external-idp [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true

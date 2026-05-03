@@ -1,0 +1,194 @@
+name: Cache Failure Cascade
+description: >-
+  Redis OOM kill forces all reads onto Postgres; the database connection pool exhausts, APIs degrade, then Redis
+  recovers and the cache warms back up.
+duration: 1080
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: prod-vpc
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: public-subnet
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: app-subnet
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: data-subnet
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: edge-lb-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: public-subnet
+  - type: virtual_server
+    name: products-api-1-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: app-subnet
+  - type: virtual_server
+    name: products-api-2-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: app-subnet
+  - type: virtual_server
+    name: products-cache-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: data-subnet
+  - type: virtual_server
+    name: products-db-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: data-subnet
+services:
+  - type: nginx
+    name: edge-lb
+    host: edge-lb-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+  - type: nodejs
+    name: products-api-1
+    host: products-api-1-host
+    generator:
+      type: nodejs
+      port: 3000
+      log_format: json
+      log_level: info
+      traffic_rate: 80
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /api/health
+          avg_latency_ms: 20
+          error_rate: 0.001
+        - method: GET
+          path: /api/users
+          avg_latency_ms: 100
+          error_rate: 0.01
+        - method: POST
+          path: /api/users
+          avg_latency_ms: 220
+          error_rate: 0.01
+    timeline:
+      - from: 0
+        to: 280
+        state: healthy
+      - from: 280
+        to: 660
+        state: degraded
+        note: p95 latency up 4x
+      - from: 660
+        to: 1080
+        state: healthy
+  - type: nodejs
+    name: products-api-2
+    host: products-api-2-host
+    generator:
+      type: nodejs
+      port: 3000
+      log_format: json
+      log_level: info
+      traffic_rate: 80
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /api/health
+          avg_latency_ms: 20
+          error_rate: 0.001
+        - method: GET
+          path: /api/users
+          avg_latency_ms: 100
+          error_rate: 0.01
+        - method: POST
+          path: /api/users
+          avg_latency_ms: 220
+          error_rate: 0.01
+    timeline:
+      - from: 0
+        to: 280
+        state: healthy
+      - from: 280
+        to: 660
+        state: degraded
+        note: p95 latency up 4x
+      - from: 660
+        to: 1080
+        state: healthy
+  - type: redis
+    name: products-cache
+    description: Read-through product cache.
+    host: products-cache-host
+    generator:
+      type: redis
+      port: 6379
+      max_memory: 256mb
+      eviction_policy: allkeys-lru
+      traffic_rate: 480
+      error_rate: 0.0005
+    timeline:
+      - from: 0
+        to: 240
+        state: healthy
+      - from: 240
+        to: 300
+        state: down
+        note: OOM kill
+      - from: 300
+        to: 660
+        state: recovering
+        note: warming cache
+      - from: 660
+        to: 1080
+        state: healthy
+  - type: postgres
+    name: products-db
+    host: products-db-host
+    generator:
+      type: postgres
+      port: 5432
+      slow_query_threshold: 1000
+      traffic_rate: 50
+      error_rate: 0.001
+    timeline:
+      - from: 0
+        to: 300
+        state: healthy
+      - from: 300
+        to: 660
+        state: degraded
+        note: pool saturated
+      - from: 660
+        to: 1080
+        state: healthy
+connections:
+  - source: edge-lb
+    target: products-api-1
+    protocol: http
+    port: 3000
+  - source: edge-lb
+    target: products-api-2
+    protocol: http
+    port: 3000
+  - source: products-api-1
+    target: products-cache
+    protocol: tcp
+    port: 6379
+  - source: products-api-2
+    target: products-cache
+    protocol: tcp
+    port: 6379
+  - source: products-api-1
+    target: products-db
+    protocol: tcp
+    port: 5432
+  - source: products-api-2
+    target: products-db
+    protocol: tcp
+    port: 5432

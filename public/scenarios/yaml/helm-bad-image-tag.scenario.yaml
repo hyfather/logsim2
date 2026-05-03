@@ -1,0 +1,197 @@
+name: Helm Image Tag Typo → Fleet CrashLoopBackOff
+description: >-
+  Engineer ships values.yaml with image.tag: '1.4.2-rc1' (which never made it to the registry). Helm rolls forward,
+  every replica's pod hits ImagePullBackOff after the deployment progresses past the readiness threshold. Service goes
+  black for 8 minutes.
+duration: 900
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: checkout-prod-vpc
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: checkout-edge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: checkout-app
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: checkout-data
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: checkout-edge-lb-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: checkout-edge
+  - type: virtual_server
+    name: checkout-api-1-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: checkout-app
+  - type: virtual_server
+    name: checkout-api-2-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: checkout-app
+  - type: virtual_server
+    name: checkout-api-3-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: checkout-app
+  - type: virtual_server
+    name: checkout-db-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: checkout-data
+services:
+  - type: nginx
+    name: checkout-edge-lb
+    host: checkout-edge-lb-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+    timeline:
+      - from: 0
+        to: 420
+        state: healthy
+      - from: 420
+        to: 600
+        state: degraded
+        note: only one upstream
+      - from: 600
+        to: 900
+        state: healthy
+  - type: golang
+    name: checkout-api-1
+    host: checkout-api-1-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 50
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 180
+        state: healthy
+      - from: 180
+        to: 600
+        state: down
+        note: ImagePullBackOff
+      - from: 600
+        to: 780
+        state: recovering
+      - from: 780
+        to: 900
+        state: healthy
+  - type: golang
+    name: checkout-api-2
+    host: checkout-api-2-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 50
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 300
+        state: healthy
+      - from: 300
+        to: 600
+        state: down
+        note: ImagePullBackOff
+      - from: 600
+        to: 780
+        state: recovering
+      - from: 780
+        to: 900
+        state: healthy
+  - type: golang
+    name: checkout-api-3
+    host: checkout-api-3-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 50
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 420
+        state: healthy
+      - from: 420
+        to: 600
+        state: degraded
+        note: absorbing all traffic
+      - from: 600
+        to: 900
+        state: healthy
+  - type: postgres
+    name: checkout-db
+    host: checkout-db-host
+    generator:
+      type: postgres
+      port: 5432
+      slow_query_threshold: 1000
+      traffic_rate: 75
+      error_rate: 0.001
+connections:
+  - source: checkout-edge-lb
+    target: checkout-api-1
+    protocol: http
+    port: 8080
+  - source: checkout-edge-lb
+    target: checkout-api-2
+    protocol: http
+    port: 8080
+  - source: checkout-edge-lb
+    target: checkout-api-3
+    protocol: http
+    port: 8080
+  - source: checkout-api-1
+    target: checkout-db
+    protocol: tcp
+    port: 5432
+  - source: checkout-api-2
+    target: checkout-db
+    protocol: tcp
+    port: 5432
+  - source: checkout-api-3
+    target: checkout-db
+    protocol: tcp
+    port: 5432

@@ -1,0 +1,236 @@
+name: Customer DB Exfil to Personal Gmail
+description: >-
+  A marketing manager exports the customer-CRM CSV (37k rows, includes emails + spend) and emails it to their personal
+  Gmail with subject 'work files - keep'. M365 sends the message; the DLP rule on 'PII to external personal mail' is set
+  to monitor-only.
+duration: 900
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: corp-mailflow
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: mail-edge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: saas-bridge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: audit-store
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: m365-mail-edge-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: mail-edge
+  - type: virtual_server
+    name: exchange-online-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: saas-bridge
+  - type: virtual_server
+    name: dlp-mail-inspect-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: saas-bridge
+  - type: virtual_server
+    name: salesforce-crm-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: saas-bridge
+  - type: virtual_server
+    name: siem-collector-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: audit-store
+services:
+  - type: nginx
+    name: m365-mail-edge
+    host: m365-mail-edge-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+  - type: custom
+    name: exchange-online
+    host: exchange-online-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 80
+      error_rate: 0.005
+      custom_type: exchange-online-events
+    timeline:
+      - from: 0
+        to: 240
+        state: healthy
+      - from: 240
+        to: 480
+        state: compromised
+        note: 37k-row PII send to personal mail
+      - from: 480
+        to: 900
+        state: recovering
+  - type: custom
+    name: dlp-mail-inspect
+    host: dlp-mail-inspect-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 60
+      error_rate: 0.005
+      custom_type: dlp-mail-inspect-events
+  - type: custom
+    name: salesforce-crm
+    host: salesforce-crm-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 30
+      error_rate: 0.005
+      custom_type: salesforce-crm-events
+    timeline:
+      - from: 0
+        to: 180
+        state: healthy
+      - from: 180
+        to: 300
+        state: under_attack
+        note: anomalous bulk export
+      - from: 300
+        to: 900
+        state: healthy
+  - type: custom
+    name: siem-collector
+    host: siem-collector-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 12
+      error_rate: 0.001
+      custom_type: siem-collector-events
+connections:
+  - source: m365-mail-edge
+    target: exchange-online
+    protocol: https
+    port: 443
+  - source: m365-mail-edge
+    target: salesforce-crm
+    protocol: https
+    port: 443
+  - source: exchange-online
+    target: dlp-mail-inspect
+    protocol: https
+    port: 443
+  - source: dlp-mail-inspect
+    target: siem-collector
+    protocol: tcp
+    port: 9200
+custom_types:
+  - id: exchange-online-events
+    name: exchange-online
+    description: Generic event log for exchange-online
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - exchange-online request received
+          - exchange-online processed event
+          - exchange-online returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} exchange-online [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} exchange-online [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: dlp-mail-inspect-events
+    name: dlp-mail-inspect
+    description: Generic event log for dlp-mail-inspect
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - dlp-mail-inspect request received
+          - dlp-mail-inspect processed event
+          - dlp-mail-inspect returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} dlp-mail-inspect [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} dlp-mail-inspect [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: salesforce-crm-events
+    name: salesforce-crm
+    description: Generic event log for salesforce-crm
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - salesforce-crm request received
+          - salesforce-crm processed event
+          - salesforce-crm returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} salesforce-crm [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} salesforce-crm [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: siem-collector-events
+    name: siem-collector
+    description: Generic event log for siem-collector
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - siem-collector request received
+          - siem-collector processed event
+          - siem-collector returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} siem-collector [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} siem-collector [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true

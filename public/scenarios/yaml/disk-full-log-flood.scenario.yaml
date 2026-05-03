@@ -1,0 +1,166 @@
+name: Disk Full From Runaway Debug Logs
+description: >-
+  A junior dev pushed a config that switched the order service to log_level=DEBUG. Twelve hours later /var/log on
+  mysql-srv-04 is 100% full, the binlog can't be written, the database goes read-only, and the app fleet starts
+  rejecting writes.
+duration: 1500
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: old-prod-vpc
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: dmz-public
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: internal-app-net
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: internal-data-net
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: haproxy-edge-01-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: dmz-public
+  - type: virtual_server
+    name: orders-app-srv-07-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: internal-app-net
+  - type: virtual_server
+    name: orders-app-srv-08-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: internal-app-net
+  - type: virtual_server
+    name: mysql-srv-04-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: internal-data-net
+services:
+  - type: nginx
+    name: haproxy-edge-01
+    description: Yes it's labelled nginx, it's actually HAProxy. Nobody renamed it in 2019.
+    host: haproxy-edge-01-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+  - type: nodejs
+    name: orders-app-srv-07
+    host: orders-app-srv-07-host
+    generator:
+      type: nodejs
+      port: 3000
+      log_format: json
+      log_level: info
+      traffic_rate: 70
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /api/health
+          avg_latency_ms: 20
+          error_rate: 0.001
+        - method: GET
+          path: /api/users
+          avg_latency_ms: 100
+          error_rate: 0.01
+        - method: POST
+          path: /api/users
+          avg_latency_ms: 220
+          error_rate: 0.01
+    timeline:
+      - from: 0
+        to: 540
+        state: healthy
+      - from: 540
+        to: 900
+        state: degraded
+        note: writes 500ing
+      - from: 900
+        to: 1260
+        state: recovering
+      - from: 1260
+        to: 1500
+        state: healthy
+  - type: nodejs
+    name: orders-app-srv-08
+    host: orders-app-srv-08-host
+    generator:
+      type: nodejs
+      port: 3000
+      log_format: json
+      log_level: info
+      traffic_rate: 70
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /api/health
+          avg_latency_ms: 20
+          error_rate: 0.001
+        - method: GET
+          path: /api/users
+          avg_latency_ms: 100
+          error_rate: 0.01
+        - method: POST
+          path: /api/users
+          avg_latency_ms: 220
+          error_rate: 0.01
+    timeline:
+      - from: 0
+        to: 540
+        state: healthy
+      - from: 540
+        to: 900
+        state: degraded
+      - from: 900
+        to: 1260
+        state: recovering
+      - from: 1260
+        to: 1500
+        state: healthy
+  - type: mysql
+    name: mysql-srv-04
+    description: MySQL 5.7 on RHEL 7. /var/log shares the same volume as binlogs.
+    host: mysql-srv-04-host
+    generator:
+      type: mysql
+      port: 3306
+      slow_query_threshold: 1000
+      traffic_rate: 70
+      error_rate: 0.001
+    timeline:
+      - from: 0
+        to: 480
+        state: healthy
+      - from: 480
+        to: 900
+        state: down
+        note: read-only, disk full
+      - from: 900
+        to: 1260
+        state: recovering
+      - from: 1260
+        to: 1500
+        state: healthy
+connections:
+  - source: haproxy-edge-01
+    target: orders-app-srv-07
+    protocol: http
+    port: 3000
+  - source: haproxy-edge-01
+    target: orders-app-srv-08
+    protocol: http
+    port: 3000
+  - source: orders-app-srv-07
+    target: mysql-srv-04
+    protocol: tcp
+    port: 3306
+  - source: orders-app-srv-08
+    target: mysql-srv-04
+    protocol: tcp
+    port: 3306

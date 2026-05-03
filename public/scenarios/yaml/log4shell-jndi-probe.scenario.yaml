@@ -1,0 +1,218 @@
+name: Log4Shell — Mass JNDI Probes & Successful Exploit
+description: >-
+  December-2021 style scanning campaign hits the public API. ${jndi:ldap://...} payloads land in User-Agent and
+  X-Api-Version headers across hundreds of endpoints. One legacy build of the reports service still runs log4j 2.14 — it
+  makes the outbound LDAP call and an attacker drops a stage-2 implant.
+duration: 1620
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: prod-vpc
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: public-edge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: app-private
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: data-private
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: edge-waf-lb-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: public-edge
+  - type: virtual_server
+    name: public-api-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: app-private
+  - type: virtual_server
+    name: auth-svc-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: app-private
+  - type: virtual_server
+    name: reports-tomcat-7-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: app-private
+  - type: virtual_server
+    name: core-pg-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: data-private
+services:
+  - type: nginx
+    name: edge-waf-lb
+    host: edge-waf-lb-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+    timeline:
+      - from: 0
+        to: 180
+        state: healthy
+      - from: 180
+        to: 900
+        state: under_attack
+        note: mass jndi probes
+      - from: 900
+        to: 1260
+        state: throttled
+        note: WAF block-mode
+      - from: 1260
+        to: 1620
+        state: healthy
+  - type: golang
+    name: public-api
+    host: public-api-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 110
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 1620
+        state: healthy
+        note: patched, immune
+  - type: nodejs
+    name: auth-svc
+    host: auth-svc-host
+    generator:
+      type: nodejs
+      port: 3000
+      log_format: json
+      log_level: info
+      traffic_rate: 60
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /api/health
+          avg_latency_ms: 20
+          error_rate: 0.001
+        - method: GET
+          path: /api/users
+          avg_latency_ms: 100
+          error_rate: 0.01
+        - method: POST
+          path: /api/users
+          avg_latency_ms: 220
+          error_rate: 0.01
+    timeline:
+      - from: 0
+        to: 1620
+        state: healthy
+        note: patched, immune
+  - type: custom
+    name: reports-tomcat-7
+    description: Tomcat 9 + log4j 2.14.1. Forgotten in Q4 patch sweep.
+    host: reports-tomcat-7-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 25
+      error_rate: 0.01
+      custom_type: reports-tomcat-7-events
+    timeline:
+      - from: 0
+        to: 540
+        state: healthy
+      - from: 540
+        to: 720
+        state: under_attack
+        note: JNDI lookup → LDAP outbound
+      - from: 720
+        to: 1080
+        state: compromised
+        note: stage-2 dropped
+      - from: 1080
+        to: 1260
+        state: down
+        note: isolated by SOC
+      - from: 1260
+        to: 1620
+        state: recovering
+        note: rotated to clean image
+  - type: postgres
+    name: core-pg
+    host: core-pg-host
+    generator:
+      type: postgres
+      port: 5432
+      slow_query_threshold: 1000
+      traffic_rate: 100
+      error_rate: 0.001
+    timeline:
+      - from: 0
+        to: 1620
+        state: healthy
+connections:
+  - source: edge-waf-lb
+    target: public-api
+    protocol: https
+    port: 443
+  - source: edge-waf-lb
+    target: auth-svc
+    protocol: https
+    port: 443
+  - source: edge-waf-lb
+    target: reports-tomcat-7
+    protocol: https
+    port: 443
+  - source: public-api
+    target: core-pg
+    protocol: tcp
+    port: 5432
+  - source: auth-svc
+    target: core-pg
+    protocol: tcp
+    port: 5432
+  - source: reports-tomcat-7
+    target: core-pg
+    protocol: tcp
+    port: 5432
+custom_types:
+  - id: reports-tomcat-7-events
+    name: reports-tomcat-7
+    description: Generic event log for reports-tomcat-7
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - reports-tomcat-7 request received
+          - reports-tomcat-7 processed event
+          - reports-tomcat-7 returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} reports-tomcat-7 [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} reports-tomcat-7 [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
