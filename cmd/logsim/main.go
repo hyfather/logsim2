@@ -7,18 +7,24 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// version is set at build time via -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
 	root := &cobra.Command{
-		Use:   "logsim",
-		Short: "Infrastructure log simulator",
-		Long:  "LogSim generates realistic infrastructure logs from a scenario YAML.",
+		Use:     "logsim",
+		Short:   "Infrastructure log simulator",
+		Long:    "LogSim generates realistic infrastructure logs from a scenario YAML.",
+		Version: version,
 	}
+	root.SetVersionTemplate("logsim {{.Version}}\n")
 
 	root.AddCommand(
 		newValidateCmd(),
 		newRunCmd(),
 		newServeCmd(),
 		newDestinationsCmd(),
+		newUpgradeCmd(),
 	)
 
 	if err := root.Execute(); err != nil {
