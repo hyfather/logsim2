@@ -334,11 +334,21 @@ export function Topbar() {
         updatedAt: now,
       })
       if (result.episode) setEpisode(result.episode)
+      // Capture the post-load YAML so Run-locally can detect whether the user
+      // has since modified the canned scenario. Done after both stores have
+      // settled so the snapshot matches what the modal will compute later.
+      const slug = entry.file.replace(/\.scenario\.json$/, '')
+      const sc = useScenarioStore.getState()
+      const ep = useEpisodeStore.getState().episode
+      const pristineYaml = canvasToScenarioYaml(sc.nodes, sc.edges, sc.metadata, {
+        episode: ep,
+        tickIntervalMs: 1000,
+      })
+      sc.markPresetOrigin(slug, pristineYaml)
       window.dispatchEvent(new CustomEvent('logsim-autosave'))
       // Reflect the loaded preset in the address bar so the URL is shareable.
       // Use history.replaceState (not Next router) so we don't trigger a route
       // transition that would dismount the editor and re-fetch the preset.
-      const slug = entry.file.replace(/\.scenario\.json$/, '')
       window.history.replaceState(null, '', `/s/${slug}`)
     } catch (err) {
       alert(`Failed to load preset scenario: ${String(err)}`)
@@ -1021,7 +1031,6 @@ export function Topbar() {
         metadata={metadata}
         episode={episode}
         tickIntervalMs={1000}
-        outputFormat={outputFormat}
       />
 
       {/* About modal */}

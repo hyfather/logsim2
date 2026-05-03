@@ -11,10 +11,10 @@ import {
 } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 import { buildScenarioYamlForGroundTruth } from '@/lib/scenarioGroundTruth'
+import { useScenarioStore } from '@/store/useScenarioStore'
 import type { FlowNode, FlowEdge } from '@/store/useScenarioStore'
 import type { ScenarioMetadata } from '@/types/scenario'
 import type { Episode } from '@/types/episode'
-import type { LogFormat } from '@/types/logs'
 
 const REPO_SLUG = 'hyfather/logsim2'
 const INSTALL_URL = `https://raw.githubusercontent.com/${REPO_SLUG}/master/scripts/install.sh`
@@ -28,7 +28,6 @@ interface RunLocallyModalProps {
   metadata: ScenarioMetadata
   episode: Episode
   tickIntervalMs?: number
-  outputFormat?: LogFormat
 }
 
 function fileSlug(name: string): string {
@@ -46,14 +45,6 @@ function downloadText(text: string, filename: string, mime: string) {
   URL.revokeObjectURL(url)
 }
 
-// The CLI takes raw|jsonl|ocsf|otel; the toolbar exposes native|ocsf|otel.
-// "native" maps to raw (one log line per event), everything else passes through.
-function cliFormat(fmt: LogFormat | undefined): string {
-  if (fmt === 'ocsf') return 'ocsf'
-  if (fmt === 'otel') return 'otel'
-  return 'jsonl'
-}
-
 export function RunLocallyModal({
   open,
   onClose,
@@ -62,13 +53,11 @@ export function RunLocallyModal({
   metadata,
   episode,
   tickIntervalMs = 1000,
-  outputFormat,
 }: RunLocallyModalProps) {
+  const presetSlug = useScenarioStore(s => s.presetSlug)
+  const pristineYaml = useScenarioStore(s => s.pristineYaml)
   const slug = useMemo(() => fileSlug(metadata.name), [metadata.name])
   const filename = `${slug}.scenario.yaml`
-  const ticks = Math.max(1, episode?.duration ?? 600)
-  const fmt = cliFormat(outputFormat)
-  const outFile = `${slug}.${fmt === 'jsonl' ? 'jsonl' : fmt === 'ocsf' ? 'ocsf.json' : 'otel.json'}`
 
   const yamlText = useMemo(() => {
     if (!open) return ''
@@ -78,18 +67,25 @@ export function RunLocallyModal({
     })
   }, [open, flowNodes, flowEdges, metadata, episode, tickIntervalMs])
 
+  // Pristine = scenario was loaded from a known preset slug AND the on-canvas
+  // YAML still byte-matches the snapshot taken at load time. When pristine, the
+  // CLI can pull the YAML straight from /s/<slug>.yaml without a download step.
+  const isPristinePreset = !!(presetSlug && pristineYaml && yamlText && yamlText === pristineYaml)
+  const presetUrl = useMemo(() => {
+    if (!presetSlug) return ''
+    if (typeof window === 'undefined') return `/s/${presetSlug}.yaml`
+    return `${window.location.origin}/s/${presetSlug}.yaml`
+  }, [presetSlug])
+
   const handleDownload = useCallback(() => {
     if (!yamlText) return
     downloadText(yamlText, filename, 'application/x-yaml')
   }, [yamlText, filename])
 
-  const runCmd = `logsim run --scenario ./${filename} --ticks ${ticks} --format ${fmt} > ${outFile}`
-
-  const installAndRun = `curl -fsSL ${INSTALL_URL} | sh
-${runCmd}`
-
-  const fromSource = `go install github.com/${REPO_SLUG}/cmd/logsim@latest
-${runCmd}`
+  const runCmd = `logsim run ./${filename}`
+  const runFromUrlCmd = `logsim run ${presetUrl}`
+  const primaryRunCmd = isPristinePreset ? runFromUrlCmd : runCmd
+  const installCmd = `curl -fsSL ${INSTALL_URL} | sh`
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) onClose() }}>
@@ -105,40 +101,32 @@ ${runCmd}`
         </DialogHeader>
 
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto px-4 py-4">
-          {/* Step 1 — Download scenario */}
+          {/* Primary: the run command. URL form when pristine, file path
+              form (paired with the download button) when modified. */}
           <section className="space-y-2">
-            <StepHeader index={1} title="Download the scenario" />
-            <div className="flex flex-wrap items-center gap-2">
-              <Button size="sm" onClick={handleDownload} disabled={!yamlText} type="button" className="h-8 gap-1.5 text-[12px]">
-                <Download className="h-3.5 w-3.5" />
-                Download {filename}
-              </Button>
-              <p className="text-[11px] text-slate-500">
-                Save it somewhere, then <code className="rounded bg-slate-100 px-1 py-px font-mono text-[10.5px]">cd</code> into that directory.
-              </p>
-            </div>
+            <CommandBlock label="Run" command={primaryRunCmd} />
+            {!isPristinePreset && (
+              <div className="flex flex-wrap items-center gap-2">
+                <Button size="sm" onClick={handleDownload} disabled={!yamlText} type="button" className="h-8 gap-1.5 text-[12px]">
+                  <Download className="h-3.5 w-3.5" />
+                  Download {filename}
+                </Button>
+                <p className="text-[11px] text-slate-500">
+                  Save it next to where you&apos;ll run the command.
+                </p>
+              </div>
+            )}
           </section>
 
-          {/* Step 2 — Run it */}
-          <section className="space-y-3">
-            <StepHeader index={2} title="Run it" />
-
+          {/* Install (curl only) — kept below since most users only need it once. */}
+          <section className="space-y-2">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+              Don&apos;t have logsim yet?
+            </p>
             <CommandBlock
-              label="Quick start"
-              hint="Installs the logsim binary into ~/.local/bin (or /usr/local/bin if writable), then runs the scenario."
-              command={installAndRun}
-            />
-
-            <CommandBlock
-              label="Already have logsim"
-              hint={`Writes ${ticks} ticks of ${fmt.toUpperCase()} logs to ${outFile} in the current directory.`}
-              command={runCmd}
-            />
-
-            <CommandBlock
-              label="Run from source"
-              hint="Requires Go 1.25+. Builds the latest main and installs it on $GOPATH/bin."
-              command={fromSource}
+              label="Install"
+              hint="Drops the binary in ~/.local/bin (or /usr/local/bin if writable)."
+              command={installCmd}
             />
           </section>
 
@@ -160,17 +148,6 @@ ${runCmd}`
         </div>
       </DialogContent>
     </Dialog>
-  )
-}
-
-function StepHeader({ index, title }: { index: number; title: string }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-900 text-[10px] font-semibold text-white">
-        {index}
-      </span>
-      <span className="text-[12px] font-semibold uppercase tracking-[0.08em] text-slate-700">{title}</span>
-    </div>
   )
 }
 
