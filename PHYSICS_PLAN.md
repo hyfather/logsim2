@@ -522,9 +522,277 @@ caveat that we can drift away from real production this way — see Open Questio
 
 ---
 
-## 9. Migration from current code
+## 9. Testing strategy: how we know the physics is faithful
 
-### 9.1 Stays as-is
+The invariant suite (§7) is the *catalog* of properties we expect to hold. The
+validation rig (§8) is the *runner*. This section is the *strategy* — the testing
+pyramid that says which test type catches which class of failure, and where the
+gaps would otherwise be.
+
+The hard thing about testing a physics simulator is that most claims are about
+*emergent* behavior, not function inputs and outputs. "Latency rises with load" is
+not a unit test; it's a property over a population of scenarios. "Trace correlation
+works" is not a function call; it's a relation across thousands of log lines. Each
+level below catches a different class of failure, and we need all of them.
+
+### 9.1 The eleven levels
+
+#### Level 1 — Unit tests
+Standard Go unit tests on each component, observer, and cause type.
+- **Catches**: implementation bugs in one place. `Queue.Enqueue` past capacity
+  drops oldest. `ConnectionPool.Checkout` blocks on exhaustion. `ClockSkew.Project`
+  produces a sample within envelope.
+- **Lives in**: `pkg/*/*_test.go`.
+- **CI**: per-PR, blocks merge.
+- **Lands in**: every stage; trivially.
+
+#### Level 2 — Invariant tests on emitted batches
+The catalog from §7 run on a fixed set of scenario fixtures.
+- **Catches**: components individually correct but their composition violates
+  structural laws. (Trace closure, byte conservation, status pairing, etc.)
+- **Lives in**: `pkg/invariants/`.
+- **CI**: per-PR, blocks.
+- **Lands in**: Stage 1 (initial structural set), expanded each stage.
+
+#### Level 3 — Closed-form oracle tests
+Compare simulator output to textbook predictions:
+
+| Claim | Oracle | Test |
+|---|---|---|
+| M/M/1 utilization-latency | `W = 1/(μ-λ)` for ρ < 1 | Sweep ρ from 0.1→0.95, assert measured `W` matches within 10% |
+| Little's Law | `L = λW` in steady state | Measure all three independently; ratio within 5% |
+| Cache hit rate (LRU + Zipf) | classical formula given working set, cache size | Generate Zipf request stream; compare measured to predicted |
+| Cascade amplification (retries) | `A = 1/(1-p)` for stable retry policy | Inject failure; measure load multiplication |
+| Drop rate at saturation | M/M/1/K formula | Bound queue; measure overflow rate vs prediction |
+
+- **Catches**: dynamical claims that are wrong by amounts a queueing theorist would
+  notice. The strongest test of dynamical correctness because the oracle is
+  external.
+- **Lives in**: `pkg/invariants/oracles_test.go`.
+- **CI**: per-PR, blocks.
+- **Lands in**: Stage 2 (when the capacity model exists).
+
+#### Level 4 — Cause-symptom tests (parameterized)
+For each cause type in §6.2, a fixture asserts the expected symptom chain appears
+in the right observable, in the right order, with the right amplitude:
+
+```go
+{
+  Name: "connection_pool_drain produces cascade",
+  Scenario: "fixtures/userdir-with-db.yaml",
+  Cause: causes.ConnectionPoolDrain{Target: "App Database", AvailableConns: 0},
+  CauseAt: 300,
+  Expected: []SymptomCheck{
+    {Where: "App Database", Metric: "checkout_wait_p99",
+     Window: tickRange(300, 320), Min: 1000, Max: 30000},
+    {Where: "User Directory Service", Metric: "request_latency_p99",
+     Window: tickRange(305, 325), Min: 1000, Max: 30000},
+    {Where: "Load Balancer", Metric: "5xx_rate",
+     Window: tickRange(310, 330), Min: 0.10, Max: 1.0},
+    {Order: []string{"App Database lat ↑", "App lat ↑", "LB 5xx ↑"}},
+  },
+}
+```
+
+- **Catches**: causes that don't produce their advertised symptom chain. The deepest
+  training-data integrity issue and the test the existing override mechanism
+  *cannot* pass — because there's no causal layer between the configured symptom
+  and the emitted log.
+- **Lives in**: `pkg/causes/symptom_test.go`.
+- **CI**: per-PR, blocks.
+- **Lands in**: Stage 3 (one cause type), expanded through Stage 6.
+
+#### Level 5 — Distributional tests against a baseline
+KS, Hurst, autocorrelation, KL/χ² divergence on inter-arrival, latency, body-size,
+status codes — per-endpoint where applicable. Cross-source-type correlation
+distributions (same TraceID timing across nginx + nodejs + mysql).
+
+- **Catches**: surface texture that doesn't match real telemetry — the kind of
+  failure a discriminator would catch first.
+- **Lives in**: `cmd/logsim-validate/`.
+- **CI**: per-PR, warns until baselines stabilize, then blocks.
+- **Lands in**: Stage 5 (rig + initial baselines), tightened over time.
+
+#### Level 6 — Discriminator / adversarial tests
+Build classifiers trained to distinguish synthetic from real corpora; track AUC
+release-over-release.
+
+Three flavors, in order of sophistication:
+1. **Hand-crafted feature classifier** — logistic regression on a small set of
+   obvious features (status code entropy, inter-event gap distribution, byte-count
+   modular signatures). AUC ≫ 0.5 means we're easy to spot.
+2. **ML classifier** — small transformer or LSTM trained on labeled real/synthetic
+   batches. Lower AUC means harder to distinguish; the *trend* matters more than
+   any absolute number.
+3. **Causal-consistency probe** — discriminator specifically designed to look at
+   trace correlation, byte reconciliation, timing relations. If only this catches
+   us, surface looks fine but causality is leaking.
+
+- **Catches**: aggregate "smell" of synthetic data that no single distributional
+  test catches. Collapses many implicit checks into one tracked number.
+- **Lives in**: separate eval pipeline.
+- **CI**: per-release, tracked (not gating).
+- **Lands in**: post Stage 5, ongoing.
+
+#### Level 7 — Layered ablation tests
+Run with each physics layer disabled or replaced with identity, assert what
+should still hold:
+- **Components off**: substrate-level invariants must still pass.
+- **Observers off** (`local_dev` profile): structural and dynamical invariants
+  must pass; observational ones trivially pass. This is the deterministic CI mode.
+- **Causes off**: produces baseline traffic; used as discriminator-training input.
+- **Single-cause only**: cause-symptom test for that cause must pass without
+  confounding from other causes.
+
+- **Catches**: a layer silently broken but compensated for by another layer.
+  Without ablation, layers can mask each other's bugs.
+- **Lives in**: `pkg/invariants/ablation_test.go`.
+- **CI**: per-PR, blocks.
+- **Lands in**: Stage 4 (when observer layer creates the layering to ablate).
+
+#### Level 8 — Transfer tests (training-task evaluation)
+The ultimate test for the training-data use case:
+1. Train a model on synthetic data labeled with §6.4 ground truth (e.g.,
+   "given logs, identify the root cause of an incident").
+2. Evaluate on a held-out *real* corpus with human-labeled root causes.
+3. Compare to: (a) trained-on-real baseline (oracle), (b) zero-shot baseline,
+   (c) prior-engine-version baseline.
+
+The synthetic-to-real performance gap is the answer to "is this data truthful
+enough for its actual purpose."
+
+- **Catches**: synthetic data that *looks* fine on every other test but fails to
+  transfer to real production. The failure mode that matters most for the
+  Episodes/Datasets work in `programs/`.
+- **Lives in**: separate eval pipeline.
+- **CI**: per-release, tracked (expensive).
+- **Lands in**: post Stage 6, ongoing.
+
+#### Level 9 — Fuzz / sensitivity tests
+Standard Go fuzz on parser, topology generator, parameter ranges. For each
+generated scenario the validator accepts, run a short simulation; assert all
+structural invariants hold.
+
+- **Catches**: degenerate scenarios that crash, hang, or violate invariants.
+  Empty topology, single component, very deep dependency chains, massive fan-out,
+  extreme parameter values.
+- **Lives in**: Go fuzz targets per package.
+- **CI**: nightly, warns.
+- **Lands in**: Stage 1 (parser fuzz), expanded each stage.
+
+#### Level 10 — Regression tests (golden corpus)
+Pin a set of reference scenarios. Generate "golden" output with fixed seed at a
+fixed engine version. Same seed + same version + any platform → byte-identical
+output.
+
+- **Catches**: silent drift across changes that should have been neutral.
+- **Lives in**: `testdata/golden/`.
+- **CI**: per-PR, blocks (golden diffs require explicit reviewer approval — treats
+  "the bytes changed" as notable, not sacred, but visible).
+- **Lands in**: Stage 1 (initial set), expanded each stage.
+
+#### Level 11 — Performance / scale benchmarks
+Events per second of wall clock at 1k / 10k / 100k RPS; memory footprint at
+1-hour / 24-hour simulated time; time-to-first-event after `Run()` start
+(latency bound for editor responsiveness); determinism across goroutine
+scheduling (`GOMAXPROCS=1` and `GOMAXPROCS=8` byte-identical).
+
+- **Catches**: regressions that make the engine unusable at target scale.
+- **Lives in**: Go benchmarks.
+- **CI**: per-PR, warns on >20% regression without explanation.
+- **Lands in**: Stage 1 (baseline numbers), tracked thereafter.
+
+### 9.2 CI matrix
+
+| Level | Frequency | Blocks merge? |
+|---|---|---|
+| 1 Unit | Per-PR | Yes |
+| 2 Invariants | Per-PR | Yes |
+| 3 Oracles | Per-PR | Yes |
+| 4 Cause-symptom | Per-PR | Yes |
+| 5 Distributional | Per-PR | Warn → Yes after stabilization |
+| 6 Discriminator | Per-release | Track |
+| 7 Ablation | Per-PR | Yes |
+| 8 Transfer | Per-release | Track |
+| 9 Fuzz | Nightly | Warn |
+| 10 Regression | Per-PR | Yes (with diff approval) |
+| 11 Performance | Per-PR | Warn (>20%) |
+
+"Track" means we record the metric over time but don't block. "Warn" means we
+surface the diff but don't block. "Yes" blocks merge.
+
+### 9.3 Coverage matrix
+
+What each level covers across the physics layers (✓ = covered, blank = gap):
+
+| Layer | L1 | L2 | L3 | L4 | L5 | L6 | L7 | L8 | L9 | L10 | L11 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Substrate (events, IDs, edges) | ✓ | ✓ |   |   |   |   | ✓ |   | ✓ | ✓ | ✓ |
+| Components (capacity, state) | ✓ | ✓ | ✓ | ✓ |   |   | ✓ |   | ✓ | ✓ | ✓ |
+| Observers (skew, loss, reorder) | ✓ |   |   |   | ✓ | ✓ | ✓ |   | ✓ | ✓ |   |
+| Causes & symptoms | ✓ |   |   | ✓ |   |   | ✓ | ✓ |   | ✓ |   |
+| End-to-end log realism |   |   |   |   | ✓ | ✓ |   | ✓ |   | ✓ |   |
+
+Empty cells are gaps; visible gaps are where bugs hide. The matrix is also a
+priority guide: the best test type to add next is the one that fills the worst
+gap on the layer changing most.
+
+### 9.4 The continuous calibration loop
+
+Real production data is the ongoing oracle. As we obtain more real-corpus
+snapshots, the loop is:
+
+1. Snapshot real telemetry from a willing source (anonymized, scrubbed).
+2. Run the validation rig comparing engine output to the snapshot.
+3. Identify where the gap is widest (which distribution? which invariant?).
+4. Tune component defaults, observer profiles, or cause parameters to close the
+   biggest gap first.
+5. Re-baseline; record new tolerances.
+
+This is process, not code. It's the equivalent of how real physics simulators are
+*calibrated* against experimental data over years. The engine improves over time
+not by adding features but by reducing measured divergence from reality.
+
+### 9.5 Phasing — what's free, what's a project, what's a research bet
+
+Honest accounting of cost so the test plan doesn't read as "build all eleven of
+these now":
+
+- **Free with implementation** (lands as a side effect of building each stage):
+  L1 unit tests, L2 invariants, L7 ablation, L10 regression goldens.
+- **Modest setup** (focused sub-task per stage): L3 oracles, L9 fuzz, L11 perf.
+- **Project-sized** (dedicated effort, multiple weeks): L4 cause-symptom matrix,
+  L5 distributional rig with real-corpus baselines.
+- **Research-sized** (ongoing, possibly never "done"): L6 discriminator, L8
+  transfer.
+
+Realistic build order: L1, L2, L10 from Stage 1. L3, L7 from Stage 2. L9 from
+Stage 1 onward, expanded each stage. L4 starts in Stage 3 (one cause), expanded
+through Stage 6. L5 starts in Stage 5 (the validation rig). L6 and L8 are
+post-Stage-6 ongoing investments — the heavyweight infrastructure to track
+truthfulness as a long-run scalar.
+
+### 9.6 What success looks like
+
+Concrete numbers, with the caveat that all of these need calibration once we have
+real-corpus baselines:
+
+- Every structural invariant (§7.1) holds on the reference scenario at all stages.
+- Every cause type in §6.2 has a passing cause-symptom fixture (Level 4).
+- Closed-form oracles (Level 3) match within 10% across the full parameter sweep.
+- Hand-crafted discriminator (Level 6.1) AUC trends downward release-over-release;
+  goal AUC < 0.7 by Stage 6 completion.
+- Transfer test (Level 8) closes the synthetic-to-real performance gap by 50% vs
+  zero-shot baseline by end of Stage 6.
+
+These are not contracts; they are targets that tell us whether we're on track.
+Adjust as baselines come in.
+
+---
+
+## 10. Migration from current code
+
+### 10.1 Stays as-is
 
 - `pkg/scenario` parsing/validation (with additive schema changes — `calls`, `causes`,
   `observability`)
@@ -534,7 +802,7 @@ caveat that we can drift away from real production this way — see Open Questio
 - The tick model and `Engine.Run` outer loop
 - The browser editor wire format (logs are still `LogEntry` JSON over SSE)
 
-### 9.2 Changes in place
+### 10.2 Changes in place
 
 - `pkg/engine/traffic.go` — keeps producing flows for VPC log compatibility, but as a
   *derived view* over the new event DAG, not the source of truth.
@@ -545,7 +813,7 @@ caveat that we can drift away from real production this way — see Open Questio
 - Generators move from "render this many lines from a count" to "render the lines for
   these specific events that touched me" — same files, gutted bodies.
 
-### 9.3 New packages
+### 10.3 New packages
 
 - `pkg/event/dag.go` — event types, edges, IDs
 - `pkg/components/` — one file per component type
@@ -554,14 +822,14 @@ caveat that we can drift away from real production this way — see Open Questio
 - `pkg/invariants/` — assertions usable from tests + CLI
 - `cmd/logsim-validate/` — discriminator program
 
-### 9.4 Deletes
+### 10.4 Deletes
 
 Nothing yet. The current engine stays runnable behind a `--legacy-engine` flag through
-Stage 4 of the rollout (§10), then deprecated, then removed. This avoids a cliff.
+Stage 4 of the rollout (§11), then deprecated, then removed. This avoids a cliff.
 
 ---
 
-## 10. Staged rollout
+## 11. Staged rollout
 
 Each stage is a merge unit. Each stage is gated on the listed validation. Estimates are
 rough; real time will depend on what falls out of design as we go.
@@ -693,7 +961,7 @@ appear in logs. Investigator agents can use them as triangulation signals.
 
 ---
 
-## 11. Open questions / decisions to make
+## 12. Open questions / decisions to make
 
 These are explicit so we can pin them down before committing to schemas or types.
 
@@ -746,7 +1014,7 @@ These are explicit so we can pin them down before committing to schemas or types
 
 ---
 
-## 12. Out of scope (V1)
+## 13. Out of scope (V1)
 
 To keep the scope honest:
 
@@ -765,7 +1033,7 @@ To keep the scope honest:
 
 ---
 
-## 13. Glossary
+## 14. Glossary
 
 - **DAG** — directed acyclic graph of events with causal edges. The simulator's
   ground-truth model of the world.
@@ -789,7 +1057,7 @@ To keep the scope honest:
 
 ---
 
-## 14. What this gets us
+## 15. What this gets us
 
 If all of this lands, LogSim has these properties no current synthetic-log tool
 combines:
