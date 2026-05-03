@@ -15,7 +15,6 @@ import { useScenarioStore } from '@/store/useScenarioStore'
 import type { FlowNode, FlowEdge } from '@/store/useScenarioStore'
 import type { ScenarioMetadata } from '@/types/scenario'
 import type { Episode } from '@/types/episode'
-import type { LogFormat } from '@/types/logs'
 
 const REPO_SLUG = 'hyfather/logsim2'
 const INSTALL_URL = `https://raw.githubusercontent.com/${REPO_SLUG}/master/scripts/install.sh`
@@ -29,7 +28,6 @@ interface RunLocallyModalProps {
   metadata: ScenarioMetadata
   episode: Episode
   tickIntervalMs?: number
-  outputFormat?: LogFormat
 }
 
 function fileSlug(name: string): string {
@@ -47,14 +45,6 @@ function downloadText(text: string, filename: string, mime: string) {
   URL.revokeObjectURL(url)
 }
 
-// The CLI takes raw|jsonl|ocsf|otel; the toolbar exposes native|ocsf|otel.
-// "native" maps to raw (one log line per event), everything else passes through.
-function cliFormat(fmt: LogFormat | undefined): string {
-  if (fmt === 'ocsf') return 'ocsf'
-  if (fmt === 'otel') return 'otel'
-  return 'jsonl'
-}
-
 export function RunLocallyModal({
   open,
   onClose,
@@ -63,15 +53,11 @@ export function RunLocallyModal({
   metadata,
   episode,
   tickIntervalMs = 1000,
-  outputFormat,
 }: RunLocallyModalProps) {
   const presetSlug = useScenarioStore(s => s.presetSlug)
   const pristineYaml = useScenarioStore(s => s.pristineYaml)
   const slug = useMemo(() => fileSlug(metadata.name), [metadata.name])
   const filename = `${slug}.scenario.yaml`
-  const ticks = Math.max(1, episode?.duration ?? 600)
-  const fmt = cliFormat(outputFormat)
-  const outFile = `${slug}.${fmt === 'jsonl' ? 'jsonl' : fmt === 'ocsf' ? 'ocsf.json' : 'otel.json'}`
 
   const yamlText = useMemo(() => {
     if (!open) return ''
@@ -96,8 +82,8 @@ export function RunLocallyModal({
     downloadText(yamlText, filename, 'application/x-yaml')
   }, [yamlText, filename])
 
-  const runCmd = `logsim run ./${filename} --ticks ${ticks} --format ${fmt} > ${outFile}`
-  const runFromUrlCmd = `logsim run ${presetUrl} --ticks ${ticks} --format ${fmt} > ${outFile}`
+  const runCmd = `logsim run ./${filename}`
+  const runFromUrlCmd = `logsim run ${presetUrl}`
   const primaryRunCmd = isPristinePreset ? runFromUrlCmd : runCmd
   const installCmd = `curl -fsSL ${INSTALL_URL} | sh`
 

@@ -1028,7 +1028,6 @@ export function Topbar() {
         metadata={metadata}
         episode={episode}
         tickIntervalMs={1000}
-        outputFormat={outputFormat}
       />
 
       {/* About modal */}
