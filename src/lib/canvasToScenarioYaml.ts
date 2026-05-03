@@ -164,7 +164,47 @@ export interface ServiceOverride {
   latencyMul?: number
 }
 
-function buildGeneratorConfig(node: ScenarioNode, override?: ServiceOverride): YamlGenerator {
+function synthesizeDefaultCustomType(serviceName: string): YamlCustomType {
+  const id = `${serviceName}-events`
+  return {
+    id,
+    name: serviceName,
+    description: `Generic event log for ${serviceName}`,
+    default_port: 8080,
+    default_rate: 5,
+    placeholders: {
+      timestamp: { kind: 'iso_timestamp' },
+      level: { kind: 'level' },
+      message: {
+        kind: 'enum',
+        enum_values: [
+          `${serviceName} request received`,
+          `${serviceName} processed event`,
+          `${serviceName} returned response`,
+        ],
+      },
+    },
+    templates: [
+      {
+        template: `{{timestamp}} ${serviceName} [{{level}}] {{message}}`,
+        weight: 0.95,
+        level: 'info',
+      },
+      {
+        template: `{{timestamp}} ${serviceName} [ERROR] request failed unexpectedly`,
+        weight: 0.05,
+        level: 'error',
+        is_error: true,
+      },
+    ],
+  }
+}
+
+function buildGeneratorConfig(
+  node: ScenarioNode,
+  serviceName: string,
+  override?: ServiceOverride,
+): YamlGenerator {
   const cfg = (node.config ?? {}) as Record<string, unknown>
   const serviceType = node.serviceType ?? 'custom'
   const gen: YamlGenerator = { type: SERVICE_GENERATOR_TYPE[serviceType] ?? serviceType }
@@ -208,7 +248,12 @@ function buildGeneratorConfig(node: ScenarioNode, override?: ServiceOverride): Y
 
   if (serviceType === 'custom') {
     const ct = cfg.customType as CustomNodeType | undefined
-    if (ct?.id) gen.custom_type = ct.id
+    // Backend Validate() requires custom services to reference a custom_type
+    // entry. Presets that come without an inline customType (e.g. AI-generated
+    // canvas nodes that just declare serviceType=custom) would otherwise fail
+    // validation; fall back to a synthesized id derived from the service name
+    // so the YAML emitter and the corresponding entry in custom_types agree.
+    gen.custom_type = ct?.id || `${serviceName}-events`
     if (gen.traffic_rate === undefined && typeof ct?.defaultRate === 'number') {
       gen.traffic_rate = ct.defaultRate * logVolMul
     }
@@ -409,7 +454,7 @@ export function canvasToScenarioYaml(
       type: SERVICE_GENERATOR_TYPE[node.serviceType ?? 'custom'] ?? 'custom',
       name: serviceName,
       host: hostName,
-      generator: buildGeneratorConfig(node, overrides?.[node.id]),
+      generator: buildGeneratorConfig(node, serviceName, overrides?.[node.id]),
     }
     const blocks = episode?.lanes?.[node.id]
     if (blocks && blocks.length > 0) {
@@ -418,13 +463,24 @@ export function canvasToScenarioYaml(
     services.push(svcEntry)
   }
 
-  // Dedupe custom-type definitions across services that share an id.
+  // Dedupe custom-type definitions across services that share an id. Custom
+  // services that don't carry an inline customType spec (e.g. preset-loaded
+  // AI scenarios) get a synthesized generic entry keyed off their service
+  // name, matching the id buildGeneratorConfig assigned to gen.custom_type.
   const customTypesById = new Map<string, YamlCustomType>()
   for (const node of scNodes) {
     if (node.type !== 'service' || node.serviceType !== 'custom') continue
     const ct = (node.config as Record<string, unknown> | undefined)?.customType as CustomNodeType | undefined
-    if (!ct?.id || customTypesById.has(ct.id)) continue
-    customTypesById.set(ct.id, toYamlCustomType(ct))
+    if (ct?.id) {
+      if (!customTypesById.has(ct.id)) customTypesById.set(ct.id, toYamlCustomType(ct))
+      continue
+    }
+    const serviceName = nameById.get(node.id)
+    if (!serviceName) continue
+    const synthesized = synthesizeDefaultCustomType(serviceName)
+    if (!customTypesById.has(synthesized.id)) {
+      customTypesById.set(synthesized.id, synthesized)
+    }
   }
 
   const allNames = new Set<string>([...nodes.map(n => n.name), ...services.map(s => s.name)])

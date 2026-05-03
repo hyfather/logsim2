@@ -18,7 +18,7 @@ import { useSimulationStore } from '@/store/useSimulationStore'
 import { useDestinationsStore } from '@/store/useDestinationsStore'
 import { forwardToHec } from '@/lib/criblForwarder'
 import type { CriblHecDestination } from '@/types/destinations'
-import { PanelLeftOpen, PanelRightOpen, ChevronDown, ChevronUp, Sparkles } from 'lucide-react'
+import { PanelLeftOpen, PanelRightOpen, ChevronDown, ChevronUp, Sparkles, AlertTriangle, X } from 'lucide-react'
 import { deserializeScenario } from '@/lib/serialization'
 import { scenarioToFlow } from '@/lib/flow-data'
 import { materializeProposedScenarioJson } from '@/lib/scenarioPrompt'
@@ -50,6 +50,8 @@ export default function EditorPageClient({ initialScenarioSlug }: EditorPageClie
   const selectedNode = useScenarioStore(s => selectedNodeId ? s.nodes.find(n => n.id === selectedNodeId)?.data ?? null : null)
   const { loadScenario } = useScenarioStore()
   const { logBuffer } = useSimulationStore()
+  const runError = useSimulationStore(s => s.runError)
+  const setRunError = useSimulationStore(s => s.setRunError)
   const accumulateMode = useSimulationStore(s => s.accumulateMode)
   const accumulateModeRef = useRef(accumulateMode)
   accumulateModeRef.current = accumulateMode
@@ -323,6 +325,10 @@ export default function EditorPageClient({ initialScenarioSlug }: EditorPageClie
       <div className="flex h-[100dvh] w-full flex-col overflow-hidden bg-[var(--ls-bg)]">
         <Topbar />
 
+        {runError && (
+          <RunErrorBanner message={runError} onDismiss={() => setRunError(null)} />
+        )}
+
         {/* Main area */}
         <div className="flex flex-1 overflow-hidden">
           <div
@@ -452,6 +458,37 @@ export default function EditorPageClient({ initialScenarioSlug }: EditorPageClie
 
       <NewScenarioModal open={newScenarioModalOpen} onClose={() => setNewScenarioModalOpen(false)} />
     </ReactFlowProvider>
+  )
+}
+
+function RunErrorBanner({ message, onDismiss }: { message: string; onDismiss: () => void }) {
+  // Validation errors come back multiline (`4 validation error(s):\n  - …`).
+  // Render the full text but cap height + allow scrolling so a long error
+  // doesn't shove the canvas off-screen.
+  return (
+    <div
+      role="alert"
+      className="flex shrink-0 items-start gap-2 border-b border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-900"
+    >
+      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-600" />
+      <div className="min-w-0 flex-1">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-rose-700">
+          Run failed
+        </div>
+        <pre className="mt-0.5 max-h-32 overflow-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-snug text-rose-900">
+          {message}
+        </pre>
+      </div>
+      <button
+        type="button"
+        onClick={onDismiss}
+        title="Dismiss"
+        aria-label="Dismiss error"
+        className="rounded p-1 text-rose-700 transition-colors hover:bg-rose-100 hover:text-rose-900"
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </div>
   )
 }
 

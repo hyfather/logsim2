@@ -22,6 +22,9 @@ interface SimulationState {
   accumulateMode: boolean
   /** Wire schema applied to log lines before they reach the UI. */
   outputFormat: LogFormat
+  /** Last fatal error from the run pipeline (validation, network, server).
+   *  null while the run is healthy or no run has been attempted. */
+  runError: string | null
   // Actions
   setStatus: (status: SimulationStatus) => void
   setSpeed: (speed: number) => void
@@ -36,6 +39,7 @@ interface SimulationState {
   setAccumulateMode: (accumulate: boolean) => void
   setWorker: (worker: Worker | null) => void
   setOutputFormat: (format: LogFormat) => void
+  setRunError: (msg: string | null) => void
   reset: () => void
 }
 
@@ -57,6 +61,7 @@ export const useSimulationStore = create<SimulationState>()((set) => ({
   worker: null,
   accumulateMode: false,
   outputFormat: 'native',
+  runError: null,
 
   setStatus: (status) => set({ status }),
   setSpeed: (speed) => set({ speed }),
@@ -98,11 +103,14 @@ export const useSimulationStore = create<SimulationState>()((set) => ({
 
   setOutputFormat: (outputFormat) => set({ outputFormat, logBuffer: [] }),
 
+  setRunError: (runError) => set({ runError }),
+
   reset: () => set({
     status: 'idle',
     tickCount: 0,
     simulatedTime: new Date(),
     logBuffer: [],
     activeConnections: {},
+    runError: null,
   }),
 }))

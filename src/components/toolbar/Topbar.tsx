@@ -139,6 +139,7 @@ export function Topbar() {
     logBuffer,
     outputFormat,
     setOutputFormat,
+    setRunError,
   } = useSimulationStore()
   const {
     destinations,
@@ -384,6 +385,7 @@ export function Topbar() {
     // Play always plays the scenario from the beginning. Reset the scrubber
     // and clear accumulated logs so the panel fills as ticks emit.
     clearLogs()
+    setRunError(null)
     setTick(0)
     setTickCount(0)
     setStatus('running')
@@ -426,13 +428,14 @@ export function Topbar() {
       },
       onError: (err) => {
         console.error('run stream error:', err)
+        setRunError(err.message)
         if (enabledCribl) setDestStatus(enabledCribl.id, 'error', err.message)
         abortRef.current = null
         setStatus('idle')
         setRunStatus('idle')
       },
     })
-  }, [addLogs, buildScenarioYaml, clearLogs, outputFormat, recordSent, setDestStatus, setModifyPanelOpen, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, status])
+  }, [addLogs, buildScenarioYaml, clearLogs, outputFormat, recordSent, setDestStatus, setModifyPanelOpen, setRunError, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, status])
 
   const stopPlayback = useCallback(() => {
     stopBackend()
