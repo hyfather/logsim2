@@ -1,5 +1,5 @@
 'use client'
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import {
   ChevronDown,
@@ -15,6 +15,7 @@ import {
   Terminal,
   Trash2,
 } from 'lucide-react'
+import { materializeProposedScenarioJson } from '@/lib/scenarioPrompt'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -76,6 +77,47 @@ function GithubMark({ className }: { className?: string }) {
   )
 }
 
+interface PresetScenarioManifestEntry {
+  file: string
+  title: string
+  description: string
+  category: string
+  difficulty: 'easy' | 'medium' | 'hard' | string
+  durationTicks: number
+  serviceCount: number
+}
+
+interface PresetScenarioGroup {
+  id: string
+  label: string
+  description?: string
+  order?: number
+}
+
+const FALLBACK_GROUPS: PresetScenarioGroup[] = [
+  { id: 'incident', label: 'Production Incidents', order: 1 },
+  { id: 'deploy',   label: 'Deploys & Releases',  order: 2 },
+  { id: 'security', label: 'External Threats',    order: 3 },
+  { id: 'insider',  label: 'Insider & Abuse',     order: 4 },
+  { id: 'cloud',    label: 'Cloud & Identity',    order: 5 },
+  { id: 'baseline', label: 'Baselines',           order: 6 },
+]
+
+const GROUP_DOT: Record<string, string> = {
+  security: 'bg-rose-500',
+  incident: 'bg-amber-500',
+  deploy:   'bg-violet-500',
+  insider:  'bg-emerald-500',
+  cloud:    'bg-sky-500',
+  baseline: 'bg-slate-400',
+}
+
+const DIFFICULTY_TINT: Record<string, string> = {
+  easy:   'bg-emerald-100 text-emerald-700',
+  medium: 'bg-amber-100 text-amber-800',
+  hard:   'bg-rose-100 text-rose-700',
+}
+
 export function Topbar() {
   const { nodes, edges, metadata, setMetadata, loadScenario } = useScenarioStore()
   const setNewScenarioModalOpen = useUIStore(s => s.setNewScenarioModalOpen)
@@ -118,6 +160,54 @@ export function Topbar() {
   const recentScenarios = useScenarioLibraryStore(s => s.scenarios)
   const currentScenarioId = useScenarioLibraryStore(s => s.currentId)
 
+  // Example scenarios — manifest is fetched lazily the first time the user
+  // opens the Examples submenu, so the dropdown stays cheap to mount.
+  const [presets, setPresets] = useState<PresetScenarioManifestEntry[]>([])
+  const [presetGroups, setPresetGroups] = useState<PresetScenarioGroup[]>(FALLBACK_GROUPS)
+  const [presetsLoaded, setPresetsLoaded] = useState(false)
+  const [presetsError, setPresetsError] = useState<string | null>(null)
+
+  const loadPresetsManifest = useCallback(async () => {
+    if (presetsLoaded) return
+    try {
+      const res = await fetch('/scenarios/presets/index.json', { cache: 'no-cache' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const json = await res.json()
+      if (Array.isArray(json)) {
+        setPresets(json)
+      } else if (json && Array.isArray(json.scenarios)) {
+        setPresets(json.scenarios)
+        if (Array.isArray(json.groups) && json.groups.length > 0) {
+          setPresetGroups(json.groups)
+        }
+      }
+    } catch (err) {
+      setPresetsError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setPresetsLoaded(true)
+    }
+  }, [presetsLoaded])
+
+  const groupedPresets = useMemo(() => {
+    const buckets = new Map<string, PresetScenarioManifestEntry[]>()
+    for (const p of presets) {
+      const list = buckets.get(p.category) ?? []
+      list.push(p)
+      buckets.set(p.category, list)
+    }
+    const known = presetGroups
+      .map(g => ({ group: g, items: buckets.get(g.id) ?? [] }))
+      .filter(b => b.items.length > 0)
+    const knownIds = new Set(presetGroups.map(g => g.id))
+    const unknown = Array.from(buckets.keys())
+      .filter(id => !knownIds.has(id))
+      .map(id => ({
+        group: { id, label: id.charAt(0).toUpperCase() + id.slice(1) } as PresetScenarioGroup,
+        items: buckets.get(id) ?? [],
+      }))
+    return [...known, ...unknown]
+  }, [presets, presetGroups])
+
   // Backend polling refs (mirrors SimulationControls)
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const abortRef = useRef<AbortController | null>(null)
@@ -141,12 +231,17 @@ export function Topbar() {
   ), [nodes, edges, metadata])
 
   // Autosave writes the current canvas + timeline as a single library entry,
-  // so reloading the editor restores both. Allocates a new id if no entry is
-  // currently active (e.g. first edit on a fresh canvas).
+  // so reloading the editor restores both. Reads from zustand getState() so
+  // it picks up scenarios loaded in the same tick (no stale React closure).
   const persistAutosave = useCallback(() => {
     if (typeof window === 'undefined') return
-    if (nodes.length === 0) return
-    const scenario = buildScenario()
+    const scenarioState = useScenarioStore.getState()
+    if (scenarioState.nodes.length === 0) return
+    const scenario = serializeScenario(
+      scenarioState.nodes.map(n => n.data),
+      scenarioState.edges.map(e => e.data!).filter(Boolean) as Connection[],
+      scenarioState.metadata,
+    )
     const ep = useEpisodeStore.getState().episode
     const lib = useScenarioLibraryStore.getState()
     let id = lib.currentId
@@ -157,13 +252,13 @@ export function Topbar() {
     const now = new Date().toISOString()
     lib.upsert({
       id,
-      name: metadata.name,
+      name: scenarioState.metadata.name,
       scenario,
       episode: ep,
       savedAt: now,
       createdAt: existing?.createdAt ?? now,
     })
-  }, [buildScenario, metadata.name, nodes.length])
+  }, [])
 
   const handleSaveScenario = useCallback(() => {
     const scenario = buildScenario()
@@ -195,6 +290,7 @@ export function Topbar() {
         // overwrite whatever the user was editing before.
         useScenarioLibraryStore.getState().startNew()
         loadScenario(flowNodes, flowEdges, scenario.metadata)
+        window.dispatchEvent(new CustomEvent('logsim-autosave'))
       } catch (err) {
         alert('Failed to load scenario: ' + String(err))
       }
@@ -213,8 +309,38 @@ export function Topbar() {
       useScenarioLibraryStore.getState().setCurrentId(entry.id)
       loadScenario(flowNodes, flowEdges, entry.scenario.metadata)
       setEpisode(entry.episode)
+      // Bump savedAt so this entry jumps back to the top of Recent.
+      window.dispatchEvent(new CustomEvent('logsim-autosave'))
     } catch (err) {
       alert('Failed to load scenario: ' + String(err))
+    }
+  }, [loadScenario, setEpisode])
+
+  const handleLoadExample = useCallback(async (entry: PresetScenarioManifestEntry) => {
+    try {
+      const res = await fetch(`/scenarios/presets/${entry.file}`, { cache: 'no-cache' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const json = await res.json()
+      const result = materializeProposedScenarioJson(json)
+      const now = new Date().toISOString()
+      // Each preset load opens a fresh library entry so it shows up under
+      // "Recent" once the user starts editing it.
+      useScenarioLibraryStore.getState().startNew()
+      loadScenario(result.flowNodes, result.flowEdges, {
+        name: result.name?.trim() || entry.title,
+        description: result.description?.trim() || entry.description,
+        createdAt: now,
+        updatedAt: now,
+      })
+      if (result.episode) setEpisode(result.episode)
+      window.dispatchEvent(new CustomEvent('logsim-autosave'))
+      // Reflect the loaded preset in the address bar so the URL is shareable.
+      // Use history.replaceState (not Next router) so we don't trigger a route
+      // transition that would dismount the editor and re-fetch the preset.
+      const slug = entry.file.replace(/\.scenario\.json$/, '')
+      window.history.replaceState(null, '', `/s/${slug}`)
+    } catch (err) {
+      alert(`Failed to load preset scenario: ${String(err)}`)
     }
   }, [loadScenario, setEpisode])
 
@@ -548,6 +674,79 @@ export function Topbar() {
                       </DropdownMenuItem>
                     )
                   })
+                )}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger
+                onPointerEnter={loadPresetsManifest}
+                onFocus={loadPresetsManifest}
+                onPointerDown={loadPresetsManifest}
+                className="cursor-pointer text-xs"
+              >
+                📚 Example Scenarios
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent
+                collisionPadding={12}
+                className="max-h-[70dvh] w-[min(18rem,calc(100vw-1.5rem))] overflow-y-auto text-xs"
+              >
+                <DropdownMenuLabel className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                  Browse by category
+                </DropdownMenuLabel>
+                {!presetsLoaded ? (
+                  <div className="px-2 py-1.5 text-[11px] text-slate-400">Loading…</div>
+                ) : presetsError ? (
+                  <div className="px-2 py-1.5 text-[11px] text-rose-600">Failed: {presetsError}</div>
+                ) : groupedPresets.length === 0 ? (
+                  <div className="px-2 py-1.5 text-[11px] text-slate-400">No example scenarios found.</div>
+                ) : (
+                  groupedPresets.map(({ group, items }) => (
+                    <DropdownMenuSub key={group.id}>
+                      <DropdownMenuSubTrigger className="cursor-pointer text-xs">
+                        <span className="flex w-full items-center justify-between gap-2">
+                          <span className="flex items-center gap-1.5 font-medium">
+                            <span
+                              className={cn('inline-block h-2 w-2 rounded-full', GROUP_DOT[group.id] ?? 'bg-slate-400')}
+                              aria-hidden
+                            />
+                            {group.label}
+                          </span>
+                          <span className="text-[10px] text-slate-400">{items.length}</span>
+                        </span>
+                      </DropdownMenuSubTrigger>
+                      <DropdownMenuSubContent
+                        collisionPadding={12}
+                        className="max-h-[70dvh] w-[min(22rem,calc(100vw-1.5rem))] overflow-y-auto text-xs"
+                      >
+                        {group.description && (
+                          <DropdownMenuLabel className="whitespace-normal text-[10px] leading-tight text-slate-500">
+                            {group.description}
+                          </DropdownMenuLabel>
+                        )}
+                        {items.map(p => (
+                          <DropdownMenuItem
+                            key={p.file}
+                            onSelect={() => handleLoadExample(p)}
+                            className="flex cursor-pointer flex-col items-start gap-0.5 text-xs"
+                          >
+                            <span className="flex items-center gap-1.5 font-medium">
+                              <span className="truncate">{p.title}</span>
+                              <span className={cn(
+                                'shrink-0 rounded px-1 py-px text-[9px] font-semibold uppercase tracking-wide',
+                                DIFFICULTY_TINT[p.difficulty] ?? 'bg-slate-100 text-slate-700',
+                              )}>{p.difficulty}</span>
+                            </span>
+                            <span className="line-clamp-2 whitespace-normal text-[10px] leading-tight text-slate-500">
+                              {p.description}
+                            </span>
+                            <span className="text-[10px] text-slate-400">
+                              {p.serviceCount} services · {Math.round(p.durationTicks / 60)} min
+                            </span>
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuSubContent>
+                    </DropdownMenuSub>
+                  ))
                 )}
               </DropdownMenuSubContent>
             </DropdownMenuSub>

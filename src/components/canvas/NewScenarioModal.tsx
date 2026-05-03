@@ -148,6 +148,7 @@ export function NewScenarioModal({ open, onClose }: NewScenarioModalProps) {
         updatedAt: now,
       })
       if (result.episode) setEpisode(result.episode)
+      window.dispatchEvent(new CustomEvent('logsim-autosave'))
     } catch (err) {
       alert('Failed to load template: ' + String(err))
     } finally {

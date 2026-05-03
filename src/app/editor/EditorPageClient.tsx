@@ -24,7 +24,6 @@ import { scenarioToFlow } from '@/lib/flow-data'
 import { materializeProposedScenarioJson } from '@/lib/scenarioPrompt'
 import { useScenarioLibraryStore } from '@/store/useScenarioLibraryStore'
 import { cn } from '@/lib/utils'
-import { useUrlSync } from '@/hooks/useUrlSync'
 import { useIsMobile } from '@/hooks/useMediaQuery'
 import { startPointerDrag } from '@/lib/pointerDrag'
 
@@ -35,7 +34,6 @@ interface EditorPageClientProps {
 }
 
 export default function EditorPageClient({ initialScenarioSlug }: EditorPageClientProps = {}) {
-  useUrlSync()
   const router = useRouter()
   const isMobile = useIsMobile()
   const {
@@ -73,6 +71,15 @@ export default function EditorPageClient({ initialScenarioSlug }: EditorPageClie
     let cancelled = false
     const params = new URLSearchParams(window.location.search)
 
+    // Strip the legacy ?ep= param if present — episodes are no longer URL-synced.
+    if (params.has('ep')) {
+      const cleaned = new URLSearchParams(window.location.search)
+      cleaned.delete('ep')
+      const next = cleaned.toString()
+      const url = next ? `${window.location.pathname}?${next}` : window.location.pathname
+      router.replace(url, { scroll: false })
+    }
+
     const loadPresetBySlug = async (slug: string, fallbackName?: string) => {
       const res = await fetch(`/scenarios/presets/${slug}.scenario.json`, { cache: 'no-cache' })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -88,6 +95,9 @@ export default function EditorPageClient({ initialScenarioSlug }: EditorPageClie
         updatedAt: now,
       })
       if (result.episode) setEpisode(result.episode)
+      // Immediately persist so the scenario shows up under "Recent" without
+      // waiting for the 30s autosave tick.
+      window.dispatchEvent(new CustomEvent('logsim-autosave'))
     }
 
     // Slug source priority: server-provided prop (e.g. /s/<slug>) over
@@ -102,11 +112,11 @@ export default function EditorPageClient({ initialScenarioSlug }: EditorPageClie
           console.warn('Failed to load preset from URL:', err)
         } finally {
           // Land on the canonical /editor URL so refreshes don't re-load and
-          // overwrite edits — and so useUrlSync writes ?ep=… under /editor
-          // rather than under /s/<slug>. router.replace (vs raw history API)
-          // keeps Next's pathname state in sync.
+          // overwrite edits. router.replace (vs raw history API) keeps Next's
+          // pathname state in sync.
           const cleaned = new URLSearchParams(window.location.search)
           cleaned.delete('scenario')
+          cleaned.delete('ep')
           const next = cleaned.toString()
           const url = next ? `/editor?${next}` : '/editor'
           router.replace(url, { scroll: false })
@@ -123,6 +133,8 @@ export default function EditorPageClient({ initialScenarioSlug }: EditorPageClie
         const { flowNodes, flowEdges } = scenarioToFlow(current.scenario)
         loadScenario(flowNodes, flowEdges, current.scenario.metadata)
         setEpisode(current.episode)
+        // Touch savedAt so revisiting bumps it to the top of the Recent list.
+        window.dispatchEvent(new CustomEvent('logsim-autosave'))
         return () => { cancelled = true }
       } catch {
         // fall through to migration / first-visit intro
