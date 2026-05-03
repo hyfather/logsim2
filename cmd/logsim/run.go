@@ -63,13 +63,14 @@ func newRunCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "run [scenario.yaml | https://…/scenario.yaml]",
+		Use:   "run [scenario.yaml | https://…/scenario.yaml | <slug>]",
 		Short: "Run a simulation and emit logs",
 		Long: `Run executes a scenario and emits log entries.
 
 The scenario is the primary argument — pass it positionally as a local file
-path or an http(s) URL, or use the legacy --scenario flag. Remote scenarios
-are fetched, capped at 4 MiB, and parsed exactly like local files.
+path, an http(s) URL, or a bare catalog slug (see ` + "`logsim list`" + `). Slugs
+resolve to ` + scenario.DefaultBaseURL + `/s/<slug>.yaml; remote scenarios are
+fetched, capped at 4 MiB, and parsed exactly like local files.
 
 Stdout is the default — pipe or redirect as you like. Pass -o/--out to write
 to a file (or "-" for stdout), or --to to forward to one or more named
@@ -79,8 +80,11 @@ Examples:
   # stdout (default) — pipe into anything
   logsim run scenarios/web-service.yaml | jq .
 
-  # run a default scenario straight from the LogSim site
-  logsim run https://logsim.app/s/db-slowdown-cascade.yaml
+  # run a catalog scenario by slug — see ` + "`logsim list`" + ` for the full set
+  logsim run db-slowdown-cascade
+
+  # or pass the URL explicitly
+  logsim run https://logsim2.vercel.app/s/db-slowdown-cascade.yaml
 
   # emit OCSF or OTEL to stdout
   logsim run scenarios/web-service.yaml --ocsf
@@ -113,7 +117,7 @@ Examples:
 				return fmt.Errorf("scenario specified twice: positional %q and --scenario %q",
 					args[0], scenarioPath)
 			case len(args) == 0 && scenarioPath == "":
-				return errors.New("scenario is required: pass it positionally (`logsim run path/to/scenario.yaml` or `logsim run https://…/scenario.yaml`) or via --scenario")
+				return errors.New("scenario is required: pass it positionally (`logsim run path/to/scenario.yaml`, `logsim run https://…/scenario.yaml`, or `logsim run <slug>` — see `logsim list`) or via --scenario")
 			}
 
 			// Resolve format shortcuts before validation.
