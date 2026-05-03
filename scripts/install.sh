@@ -2,7 +2,7 @@
 # logsim installer.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/hyfather/logsim2/main/scripts/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/hyfather/logsim2/master/scripts/install.sh | sh
 #
 # Environment variables:
 #   LOGSIM_VERSION   Tag to install (default: latest release).
