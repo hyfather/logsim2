@@ -90,15 +90,42 @@ go run ./cmd/logsim run --scenario scenarios/web-service.yaml
 go run ./cmd/logsim run --scenario scenarios/web-service.yaml --to prod-cribl
 go run ./cmd/logsim run --scenario scenarios/web-service.yaml --to prod-cribl,staging
 
-# write a JSONL copy alongside whatever else you picked
-go run ./cmd/logsim run --scenario scenarios/web-service.yaml --to prod-cribl --tee out.jsonl
+# forward and keep a local copy at the same time
+go run ./cmd/logsim run --scenario scenarios/web-service.yaml --to prod-cribl -o ./trace.jsonl
 ```
 
-If no dotfile exists and you run `logsim run` interactively, you'll get a
-one-shot prompt offering to add a destination on the spot. Non-TTY runs (CI,
-pipes) skip the prompt and fall through to stdout. The legacy explicit form
-(`--output stdout|file|destination` with `--path` / `--destination` /
-`--config`) still works for scripts that depend on it.
+#### Output targets
+
+`-o, --out` is the unified file/stdout flag — pass a path, `-` for stdout, or
+repeat / comma-separate to fan out:
+
+```bash
+go run ./cmd/logsim run --scenario scenarios/web-service.yaml -o /tmp/logs.jsonl
+go run ./cmd/logsim run --scenario scenarios/web-service.yaml -o -            # explicit stdout
+go run ./cmd/logsim run --scenario scenarios/web-service.yaml -o a.jsonl,b.jsonl
+```
+
+#### Schema (OCSF, OTEL, …)
+
+`--format` selects the wire schema. Two convenience shortcuts:
+
+```bash
+go run ./cmd/logsim run --scenario scenarios/web-service.yaml --ocsf
+go run ./cmd/logsim run --scenario scenarios/web-service.yaml --otel
+go run ./cmd/logsim run --list-formats        # prints valid --format values
+```
+
+When you write to a file, the format is auto-inferred from a `.ocsf.*` or
+`.otel.*` suffix unless `--format` is set explicitly:
+
+```bash
+go run ./cmd/logsim run --scenario scenarios/web-service.yaml -o trace.ocsf.json
+# logsim: inferred --format=ocsf from trace.ocsf.json
+```
+
+`logsim run` never prompts. If no dotfile exists, it writes to stdout and
+suggests `logsim destinations add`. The legacy `--output stdout|file|destination`
+form (with `--path` / `--destination` / `--config`) still works for scripts.
 
 ## Known limits
 
