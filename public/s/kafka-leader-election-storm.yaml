@@ -1,0 +1,319 @@
+name: Kafka Broker Loss → Leader Election Storm
+description: >-
+  broker-3 dies hard (kernel panic on a flaky NIC). The ISR shrinks, partitions reshuffle, and a leader-election storm
+  pushes p99 produce latency on the producers from 12ms to ~3 seconds. Consumers fall behind and the order pipeline
+  lags.
+duration: 1500
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: data-platform-vpc
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: edge-public-2c
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: stream-app-2c
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: stream-data-2c
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: events-ingest-lb-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: edge-public-2c
+  - type: virtual_server
+    name: events-producer-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: stream-app-2c
+  - type: virtual_server
+    name: kfk-broker-1-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: stream-data-2c
+  - type: virtual_server
+    name: kfk-broker-2-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: stream-data-2c
+  - type: virtual_server
+    name: kfk-broker-3-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: stream-data-2c
+  - type: virtual_server
+    name: orders-projector-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: stream-app-2c
+  - type: virtual_server
+    name: orders-readmodel-db-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: stream-data-2c
+services:
+  - type: nginx
+    name: events-ingest-lb
+    host: events-ingest-lb-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+  - type: golang
+    name: events-producer
+    description: Sarama client, acks=all, idempotent.
+    host: events-producer-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 120
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 480
+        state: healthy
+      - from: 480
+        to: 960
+        state: degraded
+        note: produce timeouts, retries
+      - from: 960
+        to: 1500
+        state: healthy
+  - type: custom
+    name: kfk-broker-1
+    description: Kafka 3.6, KRaft mode.
+    host: kfk-broker-1-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 140
+      error_rate: 0.001
+      custom_type: kfk-broker-1-events
+    timeline:
+      - from: 0
+        to: 360
+        state: healthy
+      - from: 360
+        to: 720
+        state: degraded
+        note: absorbing failed-over partitions
+      - from: 720
+        to: 960
+        state: recovering
+      - from: 960
+        to: 1500
+        state: healthy
+  - type: custom
+    name: kfk-broker-2
+    host: kfk-broker-2-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 140
+      error_rate: 0.001
+      custom_type: kfk-broker-2-events
+    timeline:
+      - from: 0
+        to: 360
+        state: healthy
+      - from: 360
+        to: 720
+        state: degraded
+      - from: 720
+        to: 1500
+        state: healthy
+  - type: custom
+    name: kfk-broker-3
+    description: Flaky NIC; bond0 is in degraded state.
+    host: kfk-broker-3-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 140
+      error_rate: 0.001
+      custom_type: kfk-broker-3-events
+    timeline:
+      - from: 0
+        to: 300
+        state: healthy
+      - from: 300
+        to: 360
+        state: degraded
+        note: TCP retransmits
+      - from: 360
+        to: 720
+        state: down
+        note: controller fenced
+      - from: 720
+        to: 960
+        state: recovering
+      - from: 960
+        to: 1500
+        state: healthy
+  - type: golang
+    name: orders-projector
+    description: Consumes events topic, writes to PG.
+    host: orders-projector-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 10
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 480
+        state: healthy
+      - from: 480
+        to: 1200
+        state: degraded
+        note: millions of messages lag
+      - from: 1200
+        to: 1500
+        state: healthy
+  - type: postgres
+    name: orders-readmodel-db
+    host: orders-readmodel-db-host
+    generator:
+      type: postgres
+      port: 5432
+      slow_query_threshold: 1000
+      traffic_rate: 40
+      error_rate: 0.001
+connections:
+  - source: events-ingest-lb
+    target: events-producer
+    protocol: http
+    port: 8080
+  - source: events-producer
+    target: kfk-broker-1
+    protocol: tcp
+    port: 9092
+  - source: events-producer
+    target: kfk-broker-2
+    protocol: tcp
+    port: 9092
+  - source: events-producer
+    target: kfk-broker-3
+    protocol: tcp
+    port: 9092
+  - source: orders-projector
+    target: kfk-broker-1
+    protocol: tcp
+    port: 9092
+  - source: orders-projector
+    target: kfk-broker-2
+    protocol: tcp
+    port: 9092
+  - source: orders-projector
+    target: kfk-broker-3
+    protocol: tcp
+    port: 9092
+  - source: orders-projector
+    target: orders-readmodel-db
+    protocol: tcp
+    port: 5432
+custom_types:
+  - id: kfk-broker-1-events
+    name: kfk-broker-1
+    description: Generic event log for kfk-broker-1
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - kfk-broker-1 request received
+          - kfk-broker-1 processed event
+          - kfk-broker-1 returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} kfk-broker-1 [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} kfk-broker-1 [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: kfk-broker-2-events
+    name: kfk-broker-2
+    description: Generic event log for kfk-broker-2
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - kfk-broker-2 request received
+          - kfk-broker-2 processed event
+          - kfk-broker-2 returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} kfk-broker-2 [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} kfk-broker-2 [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: kfk-broker-3-events
+    name: kfk-broker-3
+    description: Generic event log for kfk-broker-3
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - kfk-broker-3 request received
+          - kfk-broker-3 processed event
+          - kfk-broker-3 returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} kfk-broker-3 [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} kfk-broker-3 [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true

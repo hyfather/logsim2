@@ -1,0 +1,255 @@
+name: Cryptojacking in Forgotten K8s Pod
+description: >-
+  A 'temporary' debug pod from a 2023 hackathon was left running with the cluster-admin token mounted and the kube-api
+  on a public NodePort. Crawlers find it, drop xmrig, and start mining Monero. CPU on three nodes pegs to 100% and
+  pricing-svc latency spikes.
+duration: 1500
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: experiments-vpc
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: k8s-public-nps
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: k8s-workloads
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: k8s-data
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: ingress-controller-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: k8s-public-nps
+  - type: virtual_server
+    name: pricing-svc-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: k8s-workloads
+  - type: virtual_server
+    name: catalog-svc-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: k8s-workloads
+  - type: virtual_server
+    name: debug-shell-pod-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: k8s-workloads
+  - type: virtual_server
+    name: kube-apiserver-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: k8s-workloads
+  - type: virtual_server
+    name: pricing-cache-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: k8s-data
+services:
+  - type: nginx
+    name: ingress-controller
+    host: ingress-controller-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+  - type: golang
+    name: pricing-svc
+    host: pricing-svc-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 70
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 540
+        state: healthy
+      - from: 540
+        to: 1080
+        state: degraded
+        note: noisy-neighbour CPU starvation
+      - from: 1080
+        to: 1320
+        state: recovering
+      - from: 1320
+        to: 1500
+        state: healthy
+  - type: golang
+    name: catalog-svc
+    host: catalog-svc-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 60
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 540
+        state: healthy
+      - from: 540
+        to: 1080
+        state: degraded
+      - from: 1080
+        to: 1500
+        state: healthy
+  - type: custom
+    name: debug-shell-pod
+    description: Hackathon leftover. Privileged; cluster-admin SA.
+    host: debug-shell-pod-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 5
+      custom_type: debug-shell-pod-events
+    timeline:
+      - from: 0
+        to: 420
+        state: healthy
+        note: idle leftover
+      - from: 420
+        to: 1080
+        state: compromised
+        note: running xmrig
+      - from: 1080
+        to: 1140
+        state: down
+        note: deleted
+  - type: custom
+    name: kube-apiserver
+    description: Exposed on a NodePort with anonymous auth allowed.
+    host: kube-apiserver-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 13
+      error_rate: 0.0105
+      custom_type: kube-apiserver-events
+    timeline:
+      - from: 0
+        to: 180
+        state: healthy
+      - from: 180
+        to: 420
+        state: under_attack
+        note: anon API access
+      - from: 420
+        to: 1080
+        state: compromised
+        note: rogue workloads being scheduled
+      - from: 1080
+        to: 1500
+        state: recovering
+        note: RBAC tightened
+  - type: redis
+    name: pricing-cache
+    host: pricing-cache-host
+    generator:
+      type: redis
+      port: 6379
+      max_memory: 256mb
+      eviction_policy: allkeys-lru
+      traffic_rate: 200
+      error_rate: 0.0005
+connections:
+  - source: ingress-controller
+    target: pricing-svc
+    protocol: http
+    port: 8080
+  - source: ingress-controller
+    target: catalog-svc
+    protocol: http
+    port: 8080
+  - source: ingress-controller
+    target: kube-apiserver
+    protocol: https
+    port: 6443
+  - source: pricing-svc
+    target: pricing-cache
+    protocol: tcp
+    port: 6379
+  - source: debug-shell-pod
+    target: kube-apiserver
+    protocol: https
+    port: 6443
+custom_types:
+  - id: debug-shell-pod-events
+    name: debug-shell-pod
+    description: Generic event log for debug-shell-pod
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - debug-shell-pod request received
+          - debug-shell-pod processed event
+          - debug-shell-pod returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} debug-shell-pod [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} debug-shell-pod [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: kube-apiserver-events
+    name: kube-apiserver
+    description: Generic event log for kube-apiserver
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - kube-apiserver request received
+          - kube-apiserver processed event
+          - kube-apiserver returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} kube-apiserver [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} kube-apiserver [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true

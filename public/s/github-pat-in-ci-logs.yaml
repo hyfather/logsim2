@@ -1,0 +1,213 @@
+name: GitHub PAT Leaked in CI Build Log
+description: >-
+  A debug `set -x` left in a GitHub Actions workflow echoes a long-lived org-scoped PAT into a public build log. Within
+  90 seconds an automated scraper finds it. The token is used to clone 12 private repos and add a deploy key to one of
+  them.
+duration: 1080
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: scm-vpc
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: scm-edge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: scm-app
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: scm-audit
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: github-edge-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: scm-edge
+  - type: virtual_server
+    name: github-enterprise-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: scm-app
+  - type: virtual_server
+    name: actions-runner-pool-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: scm-app
+  - type: virtual_server
+    name: github-audit-log-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: scm-audit
+  - type: virtual_server
+    name: siem-collector-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: scm-audit
+services:
+  - type: nginx
+    name: github-edge
+    host: github-edge-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+  - type: custom
+    name: github-enterprise
+    host: github-enterprise-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 130
+      error_rate: 0.005
+      custom_type: github-enterprise-events
+    timeline:
+      - from: 0
+        to: 360
+        state: healthy
+      - from: 360
+        to: 720
+        state: under_attack
+        note: anomalous clone burst
+      - from: 720
+        to: 960
+        state: recovering
+        note: PAT revoked, deploy key removed
+      - from: 960
+        to: 1080
+        state: healthy
+  - type: custom
+    name: actions-runner-pool
+    host: actions-runner-pool-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 5
+      custom_type: actions-runner-pool-events
+    timeline:
+      - from: 0
+        to: 240
+        state: healthy
+      - from: 240
+        to: 300
+        state: compromised
+        note: leaked PAT in log artefact
+      - from: 300
+        to: 1080
+        state: healthy
+  - type: postgres
+    name: github-audit-log
+    host: github-audit-log-host
+    generator:
+      type: postgres
+      port: 5432
+      slow_query_threshold: 1000
+      traffic_rate: 22
+      error_rate: 0.001
+  - type: custom
+    name: siem-collector
+    host: siem-collector-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 18
+      error_rate: 0.001
+      custom_type: siem-collector-events
+connections:
+  - source: github-edge
+    target: github-enterprise
+    protocol: https
+    port: 443
+  - source: actions-runner-pool
+    target: github-enterprise
+    protocol: https
+    port: 443
+  - source: github-enterprise
+    target: github-audit-log
+    protocol: tcp
+    port: 5432
+  - source: github-audit-log
+    target: siem-collector
+    protocol: tcp
+    port: 9200
+custom_types:
+  - id: github-enterprise-events
+    name: github-enterprise
+    description: Generic event log for github-enterprise
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - github-enterprise request received
+          - github-enterprise processed event
+          - github-enterprise returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} github-enterprise [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} github-enterprise [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: actions-runner-pool-events
+    name: actions-runner-pool
+    description: Generic event log for actions-runner-pool
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - actions-runner-pool request received
+          - actions-runner-pool processed event
+          - actions-runner-pool returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} actions-runner-pool [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} actions-runner-pool [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: siem-collector-events
+    name: siem-collector
+    description: Generic event log for siem-collector
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - siem-collector request received
+          - siem-collector processed event
+          - siem-collector returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} siem-collector [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} siem-collector [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true

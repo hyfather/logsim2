@@ -1,5 +1,6 @@
 'use client'
 import React, { useCallback, useEffect, useRef } from 'react'
+import { useRouter } from 'next/navigation'
 import { ReactFlowProvider } from '@xyflow/react'
 import { Canvas } from '@/components/canvas/Canvas'
 import { Palette } from '@/components/palette/Palette'
@@ -27,8 +28,15 @@ import { useUrlSync } from '@/hooks/useUrlSync'
 import { useIsMobile } from '@/hooks/useMediaQuery'
 import { startPointerDrag } from '@/lib/pointerDrag'
 
-export default function EditorPageClient() {
+interface EditorPageClientProps {
+  /** Pre-selected scenario slug from a server route like `/s/<slug>`. Takes
+   *  precedence over `?scenario=<slug>` and is the source of truth when set. */
+  initialScenarioSlug?: string
+}
+
+export default function EditorPageClient({ initialScenarioSlug }: EditorPageClientProps = {}) {
   useUrlSync()
+  const router = useRouter()
   const isMobile = useIsMobile()
   const {
     logPanelOpen, logPanelWidth, setLogPanelOpen, setLogPanelWidth,
@@ -82,7 +90,10 @@ export default function EditorPageClient() {
       if (result.episode) setEpisode(result.episode)
     }
 
-    const slug = params.get('scenario')
+    // Slug source priority: server-provided prop (e.g. /s/<slug>) over
+    // ?scenario=<slug> query, since the prop is set by a route that already
+    // verified the slug exists in the index.
+    const slug = initialScenarioSlug ?? params.get('scenario')
     if (slug) {
       ;(async () => {
         try {
@@ -90,12 +101,15 @@ export default function EditorPageClient() {
         } catch (err) {
           console.warn('Failed to load preset from URL:', err)
         } finally {
-          // Strip the param so refreshes don't re-load and overwrite edits.
+          // Land on the canonical /editor URL so refreshes don't re-load and
+          // overwrite edits — and so useUrlSync writes ?ep=… under /editor
+          // rather than under /s/<slug>. router.replace (vs raw history API)
+          // keeps Next's pathname state in sync.
           const cleaned = new URLSearchParams(window.location.search)
           cleaned.delete('scenario')
           const next = cleaned.toString()
-          const url = next ? `${window.location.pathname}?${next}` : window.location.pathname
-          window.history.replaceState(null, '', url)
+          const url = next ? `/editor?${next}` : '/editor'
+          router.replace(url, { scroll: false })
         }
       })()
       return () => { cancelled = true }

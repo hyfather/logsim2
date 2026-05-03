@@ -1,0 +1,182 @@
+name: SQL Injection on Legacy Lookup Form
+description: >-
+  A 2014-era ColdFusion partner-portal lookup form (still online behind the same edge) is vulnerable to boolean-based
+  blind SQLi. An attacker sweeps it from a small set of VPS ranges and exfiltrates the partners table over ~12 minutes
+  of slow trickle queries.
+duration: 1320
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: merged-corp-vpc
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: edge-public
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: modern-app
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: legacy-cf
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: shared-data
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: edge-router-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: edge-public
+  - type: virtual_server
+    name: partner-api-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: modern-app
+  - type: virtual_server
+    name: partner-portal-cf-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: legacy-cf
+  - type: virtual_server
+    name: partners-mysql-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: shared-data
+services:
+  - type: nginx
+    name: edge-router
+    host: edge-router-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+    timeline:
+      - from: 0
+        to: 180
+        state: healthy
+      - from: 180
+        to: 840
+        state: under_attack
+      - from: 840
+        to: 1320
+        state: healthy
+  - type: golang
+    name: partner-api
+    host: partner-api-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 80
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 1320
+        state: healthy
+        note: parameterised queries — unaffected
+  - type: custom
+    name: partner-portal-cf
+    description: ColdFusion 11. SQL queries built with string concat. The 'sa' account.
+    host: partner-portal-cf-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 8
+      error_rate: 0.02
+      custom_type: partner-portal-cf-events
+    timeline:
+      - from: 0
+        to: 180
+        state: healthy
+      - from: 180
+        to: 420
+        state: under_attack
+        note: SQLi probes
+      - from: 420
+        to: 840
+        state: compromised
+        note: blind exfil in progress
+      - from: 840
+        to: 1200
+        state: throttled
+        note: blocked at WAF
+      - from: 1200
+        to: 1320
+        state: down
+        note: taken offline
+  - type: mysql
+    name: partners-mysql
+    host: partners-mysql-host
+    generator:
+      type: mysql
+      port: 3306
+      slow_query_threshold: 1000
+      traffic_rate: 41
+      error_rate: 0.003
+    timeline:
+      - from: 0
+        to: 420
+        state: healthy
+      - from: 420
+        to: 840
+        state: under_attack
+        note: anomalous slow LIKE queries from portal
+      - from: 840
+        to: 1320
+        state: healthy
+connections:
+  - source: edge-router
+    target: partner-api
+    protocol: https
+    port: 443
+  - source: edge-router
+    target: partner-portal-cf
+    protocol: https
+    port: 443
+  - source: partner-api
+    target: partners-mysql
+    protocol: tcp
+    port: 3306
+  - source: partner-portal-cf
+    target: partners-mysql
+    protocol: tcp
+    port: 3306
+custom_types:
+  - id: partner-portal-cf-events
+    name: partner-portal-cf
+    description: Generic event log for partner-portal-cf
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - partner-portal-cf request received
+          - partner-portal-cf processed event
+          - partner-portal-cf returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} partner-portal-cf [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} partner-portal-cf [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true

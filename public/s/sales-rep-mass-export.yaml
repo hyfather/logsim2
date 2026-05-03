@@ -1,0 +1,239 @@
+name: Sales Rep Mass-Exporting CRM
+description: >-
+  Account exec who hasn't shipped quota in two quarters quietly downloads 'Lead Lists by Region' 532 times in five days.
+  The day after they accept an offer at a competitor, they're walked out with their email cached locally.
+duration: 1620
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: rev-systems
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: rev-edge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: rev-app
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: rev-audit
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: okta-rev-edge-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: rev-edge
+  - type: virtual_server
+    name: salesforce-crm-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: rev-app
+  - type: virtual_server
+    name: onedrive-sync-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: rev-app
+  - type: virtual_server
+    name: varonis-ueba-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: rev-app
+  - type: virtual_server
+    name: siem-collector-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: rev-audit
+services:
+  - type: nginx
+    name: okta-rev-edge
+    host: okta-rev-edge-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+  - type: custom
+    name: salesforce-crm
+    host: salesforce-crm-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 80
+      error_rate: 0.005
+      custom_type: salesforce-crm-events
+    timeline:
+      - from: 0
+        to: 300
+        state: healthy
+      - from: 300
+        to: 1140
+        state: under_attack
+        note: single-user mass export pattern
+      - from: 1140
+        to: 1380
+        state: throttled
+        note: access revoked
+      - from: 1380
+        to: 1620
+        state: healthy
+  - type: custom
+    name: onedrive-sync
+    host: onedrive-sync-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 60
+      error_rate: 0.005
+      custom_type: onedrive-sync-events
+    timeline:
+      - from: 0
+        to: 660
+        state: healthy
+      - from: 660
+        to: 1140
+        state: compromised
+        note: anomalous local sync size
+      - from: 1140
+        to: 1620
+        state: recovering
+  - type: custom
+    name: varonis-ueba
+    host: varonis-ueba-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 12
+      error_rate: 0.005
+      custom_type: varonis-ueba-events
+  - type: custom
+    name: siem-collector
+    host: siem-collector-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 20
+      error_rate: 0.001
+      custom_type: siem-collector-events
+connections:
+  - source: okta-rev-edge
+    target: salesforce-crm
+    protocol: https
+    port: 443
+  - source: okta-rev-edge
+    target: onedrive-sync
+    protocol: https
+    port: 443
+  - source: salesforce-crm
+    target: varonis-ueba
+    protocol: https
+    port: 443
+  - source: varonis-ueba
+    target: siem-collector
+    protocol: tcp
+    port: 9200
+custom_types:
+  - id: salesforce-crm-events
+    name: salesforce-crm
+    description: Generic event log for salesforce-crm
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - salesforce-crm request received
+          - salesforce-crm processed event
+          - salesforce-crm returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} salesforce-crm [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} salesforce-crm [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: onedrive-sync-events
+    name: onedrive-sync
+    description: Generic event log for onedrive-sync
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - onedrive-sync request received
+          - onedrive-sync processed event
+          - onedrive-sync returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} onedrive-sync [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} onedrive-sync [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: varonis-ueba-events
+    name: varonis-ueba
+    description: Generic event log for varonis-ueba
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - varonis-ueba request received
+          - varonis-ueba processed event
+          - varonis-ueba returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} varonis-ueba [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} varonis-ueba [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: siem-collector-events
+    name: siem-collector
+    description: Generic event log for siem-collector
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - siem-collector request received
+          - siem-collector processed event
+          - siem-collector returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} siem-collector [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} siem-collector [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true

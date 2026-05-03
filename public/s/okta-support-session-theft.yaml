@@ -1,0 +1,244 @@
+name: Identity Provider Support-Session Theft
+description: >-
+  Lapsus$-style scenario: an attacker compromises a session at the IdP's third-party support contractor and uses the
+  support console to view (and partially impersonate) corporate users. Suspicious password resets and admin actions hit
+  the corp tenancy from the IdP's own infrastructure.
+duration: 1620
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: corp-identity
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: identity-edge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: saas-bridge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: audit-store
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: okta-edge-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: identity-edge
+  - type: virtual_server
+    name: okta-tenancy-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: saas-bridge
+  - type: virtual_server
+    name: okta-support-tier-egress-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: saas-bridge
+  - type: virtual_server
+    name: id-ueba-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: saas-bridge
+  - type: virtual_server
+    name: siem-collector-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: audit-store
+services:
+  - type: nginx
+    name: okta-edge
+    host: okta-edge-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+  - type: custom
+    name: okta-tenancy
+    host: okta-tenancy-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 76
+      error_rate: 0.005
+      custom_type: okta-tenancy-events
+    timeline:
+      - from: 0
+        to: 240
+        state: healthy
+      - from: 240
+        to: 780
+        state: under_attack
+        note: support tier acting on user accounts
+      - from: 780
+        to: 1020
+        state: compromised
+        note: factors enrolled by attacker
+      - from: 1020
+        to: 1260
+        state: recovering
+      - from: 1260
+        to: 1620
+        state: healthy
+  - type: custom
+    name: okta-support-tier-egress
+    description: Okta's own support contractor source IPs.
+    host: okta-support-tier-egress-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 5
+      custom_type: okta-support-tier-egress-events
+    timeline:
+      - from: 0
+        to: 240
+        state: healthy
+      - from: 240
+        to: 1260
+        state: compromised
+        note: vendor session hijacked
+      - from: 1260
+        to: 1620
+        state: down
+        note: vendor access disabled
+  - type: custom
+    name: id-ueba
+    host: id-ueba-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 12
+      error_rate: 0.005
+      custom_type: id-ueba-events
+  - type: custom
+    name: siem-collector
+    host: siem-collector-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 22
+      error_rate: 0.001
+      custom_type: siem-collector-events
+connections:
+  - source: okta-edge
+    target: okta-tenancy
+    protocol: https
+    port: 443
+  - source: okta-support-tier-egress
+    target: okta-tenancy
+    protocol: https
+    port: 443
+  - source: okta-tenancy
+    target: id-ueba
+    protocol: https
+    port: 443
+  - source: id-ueba
+    target: siem-collector
+    protocol: tcp
+    port: 9200
+custom_types:
+  - id: okta-tenancy-events
+    name: okta-tenancy
+    description: Generic event log for okta-tenancy
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - okta-tenancy request received
+          - okta-tenancy processed event
+          - okta-tenancy returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} okta-tenancy [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} okta-tenancy [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: okta-support-tier-egress-events
+    name: okta-support-tier-egress
+    description: Generic event log for okta-support-tier-egress
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - okta-support-tier-egress request received
+          - okta-support-tier-egress processed event
+          - okta-support-tier-egress returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} okta-support-tier-egress [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} okta-support-tier-egress [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: id-ueba-events
+    name: id-ueba
+    description: Generic event log for id-ueba
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - id-ueba request received
+          - id-ueba processed event
+          - id-ueba returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} id-ueba [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} id-ueba [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: siem-collector-events
+    name: siem-collector
+    description: Generic event log for siem-collector
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - siem-collector request received
+          - siem-collector processed event
+          - siem-collector returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} siem-collector [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} siem-collector [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true

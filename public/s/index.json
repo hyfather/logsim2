@@ -1,0 +1,587 @@
+{
+  "groups": [
+    {
+      "id": "incident",
+      "label": "Production Incidents",
+      "description": "Outages, slowdowns, and oh-no Tuesdays from real ops war stories.",
+      "order": 1
+    },
+    {
+      "id": "deploy",
+      "label": "Deploys & Releases",
+      "description": "Deployments, rollbacks, schema migrations, and config-change pain.",
+      "order": 2
+    },
+    {
+      "id": "security",
+      "label": "External Threats",
+      "description": "Attacks, exploits, and unwanted attention from the internet.",
+      "order": 3
+    },
+    {
+      "id": "insider",
+      "label": "Insider & Abuse",
+      "description": "Departing employees, off-policy access, and misuse from inside the perimeter.",
+      "order": 4
+    },
+    {
+      "id": "cloud",
+      "label": "Cloud & Identity",
+      "description": "IAM, OIDC, SaaS, and identity-edge mistakes on AWS / Entra / Okta / GitHub.",
+      "order": 5
+    }
+  ],
+  "scenarios": [
+    {
+      "file": "db-slowdown-cascade.yaml",
+      "slug": "db-slowdown-cascade",
+      "title": "Database Slowdown Cascade",
+      "description": "Postgres slow queries cascade into API degradation; replica failover restores service.",
+      "category": "incident",
+      "difficulty": "easy",
+      "durationTicks": 1200,
+      "serviceCount": 5,
+      "bytes": 4544
+    },
+    {
+      "file": "cache-failure-cascade.yaml",
+      "slug": "cache-failure-cascade",
+      "title": "Cache Failure Cascade",
+      "description": "Redis OOM forces reads onto Postgres; pool exhausts; APIs degrade until cache recovers.",
+      "category": "incident",
+      "difficulty": "easy",
+      "durationTicks": 1080,
+      "serviceCount": 5,
+      "bytes": 4381
+    },
+    {
+      "file": "dns-resolver-outage.yaml",
+      "slug": "dns-resolver-outage",
+      "title": "Internal DNS Resolver Outage",
+      "description": "Corp Unbound dies after a config push; downstream apps can't resolve internal SRV records and fail health checks.",
+      "category": "incident",
+      "difficulty": "medium",
+      "durationTicks": 1380,
+      "serviceCount": 7,
+      "bytes": 7010
+    },
+    {
+      "file": "cert-expiry-cascade.yaml",
+      "slug": "cert-expiry-cascade",
+      "title": "Wildcard Cert Expired at 03:14 UTC",
+      "description": "Wildcard renewed in Vault but never re-deployed; edge TLS and east-west mTLS both break.",
+      "category": "incident",
+      "difficulty": "easy",
+      "durationTicks": 1200,
+      "serviceCount": 5,
+      "bytes": 4539
+    },
+    {
+      "file": "disk-full-log-flood.yaml",
+      "slug": "disk-full-log-flood",
+      "title": "Disk Full From Runaway Debug Logs",
+      "description": "DEBUG-mode logging fills the data partition on a legacy MySQL; binlogs stop, DB goes read-only.",
+      "category": "incident",
+      "difficulty": "medium",
+      "durationTicks": 1500,
+      "serviceCount": 4,
+      "bytes": 4040
+    },
+    {
+      "file": "kafka-leader-election-storm.yaml",
+      "slug": "kafka-leader-election-storm",
+      "title": "Kafka Broker Loss → Election Storm",
+      "description": "Flaky NIC drops a broker; partition leader elections push produce p99 to seconds and consumers fall behind.",
+      "category": "incident",
+      "difficulty": "hard",
+      "durationTicks": 1500,
+      "serviceCount": 7,
+      "bytes": 7909
+    },
+    {
+      "file": "connection-pool-exhaustion.yaml",
+      "slug": "connection-pool-exhaustion",
+      "title": "Connection Pool Exhaustion",
+      "description": "A slow third-party tax API holds open HikariCP connections; pool saturates and the LB ejects an instance.",
+      "category": "incident",
+      "difficulty": "medium",
+      "durationTicks": 1080,
+      "serviceCount": 4,
+      "bytes": 3609
+    },
+    {
+      "file": "ntp-drift-auth-failure.yaml",
+      "slug": "ntp-drift-auth-failure",
+      "title": "NTP Drift Breaks Authentication",
+      "description": "ESXi host loses NTP sync; VMs drift forward; JWT and Kerberos tickets start being rejected.",
+      "category": "incident",
+      "difficulty": "hard",
+      "durationTicks": 1500,
+      "serviceCount": 4,
+      "bytes": 3964
+    },
+    {
+      "file": "jvm-memory-leak-crawl.yaml",
+      "slug": "jvm-memory-leak-crawl",
+      "title": "JVM Memory Leak Death Spiral",
+      "description": "Subtle leak in a Caffeine cache key causes GC pauses to climb until OOM, then cascades to peer replicas.",
+      "category": "incident",
+      "difficulty": "hard",
+      "durationTicks": 1800,
+      "serviceCount": 5,
+      "bytes": 7121
+    },
+    {
+      "file": "nlb-cross-zone-skew.yaml",
+      "slug": "nlb-cross-zone-skew",
+      "title": "NLB Cross-Zone Imbalance",
+      "description": "Cross-zone load balancing accidentally disabled; one AZ takes 75% of the traffic and saturates.",
+      "category": "incident",
+      "difficulty": "medium",
+      "durationTicks": 1200,
+      "serviceCount": 5,
+      "bytes": 4512
+    },
+    {
+      "file": "bad-canary-deploy.yaml",
+      "slug": "bad-canary-deploy",
+      "title": "Bad Canary Deploy",
+      "description": "Canary fails health checks; LB shifts traffic and the rest of the fleet absorbs the load until rollback.",
+      "category": "deploy",
+      "difficulty": "medium",
+      "durationTicks": 1080,
+      "serviceCount": 5,
+      "bytes": 4517
+    },
+    {
+      "file": "migration-deadlock.yaml",
+      "slug": "migration-deadlock",
+      "title": "Online Schema Migration Deadlock",
+      "description": "Migration blocks behind a stale SELECT FOR UPDATE; metadata lock wedges every INSERT to orders.",
+      "category": "deploy",
+      "difficulty": "medium",
+      "durationTicks": 1200,
+      "serviceCount": 5,
+      "bytes": 5374
+    },
+    {
+      "file": "feature-flag-storm.yaml",
+      "slug": "feature-flag-storm",
+      "title": "Feature Flag Flip Storms Downstream",
+      "description": "Flag flipped 5%→100% quadruples DB query rate and starves an unrelated service that shares the database.",
+      "category": "deploy",
+      "difficulty": "medium",
+      "durationTicks": 1080,
+      "serviceCount": 4,
+      "bytes": 3466
+    },
+    {
+      "file": "helm-bad-image-tag.yaml",
+      "slug": "helm-bad-image-tag",
+      "title": "Helm Image Tag Typo → CrashLoopBackOff",
+      "description": "values.yaml references a tag that doesn't exist; rolling update breaks every replica until rollback.",
+      "category": "deploy",
+      "difficulty": "easy",
+      "durationTicks": 900,
+      "serviceCount": 5,
+      "bytes": 4565
+    },
+    {
+      "file": "config-drift-rollback.yaml",
+      "slug": "config-drift-rollback",
+      "title": "Config Drift Blows Up Terraform Apply",
+      "description": "Hand-edited SG rule reconciled away by IaC; partner integration breaks until the rule is reinstated.",
+      "category": "deploy",
+      "difficulty": "medium",
+      "durationTicks": 1200,
+      "serviceCount": 4,
+      "bytes": 3270
+    },
+    {
+      "file": "dns-cutover-bad-ttl.yaml",
+      "slug": "dns-cutover-bad-ttl",
+      "title": "DNS Cutover With Bad TTL",
+      "description": "Cutover honoured a 24h TTL; half the user base hits the decommissioned old edge for hours.",
+      "category": "deploy",
+      "difficulty": "easy",
+      "durationTicks": 1620,
+      "serviceCount": 5,
+      "bytes": 3937
+    },
+    {
+      "file": "forgotten-cron-eol-host.yaml",
+      "slug": "forgotten-cron-eol-host",
+      "title": "Forgotten Cron on a 12-Year-Old Host",
+      "description": "Disk on a long-forgotten RHEL 6 cron host fails; nightly close pipeline misses for the first time in nine years.",
+      "category": "deploy",
+      "difficulty": "easy",
+      "durationTicks": 1500,
+      "serviceCount": 4,
+      "bytes": 4323
+    },
+    {
+      "file": "rollback-non-reversible-migration.yaml",
+      "slug": "rollback-non-reversible-migration",
+      "title": "Rollback Hits Non-Reversible Migration",
+      "description": "Rollback target's code expects a table the migration already DROPPED; cluster ends up in mixed state.",
+      "category": "deploy",
+      "difficulty": "hard",
+      "durationTicks": 1620,
+      "serviceCount": 5,
+      "bytes": 4781
+    },
+    {
+      "file": "third-party-sdk-breaking-change.yaml",
+      "slug": "third-party-sdk-breaking-change",
+      "title": "Third-Party SDK Auto-Bump Breaks API",
+      "description": "Renovate-merged 'minor' bump silently changes an auth header; every IdP call returns 401.",
+      "category": "deploy",
+      "difficulty": "medium",
+      "durationTicks": 1080,
+      "serviceCount": 4,
+      "bytes": 3976
+    },
+    {
+      "file": "autoscaler-traffic-ramp-lag.yaml",
+      "slug": "autoscaler-traffic-ramp-lag",
+      "title": "Autoscaler Lags a Black Friday Ramp",
+      "description": "Promo emails ramp traffic 20x in 5 minutes; HPA + pod warm-up are slower than the spike.",
+      "category": "deploy",
+      "difficulty": "medium",
+      "durationTicks": 1500,
+      "serviceCount": 7,
+      "bytes": 5927
+    },
+    {
+      "file": "ddos-edge-mitigation.yaml",
+      "slug": "ddos-edge-mitigation",
+      "title": "DDoS at the Edge",
+      "description": "L7 flood saturates the edge LB; downstream APIs throttle, attack subsides, traffic normalises.",
+      "category": "security",
+      "difficulty": "medium",
+      "durationTicks": 1200,
+      "serviceCount": 6,
+      "bytes": 5147
+    },
+    {
+      "file": "credential-stuffing-takeover.yaml",
+      "slug": "credential-stuffing-takeover",
+      "title": "Credential Stuffing → Account Takeover",
+      "description": "Brute force on auth-api breaks through; lateral movement and bulk PII reads before containment.",
+      "category": "security",
+      "difficulty": "hard",
+      "durationTicks": 1500,
+      "serviceCount": 5,
+      "bytes": 4335
+    },
+    {
+      "file": "log4shell-jndi-probe.yaml",
+      "slug": "log4shell-jndi-probe",
+      "title": "Log4Shell Probe & Successful Exploit",
+      "description": "Mass jndi: payloads land in headers; one forgotten Tomcat with log4j 2.14 makes the outbound LDAP call.",
+      "category": "security",
+      "difficulty": "hard",
+      "durationTicks": 1620,
+      "serviceCount": 5,
+      "bytes": 5285
+    },
+    {
+      "file": "sql-injection-legacy-form.yaml",
+      "slug": "sql-injection-legacy-form",
+      "title": "SQL Injection on Legacy Form",
+      "description": "Boolean-blind SQLi against a 2014-era ColdFusion partner portal exfils the partners table over 12 minutes.",
+      "category": "security",
+      "difficulty": "medium",
+      "durationTicks": 1320,
+      "serviceCount": 4,
+      "bytes": 4492
+    },
+    {
+      "file": "webshell-upload-rce.yaml",
+      "slug": "webshell-upload-rce",
+      "title": "Web Shell Drop via Image Uploader",
+      "description": "Polyglot .jpg/.phtml upload through a permissive uploader; static-assets pod ends up executing the shell.",
+      "category": "security",
+      "difficulty": "medium",
+      "durationTicks": 1500,
+      "serviceCount": 6,
+      "bytes": 5635
+    },
+    {
+      "file": "phishing-oauth-consent.yaml",
+      "slug": "phishing-oauth-consent",
+      "title": "Illicit OAuth Consent Grant",
+      "description": "Phishing tricks finance staff into consenting to a Mail.Read app; attacker pulls inboxes via Graph.",
+      "category": "security",
+      "difficulty": "hard",
+      "durationTicks": 1620,
+      "serviceCount": 5,
+      "bytes": 6180
+    },
+    {
+      "file": "cryptojacking-pod.yaml",
+      "slug": "cryptojacking-pod",
+      "title": "Cryptojacking in Forgotten K8s Pod",
+      "description": "Open NodePort + cluster-admin SA → attacker schedules an xmrig pod; CPU pegs and noisy-neighbours app.",
+      "category": "security",
+      "difficulty": "medium",
+      "durationTicks": 1500,
+      "serviceCount": 6,
+      "bytes": 6366
+    },
+    {
+      "file": "tor-scraping-pricing.yaml",
+      "slug": "tor-scraping-pricing",
+      "title": "Tor Exit Nodes Scraping Pricing",
+      "description": "Distributed Tor scraping dodges per-IP rate limits; replica lag grows as the cache churns.",
+      "category": "security",
+      "difficulty": "easy",
+      "durationTicks": 1800,
+      "serviceCount": 4,
+      "bytes": 3267
+    },
+    {
+      "file": "public-s3-discovered.yaml",
+      "slug": "public-s3-discovered",
+      "title": "Public S3 Bucket Discovered & Drained",
+      "description": "World-readable backup bucket from 2022 enumerated and drained; GuardDuty fires on anonymous reads.",
+      "category": "security",
+      "difficulty": "easy",
+      "durationTicks": 1080,
+      "serviceCount": 4,
+      "bytes": 4684
+    },
+    {
+      "file": "subdomain-takeover.yaml",
+      "slug": "subdomain-takeover",
+      "title": "Subdomain Takeover via Dangling CNAME",
+      "description": "Attacker claims a deleted Heroku app behind shop-old.acme.io and serves a near-perfect phishing clone.",
+      "category": "security",
+      "difficulty": "hard",
+      "durationTicks": 1620,
+      "serviceCount": 5,
+      "bytes": 3995
+    },
+    {
+      "file": "departing-eng-bulk-pull.yaml",
+      "slug": "departing-eng-bulk-pull",
+      "title": "Departing Engineer — Bulk Pull",
+      "description": "Engineer two weeks from leaving clones 87 repos and pulls 14 GB from SharePoint on their last day.",
+      "category": "insider",
+      "difficulty": "medium",
+      "durationTicks": 1800,
+      "serviceCount": 5,
+      "bytes": 5934
+    },
+    {
+      "file": "privileged-hr-snooping.yaml",
+      "slug": "privileged-hr-snooping",
+      "title": "HR Analyst Snooping on Exec Files",
+      "description": "Authorised account opens 27 C-suite comp files at 1 AM Sunday — every action is technically allowed.",
+      "category": "insider",
+      "difficulty": "easy",
+      "durationTicks": 1080,
+      "serviceCount": 4,
+      "bytes": 5016
+    },
+    {
+      "file": "svc-account-interactive.yaml",
+      "slug": "svc-account-interactive",
+      "title": "Service Account Used Interactively",
+      "description": "Backup service account suddenly authenticates with Logon Type 10 (RemoteInteractive) — never seen before.",
+      "category": "insider",
+      "difficulty": "medium",
+      "durationTicks": 1200,
+      "serviceCount": 4,
+      "bytes": 6023
+    },
+    {
+      "file": "personal-email-exfil.yaml",
+      "slug": "personal-email-exfil",
+      "title": "Customer DB Exfil to Personal Gmail",
+      "description": "37k-row customer CSV emailed to a personal Gmail; DLP rule was set to monitor-only.",
+      "category": "insider",
+      "difficulty": "easy",
+      "durationTicks": 900,
+      "serviceCount": 5,
+      "bytes": 6210
+    },
+    {
+      "file": "honeytoken-tripped.yaml",
+      "slug": "honeytoken-tripped",
+      "title": "Honeytoken Tripped on Finance Share",
+      "description": "Canary M&A document opened from a vendor laptop VLAN at 02:47 — first solid lead on a 31-day dwell intrusion.",
+      "category": "insider",
+      "difficulty": "hard",
+      "durationTicks": 1500,
+      "serviceCount": 5,
+      "bytes": 6826
+    },
+    {
+      "file": "after-hours-admin-spree.yaml",
+      "slug": "after-hours-admin-spree",
+      "title": "After-Hours Admin Activity Spike",
+      "description": "Admin makes 280 prod config changes at 02:30 Sunday — could be IR, could be the admin, could be someone else.",
+      "category": "insider",
+      "difficulty": "medium",
+      "durationTicks": 1500,
+      "serviceCount": 5,
+      "bytes": 7365
+    },
+    {
+      "file": "sales-rep-mass-export.yaml",
+      "slug": "sales-rep-mass-export",
+      "title": "Sales Rep Mass-Exporting CRM",
+      "description": "AE pulls 'Lead Lists by Region' 532 times in five days, then accepts an offer at a competitor.",
+      "category": "insider",
+      "difficulty": "easy",
+      "durationTicks": 1620,
+      "serviceCount": 5,
+      "bytes": 6158
+    },
+    {
+      "file": "mass-mfa-disable.yaml",
+      "slug": "mass-mfa-disable",
+      "title": "Mass MFA Disable from Helpdesk Console",
+      "description": "Helpdesk session resets MFA on 41 VIPs in 30 minutes right before a phishing wave.",
+      "category": "insider",
+      "difficulty": "hard",
+      "durationTicks": 1500,
+      "serviceCount": 5,
+      "bytes": 6360
+    },
+    {
+      "file": "shadow-it-saas.yaml",
+      "slug": "shadow-it-saas",
+      "title": "Shadow IT SaaS Wired Into Corp SSO",
+      "description": "Unsanctioned Notion workspace grows to 142 corp users; CASB risk score finally trips a review.",
+      "category": "insider",
+      "difficulty": "easy",
+      "durationTicks": 1800,
+      "serviceCount": 4,
+      "bytes": 4302
+    },
+    {
+      "file": "pci-segment-violation.yaml",
+      "slug": "pci-segment-violation",
+      "title": "PCI Segment Violation",
+      "description": "Developer SSHes from CDE jump host to a non-CDE Elasticsearch — PCI-DSS doesn't care about intent.",
+      "category": "insider",
+      "difficulty": "medium",
+      "durationTicks": 1080,
+      "serviceCount": 6,
+      "bytes": 6376
+    },
+    {
+      "file": "imdsv1-ssrf-cred-theft.yaml",
+      "slug": "imdsv1-ssrf-cred-theft",
+      "title": "SSRF → IMDSv1 → Stolen EC2 Creds",
+      "description": "Image-resize SSRF reaches 169.254.169.254 with IMDSv1; role credentials used from a residential IP.",
+      "category": "cloud",
+      "difficulty": "hard",
+      "durationTicks": 1500,
+      "serviceCount": 5,
+      "bytes": 6466
+    },
+    {
+      "file": "iam-passrole-privesc.yaml",
+      "slug": "iam-passrole-privesc",
+      "title": "IAM PrivEsc via PassRole",
+      "description": "Low-priv user with iam:PassRole + lambda:CreateFunction chains to admin via a self-invoked Lambda.",
+      "category": "cloud",
+      "difficulty": "hard",
+      "durationTicks": 1500,
+      "serviceCount": 4,
+      "bytes": 6129
+    },
+    {
+      "file": "okta-support-session-theft.yaml",
+      "slug": "okta-support-session-theft",
+      "title": "IdP Support Session Theft",
+      "description": "Lapsus$-style: vendor support session compromised; password resets and factor enrolment from IdP infra IPs.",
+      "category": "cloud",
+      "difficulty": "hard",
+      "durationTicks": 1620,
+      "serviceCount": 5,
+      "bytes": 6437
+    },
+    {
+      "file": "github-pat-in-ci-logs.yaml",
+      "slug": "github-pat-in-ci-logs",
+      "title": "GitHub PAT Leaked in CI Log",
+      "description": "set -x echoes a long-lived PAT into a public log; scraped within 90s, used for repo cloning + deploy key.",
+      "category": "cloud",
+      "difficulty": "easy",
+      "durationTicks": 1080,
+      "serviceCount": 5,
+      "bytes": 5557
+    },
+    {
+      "file": "azure-prt-theft.yaml",
+      "slug": "azure-prt-theft",
+      "title": "Azure AD Pass-the-PRT",
+      "description": "Infostealer pulls PRT cookie + transport key from a laptop; Graph access without MFA from a new device.",
+      "category": "cloud",
+      "difficulty": "hard",
+      "durationTicks": 1620,
+      "serviceCount": 6,
+      "bytes": 7472
+    },
+    {
+      "file": "aws-root-login-alert.yaml",
+      "slug": "aws-root-login-alert",
+      "title": "AWS Root Login From New Geo",
+      "description": "Root account dormant 411 days suddenly logs in, opens billing, mints an access key.",
+      "category": "cloud",
+      "difficulty": "easy",
+      "durationTicks": 900,
+      "serviceCount": 4,
+      "bytes": 5837
+    },
+    {
+      "file": "rogue-global-admin-sp.yaml",
+      "slug": "rogue-global-admin-sp",
+      "title": "Rogue Global Admin Service Principal",
+      "description": "Break-glass GA consents to a 'BackupTool' app; new SP gets Global Admin within an hour.",
+      "category": "cloud",
+      "difficulty": "hard",
+      "durationTicks": 1500,
+      "serviceCount": 5,
+      "bytes": 6192
+    },
+    {
+      "file": "conditional-access-weakened.yaml",
+      "slug": "conditional-access-weakened",
+      "title": "Conditional Access Weakened 'For Testing'",
+      "description": "CA policy disabled to debug an integration and forgotten; spray + BEC forwarding rules follow hours later.",
+      "category": "cloud",
+      "difficulty": "medium",
+      "durationTicks": 1500,
+      "serviceCount": 5,
+      "bytes": 6187
+    },
+    {
+      "file": "stale-cross-account-trust.yaml",
+      "slug": "stale-cross-account-trust",
+      "title": "Stale Cross-Account Trust Abused",
+      "description": "Defunct vendor's AWS account purchased at auction; pre-existing trust used to assume a prod role.",
+      "category": "cloud",
+      "difficulty": "medium",
+      "durationTicks": 1500,
+      "serviceCount": 5,
+      "bytes": 7306
+    },
+    {
+      "file": "gha-oidc-misconfig.yaml",
+      "slug": "gha-oidc-misconfig",
+      "title": "GitHub Actions OIDC Trust Too Loose",
+      "description": "Trust policy with repo:acme/* lets a fork-PR runner assume the prod deploy role.",
+      "category": "cloud",
+      "difficulty": "hard",
+      "durationTicks": 1500,
+      "serviceCount": 6,
+      "bytes": 7835
+    }
+  ],
+  "generatedAt": "2026-05-03T05:15:39.076Z"
+}

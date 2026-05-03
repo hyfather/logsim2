@@ -1,0 +1,201 @@
+name: Wildcard Cert Expired at 03:14 UTC
+description: >-
+  *.api.acme-corp.io was renewed in Vault but never re-deployed to the edge. At 03:14 UTC clients start getting
+  NET::ERR_CERT_DATE_INVALID, internal mTLS fails between sidecars, half the fleet effectively goes offline.
+duration: 1200
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: acme-prod-eu-w1
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: edge-public-1a
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: mesh-app-1a
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: data-private-1a
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: edge-tls-term-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: edge-public-1a
+  - type: virtual_server
+    name: auth-svc-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: mesh-app-1a
+  - type: virtual_server
+    name: orders-svc-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: mesh-app-1a
+  - type: virtual_server
+    name: shipping-svc-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: mesh-app-1a
+  - type: virtual_server
+    name: core-db-rw-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: data-private-1a
+services:
+  - type: nginx
+    name: edge-tls-term
+    host: edge-tls-term-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+    timeline:
+      - from: 0
+        to: 180
+        state: healthy
+      - from: 180
+        to: 720
+        state: down
+        note: expired wildcard cert
+      - from: 720
+        to: 960
+        state: recovering
+      - from: 960
+        to: 1200
+        state: healthy
+  - type: golang
+    name: auth-svc
+    host: auth-svc-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 60
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 240
+        state: healthy
+      - from: 240
+        to: 720
+        state: down
+        note: no traffic — TLS broken at edge
+      - from: 720
+        to: 960
+        state: recovering
+      - from: 960
+        to: 1200
+        state: healthy
+  - type: golang
+    name: orders-svc
+    host: orders-svc-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 90
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 240
+        state: healthy
+      - from: 240
+        to: 720
+        state: down
+      - from: 720
+        to: 960
+        state: recovering
+      - from: 960
+        to: 1200
+        state: healthy
+  - type: golang
+    name: shipping-svc
+    host: shipping-svc-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 40
+      error_rate: 0.002
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 360
+        state: healthy
+      - from: 360
+        to: 720
+        state: down
+        note: east-west mTLS failure
+      - from: 720
+        to: 960
+        state: recovering
+      - from: 960
+        to: 1200
+        state: healthy
+  - type: postgres
+    name: core-db-rw
+    host: core-db-rw-host
+    generator:
+      type: postgres
+      port: 5432
+      slow_query_threshold: 1000
+      traffic_rate: 100
+      error_rate: 0.001
+connections:
+  - source: edge-tls-term
+    target: auth-svc
+    protocol: https
+    port: 443
+  - source: edge-tls-term
+    target: orders-svc
+    protocol: https
+    port: 443
+  - source: orders-svc
+    target: shipping-svc
+    protocol: https
+    port: 8443
+  - source: auth-svc
+    target: core-db-rw
+    protocol: tcp
+    port: 5432
+  - source: orders-svc
+    target: core-db-rw
+    protocol: tcp
+    port: 5432
+  - source: shipping-svc
+    target: core-db-rw
+    protocol: tcp
+    port: 5432

@@ -1,0 +1,138 @@
+name: Tor Exit Nodes Scraping Pricing API
+description: >-
+  A competitor (or someone running for one) hammers /api/v3/pricing through ~40 Tor exit nodes to dodge IP-based rate
+  limits. Each individual IP looks like a normal user, but the aggregate pulls a full price book every two hours. The
+  pricing service stays up but the Postgres read replica falls behind on lag.
+duration: 1800
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: ecom-prod-vpc
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: ecom-edge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: ecom-app
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: ecom-data
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: ecom-edge-lb-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: ecom-edge
+  - type: virtual_server
+    name: pricing-api-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: ecom-app
+  - type: virtual_server
+    name: pricing-pg-primary-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: ecom-data
+  - type: virtual_server
+    name: pricing-pg-ro-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: ecom-data
+services:
+  - type: nginx
+    name: ecom-edge-lb
+    host: ecom-edge-lb-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+    timeline:
+      - from: 0
+        to: 240
+        state: healthy
+      - from: 240
+        to: 1140
+        state: under_attack
+        note: Tor scraping
+      - from: 1140
+        to: 1380
+        state: throttled
+        note: Tor blocked at WAF
+      - from: 1380
+        to: 1800
+        state: healthy
+  - type: golang
+    name: pricing-api
+    host: pricing-api-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 90
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 240
+        state: healthy
+      - from: 240
+        to: 1380
+        state: degraded
+        note: elevated reads
+      - from: 1380
+        to: 1800
+        state: healthy
+  - type: postgres
+    name: pricing-pg-primary
+    host: pricing-pg-primary-host
+    generator:
+      type: postgres
+      port: 5432
+      slow_query_threshold: 1000
+      traffic_rate: 15
+      error_rate: 0.001
+  - type: postgres
+    name: pricing-pg-ro
+    host: pricing-pg-ro-host
+    generator:
+      type: postgres
+      port: 5432
+      slow_query_threshold: 1000
+      traffic_rate: 75
+      error_rate: 0.001
+    timeline:
+      - from: 0
+        to: 360
+        state: healthy
+      - from: 360
+        to: 1380
+        state: degraded
+        note: lag, cold pages
+      - from: 1380
+        to: 1800
+        state: healthy
+connections:
+  - source: ecom-edge-lb
+    target: pricing-api
+    protocol: https
+    port: 443
+  - source: pricing-api
+    target: pricing-pg-primary
+    protocol: tcp
+    port: 5432
+  - source: pricing-api
+    target: pricing-pg-ro
+    protocol: tcp
+    port: 5432

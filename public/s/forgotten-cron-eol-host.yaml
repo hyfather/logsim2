@@ -1,0 +1,168 @@
+name: Forgotten Cron on a 12-Year-Old Host
+description: >-
+  A finance close-of-day cron job has been running on RH6-FIN-CRON-01 since 2013. The box is past EOL, was supposed to
+  be retired in 2021, was forgotten, and tonight its disk finally gives up — the close fails for the first time in nine
+  years.
+duration: 1500
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: fin-onprem
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: fin-edge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: fin-app
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: fin-data
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: fin-portal-edge-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: fin-edge
+  - type: virtual_server
+    name: rh6-fin-cron-01-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: fin-app
+  - type: virtual_server
+    name: fin-etl-loader-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: fin-app
+  - type: virtual_server
+    name: fin-data-warehouse-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: fin-data
+services:
+  - type: nginx
+    name: fin-portal-edge
+    host: fin-portal-edge-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+  - type: custom
+    name: rh6-fin-cron-01
+    description: RHEL 6.5. Last patched in 2018.
+    host: rh6-fin-cron-01-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 5
+      custom_type: rh6-fin-cron-01-events
+    timeline:
+      - from: 0
+        to: 360
+        state: healthy
+      - from: 360
+        to: 900
+        state: down
+        note: disk failure
+      - from: 900
+        to: 1500
+        state: recovering
+        note: job migrated to new host
+  - type: custom
+    name: fin-etl-loader
+    description: Consumes the cron's output file.
+    host: fin-etl-loader-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 7
+      error_rate: 0.0035
+      custom_type: fin-etl-loader-events
+    timeline:
+      - from: 0
+        to: 480
+        state: healthy
+      - from: 480
+        to: 1140
+        state: degraded
+        note: stuck on missing input
+      - from: 1140
+        to: 1500
+        state: healthy
+  - type: postgres
+    name: fin-data-warehouse
+    host: fin-data-warehouse-host
+    generator:
+      type: postgres
+      port: 5432
+      slow_query_threshold: 1000
+      traffic_rate: 8
+      error_rate: 0.001
+connections:
+  - source: fin-portal-edge
+    target: fin-etl-loader
+    protocol: http
+    port: 8080
+  - source: fin-etl-loader
+    target: fin-data-warehouse
+    protocol: tcp
+    port: 5432
+  - source: rh6-fin-cron-01
+    target: fin-etl-loader
+    protocol: tcp
+    port: 8080
+custom_types:
+  - id: rh6-fin-cron-01-events
+    name: RH6-FIN-CRON-01
+    description: Generic event log for RH6-FIN-CRON-01
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - RH6-FIN-CRON-01 request received
+          - RH6-FIN-CRON-01 processed event
+          - RH6-FIN-CRON-01 returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} RH6-FIN-CRON-01 [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} RH6-FIN-CRON-01 [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: fin-etl-loader-events
+    name: fin-etl-loader
+    description: Generic event log for fin-etl-loader
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - fin-etl-loader request received
+          - fin-etl-loader processed event
+          - fin-etl-loader returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} fin-etl-loader [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} fin-etl-loader [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true

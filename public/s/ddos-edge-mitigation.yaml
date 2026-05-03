@@ -1,0 +1,229 @@
+name: DDoS at the Edge
+description: >-
+  Public-facing API gateway absorbs an L7 flood; APIs degrade under load, rate limiting engages, the attack subsides and
+  traffic returns to baseline.
+duration: 1200
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: prod-vpc
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: public-subnet
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: app-subnet
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: data-subnet
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: edge-lb-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: public-subnet
+  - type: virtual_server
+    name: orders-api-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: app-subnet
+  - type: virtual_server
+    name: users-api-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: app-subnet
+  - type: virtual_server
+    name: billing-api-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: app-subnet
+  - type: virtual_server
+    name: platform-db-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: data-subnet
+  - type: virtual_server
+    name: ratelimit-cache-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: data-subnet
+services:
+  - type: nginx
+    name: edge-lb
+    description: Public HTTPS edge with rate limiting.
+    host: edge-lb-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+    timeline:
+      - from: 0
+        to: 180
+        state: healthy
+      - from: 180
+        to: 540
+        state: under_attack
+        note: L7 flood
+      - from: 540
+        to: 780
+        state: throttled
+        note: rate limit engaged
+      - from: 780
+        to: 1020
+        state: recovering
+      - from: 1020
+        to: 1200
+        state: healthy
+  - type: golang
+    name: orders-api
+    description: Order placement service.
+    host: orders-api-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 70
+      error_rate: 0.01
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 300
+        state: healthy
+      - from: 300
+        to: 540
+        state: degraded
+      - from: 540
+        to: 780
+        state: throttled
+      - from: 780
+        to: 1200
+        state: healthy
+  - type: golang
+    name: users-api
+    description: Account profile service.
+    host: users-api-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 100
+      error_rate: 0.01
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 240
+        state: healthy
+      - from: 240
+        to: 540
+        state: degraded
+        note: saturated CPU
+      - from: 540
+        to: 780
+        state: throttled
+      - from: 780
+        to: 1020
+        state: recovering
+      - from: 1020
+        to: 1200
+        state: healthy
+  - type: golang
+    name: billing-api
+    description: Charges and invoices.
+    host: billing-api-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 30
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 360
+        state: healthy
+      - from: 360
+        to: 540
+        state: degraded
+      - from: 540
+        to: 1200
+        state: healthy
+  - type: mysql
+    name: platform-db
+    description: Shared transactional store.
+    host: platform-db-host
+    generator:
+      type: mysql
+      port: 3306
+      slow_query_threshold: 1000
+      traffic_rate: 120
+      error_rate: 0.001
+  - type: redis
+    name: ratelimit-cache
+    description: Token-bucket counters.
+    host: ratelimit-cache-host
+    generator:
+      type: redis
+      port: 6379
+      max_memory: 256mb
+      eviction_policy: allkeys-lru
+      traffic_rate: 200
+      error_rate: 0.0005
+connections:
+  - source: edge-lb
+    target: orders-api
+    protocol: http
+    port: 8080
+  - source: edge-lb
+    target: users-api
+    protocol: http
+    port: 8080
+  - source: edge-lb
+    target: billing-api
+    protocol: http
+    port: 8080
+  - source: orders-api
+    target: platform-db
+    protocol: tcp
+    port: 3306
+  - source: users-api
+    target: platform-db
+    protocol: tcp
+    port: 3306
+  - source: billing-api
+    target: platform-db
+    protocol: tcp
+    port: 3306
+  - source: edge-lb
+    target: ratelimit-cache
+    protocol: tcp
+    port: 6379

@@ -1,0 +1,202 @@
+name: Rollback Fails on Non-Reversible Migration
+description: >-
+  A bad deploy needs to roll back. Unfortunately the migration that ran also DROPPED the legacy 'addresses_v1' table.
+  The rollback target's code expects that table — restart loops in CrashLoopBackOff and the on-call has to roll forward
+  and restore from a snapshot at the same time.
+duration: 1620
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: shipping-prod-vpc
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: shipping-edge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: shipping-app
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: shipping-data
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: shipping-edge-lb-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: shipping-edge
+  - type: virtual_server
+    name: shipping-api-1-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: shipping-app
+  - type: virtual_server
+    name: shipping-api-2-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: shipping-app
+  - type: virtual_server
+    name: shipping-api-3-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: shipping-app
+  - type: virtual_server
+    name: shipping-db-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: shipping-data
+services:
+  - type: nginx
+    name: shipping-edge-lb
+    host: shipping-edge-lb-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+  - type: nodejs
+    name: shipping-api-1
+    host: shipping-api-1-host
+    generator:
+      type: nodejs
+      port: 3000
+      log_format: json
+      log_level: info
+      traffic_rate: 50
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /api/health
+          avg_latency_ms: 20
+          error_rate: 0.001
+        - method: GET
+          path: /api/users
+          avg_latency_ms: 100
+          error_rate: 0.01
+        - method: POST
+          path: /api/users
+          avg_latency_ms: 220
+          error_rate: 0.01
+    timeline:
+      - from: 0
+        to: 360
+        state: degraded
+        note: new code, broken
+      - from: 360
+        to: 900
+        state: down
+        note: rollback CrashLoop
+      - from: 900
+        to: 1140
+        state: recovering
+      - from: 1140
+        to: 1620
+        state: healthy
+  - type: nodejs
+    name: shipping-api-2
+    host: shipping-api-2-host
+    generator:
+      type: nodejs
+      port: 3000
+      log_format: json
+      log_level: info
+      traffic_rate: 50
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /api/health
+          avg_latency_ms: 20
+          error_rate: 0.001
+        - method: GET
+          path: /api/users
+          avg_latency_ms: 100
+          error_rate: 0.01
+        - method: POST
+          path: /api/users
+          avg_latency_ms: 220
+          error_rate: 0.01
+    timeline:
+      - from: 0
+        to: 360
+        state: degraded
+      - from: 360
+        to: 900
+        state: down
+      - from: 900
+        to: 1140
+        state: recovering
+      - from: 1140
+        to: 1620
+        state: healthy
+  - type: nodejs
+    name: shipping-api-3
+    host: shipping-api-3-host
+    generator:
+      type: nodejs
+      port: 3000
+      log_format: json
+      log_level: info
+      traffic_rate: 50
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /api/health
+          avg_latency_ms: 20
+          error_rate: 0.001
+        - method: GET
+          path: /api/users
+          avg_latency_ms: 100
+          error_rate: 0.01
+        - method: POST
+          path: /api/users
+          avg_latency_ms: 220
+          error_rate: 0.01
+    timeline:
+      - from: 0
+        to: 900
+        state: degraded
+        note: new code, broken
+      - from: 900
+        to: 1140
+        state: recovering
+      - from: 1140
+        to: 1620
+        state: healthy
+  - type: postgres
+    name: shipping-db
+    host: shipping-db-host
+    generator:
+      type: postgres
+      port: 5432
+      slow_query_threshold: 1000
+      traffic_rate: 75
+      error_rate: 0.001
+    timeline:
+      - from: 0
+        to: 1620
+        state: healthy
+connections:
+  - source: shipping-edge-lb
+    target: shipping-api-1
+    protocol: http
+    port: 3000
+  - source: shipping-edge-lb
+    target: shipping-api-2
+    protocol: http
+    port: 3000
+  - source: shipping-edge-lb
+    target: shipping-api-3
+    protocol: http
+    port: 3000
+  - source: shipping-api-1
+    target: shipping-db
+    protocol: tcp
+    port: 5432
+  - source: shipping-api-2
+    target: shipping-db
+    protocol: tcp
+    port: 5432
+  - source: shipping-api-3
+    target: shipping-db
+    protocol: tcp
+    port: 5432

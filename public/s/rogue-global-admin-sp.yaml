@@ -1,0 +1,239 @@
+name: Rogue Global Admin Service Principal
+description: >-
+  A Global Admin in a stale break-glass account consents to a third-party app called 'BackupTool 365'. The app has
+  Application.ReadWrite.All and Directory.ReadWrite.All. Within an hour it has registered a new service principal and
+  granted it Global Admin role assignment.
+duration: 1500
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: corp-identity
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: identity-edge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: saas-bridge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: audit-store
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: entra-token-endpoint-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: identity-edge
+  - type: virtual_server
+    name: entra-id-tenancy-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: saas-bridge
+  - type: virtual_server
+    name: ms-graph-api-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: saas-bridge
+  - type: virtual_server
+    name: id-ueba-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: saas-bridge
+  - type: virtual_server
+    name: siem-collector-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: audit-store
+services:
+  - type: nginx
+    name: entra-token-endpoint
+    host: entra-token-endpoint-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+  - type: custom
+    name: entra-id-tenancy
+    host: entra-id-tenancy-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 60
+      error_rate: 0.005
+      custom_type: entra-id-tenancy-events
+    timeline:
+      - from: 0
+        to: 240
+        state: healthy
+      - from: 240
+        to: 960
+        state: compromised
+        note: rogue admin consent + role grant
+      - from: 960
+        to: 1200
+        state: recovering
+      - from: 1200
+        to: 1500
+        state: healthy
+  - type: custom
+    name: ms-graph-api
+    host: ms-graph-api-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 30
+      error_rate: 0.005
+      custom_type: ms-graph-api-events
+    timeline:
+      - from: 0
+        to: 540
+        state: healthy
+      - from: 540
+        to: 960
+        state: under_attack
+        note: directory writes via attacker SP
+      - from: 960
+        to: 1500
+        state: healthy
+  - type: custom
+    name: id-ueba
+    host: id-ueba-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 12
+      error_rate: 0.005
+      custom_type: id-ueba-events
+  - type: custom
+    name: siem-collector
+    host: siem-collector-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 22
+      error_rate: 0.001
+      custom_type: siem-collector-events
+connections:
+  - source: entra-token-endpoint
+    target: entra-id-tenancy
+    protocol: https
+    port: 443
+  - source: entra-id-tenancy
+    target: ms-graph-api
+    protocol: https
+    port: 443
+  - source: ms-graph-api
+    target: id-ueba
+    protocol: https
+    port: 443
+  - source: id-ueba
+    target: siem-collector
+    protocol: tcp
+    port: 9200
+custom_types:
+  - id: entra-id-tenancy-events
+    name: entra-id-tenancy
+    description: Generic event log for entra-id-tenancy
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - entra-id-tenancy request received
+          - entra-id-tenancy processed event
+          - entra-id-tenancy returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} entra-id-tenancy [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} entra-id-tenancy [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: ms-graph-api-events
+    name: ms-graph-api
+    description: Generic event log for ms-graph-api
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - ms-graph-api request received
+          - ms-graph-api processed event
+          - ms-graph-api returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} ms-graph-api [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} ms-graph-api [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: id-ueba-events
+    name: id-ueba
+    description: Generic event log for id-ueba
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - id-ueba request received
+          - id-ueba processed event
+          - id-ueba returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} id-ueba [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} id-ueba [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: siem-collector-events
+    name: siem-collector
+    description: Generic event log for siem-collector
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - siem-collector request received
+          - siem-collector processed event
+          - siem-collector returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} siem-collector [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} siem-collector [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true

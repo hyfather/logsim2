@@ -63,12 +63,13 @@ func newRunCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "run [scenario.yaml]",
+		Use:   "run [scenario.yaml | https://…/scenario.yaml]",
 		Short: "Run a simulation and emit logs",
 		Long: `Run executes a scenario and emits log entries.
 
-The scenario YAML is the primary argument — pass it positionally, or use
-the legacy --scenario flag.
+The scenario is the primary argument — pass it positionally as a local file
+path or an http(s) URL, or use the legacy --scenario flag. Remote scenarios
+are fetched, capped at 4 MiB, and parsed exactly like local files.
 
 Stdout is the default — pipe or redirect as you like. Pass -o/--out to write
 to a file (or "-" for stdout), or --to to forward to one or more named
@@ -77,6 +78,9 @@ destinations from the dotfile (which is entirely optional).
 Examples:
   # stdout (default) — pipe into anything
   logsim run scenarios/web-service.yaml | jq .
+
+  # run a default scenario straight from the LogSim site
+  logsim run https://logsim.app/s/db-slowdown-cascade.yaml
 
   # emit OCSF or OTEL to stdout
   logsim run scenarios/web-service.yaml --ocsf
@@ -109,7 +113,7 @@ Examples:
 				return fmt.Errorf("scenario specified twice: positional %q and --scenario %q",
 					args[0], scenarioPath)
 			case len(args) == 0 && scenarioPath == "":
-				return errors.New("scenario is required: pass it positionally (`logsim run path/to/scenario.yaml`) or via --scenario")
+				return errors.New("scenario is required: pass it positionally (`logsim run path/to/scenario.yaml` or `logsim run https://…/scenario.yaml`) or via --scenario")
 			}
 
 			// Resolve format shortcuts before validation.
@@ -135,7 +139,7 @@ Examples:
 					format, strings.Join(validFormats, ", "))
 			}
 
-			s, err := scenario.ValidateFile(scenarioPath)
+			s, err := scenario.LoadAndValidate(scenarioPath)
 			if err != nil {
 				return fmt.Errorf("scenario: %w", err)
 			}
@@ -185,7 +189,7 @@ Examples:
 		},
 	}
 
-	cmd.Flags().StringVar(&scenarioPath, "scenario", "", "path to scenario YAML (or pass it positionally)")
+	cmd.Flags().StringVar(&scenarioPath, "scenario", "", "path or http(s) URL of the scenario YAML (or pass it positionally)")
 	cmd.Flags().IntVar(&ticks, "ticks", 100, "number of ticks to emit")
 	cmd.Flags().StringVar(&tickInterval, "tick-interval", "1s", "simulated time per tick")
 	cmd.Flags().Float64Var(&rate, "rate", 0, "wall-clock pacing multiplier (0 = instant)")

@@ -1,0 +1,134 @@
+name: Config Drift Blows Up Terraform Apply
+description: >-
+  Someone hand-edited the prod security group last quarter to debug a partner integration. The change was never
+  reflected in Terraform. Today's apply tries to enforce the IaC-declared rule set, removes the extra rule, and breaks
+  the partner integration mid-day.
+duration: 1200
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: platform-prod-vpc
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: platform-edge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: platform-app
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: platform-data
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: platform-edge-lb-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: platform-edge
+  - type: virtual_server
+    name: platform-api-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: platform-app
+  - type: virtual_server
+    name: partner-bridge-svc-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: platform-app
+  - type: virtual_server
+    name: platform-db-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: platform-data
+services:
+  - type: nginx
+    name: platform-edge-lb
+    host: platform-edge-lb-host
+    generator:
+      type: nginx
+      port: 80
+      log_format: combined
+      traffic_rate: 50
+  - type: golang
+    name: platform-api
+    host: platform-api-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 80
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 1200
+        state: healthy
+  - type: golang
+    name: partner-bridge-svc
+    description: Talks to partner.example.com over an undocumented SG hole.
+    host: partner-bridge-svc-host
+    generator:
+      type: golang
+      port: 8080
+      log_format: json
+      log_level: info
+      traffic_rate: 30
+      error_rate: 0.005
+      endpoints:
+        - method: GET
+          path: /healthz
+          avg_latency_ms: 8
+          error_rate: 0.001
+        - method: GET
+          path: /api/v1/items
+          avg_latency_ms: 80
+          error_rate: 0.005
+    timeline:
+      - from: 0
+        to: 300
+        state: healthy
+      - from: 300
+        to: 720
+        state: down
+        note: SG removed by IaC
+      - from: 720
+        to: 960
+        state: recovering
+      - from: 960
+        to: 1200
+        state: healthy
+  - type: postgres
+    name: platform-db
+    host: platform-db-host
+    generator:
+      type: postgres
+      port: 5432
+      slow_query_threshold: 1000
+      traffic_rate: 55
+      error_rate: 0.001
+connections:
+  - source: platform-edge-lb
+    target: platform-api
+    protocol: http
+    port: 8080
+  - source: platform-edge-lb
+    target: partner-bridge-svc
+    protocol: http
+    port: 8080
+  - source: platform-api
+    target: platform-db
+    protocol: tcp
+    port: 5432
+  - source: partner-bridge-svc
+    target: platform-db
+    protocol: tcp
+    port: 5432

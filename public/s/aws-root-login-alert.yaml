@@ -1,0 +1,221 @@
+name: AWS Root Account Used From New Geo
+description: >-
+  The root account on the master payer hasn't been used in 411 days. Tonight someone logs in from an IP in a country no
+  employee is in, opens the billing console, and creates an access key.
+duration: 900
+tick_interval_ms: 1000
+nodes:
+  - type: vpc
+    name: control-plane-mirror
+    provider: aws
+    region: us-east-1
+    cidr_block: 10.0.0.0/16
+  - type: subnet
+    name: iam-edge
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: control-plane-app
+    cidr_block: 10.0.1.0/24
+  - type: subnet
+    name: audit-store
+    cidr_block: 10.0.1.0/24
+  - type: virtual_server
+    name: aws-iam-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: iam-edge
+  - type: virtual_server
+    name: aws-billing-console-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: control-plane-app
+  - type: virtual_server
+    name: cloudtrail-firehose-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: audit-store
+  - type: virtual_server
+    name: siem-collector-host
+    instance_type: t3.medium
+    os: ubuntu-22.04
+    subnet: audit-store
+services:
+  - type: custom
+    name: aws-iam
+    host: aws-iam-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 5
+      custom_type: aws-iam-events
+    timeline:
+      - from: 0
+        to: 180
+        state: healthy
+      - from: 180
+        to: 540
+        state: compromised
+        note: rootUser console + AK creation
+      - from: 540
+        to: 900
+        state: recovering
+  - type: custom
+    name: aws-billing-console
+    host: aws-billing-console-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 5
+      error_rate: 0.005
+      custom_type: aws-billing-console-events
+    timeline:
+      - from: 0
+        to: 240
+        state: healthy
+      - from: 240
+        to: 540
+        state: under_attack
+        note: anomalous root browse
+      - from: 540
+        to: 900
+        state: healthy
+  - type: custom
+    name: cloudtrail-firehose
+    host: cloudtrail-firehose-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 11
+      error_rate: 0.001
+      custom_type: cloudtrail-firehose-events
+  - type: custom
+    name: siem-collector
+    host: siem-collector-host
+    generator:
+      type: custom
+      port: 8080
+      traffic_rate: 14
+      error_rate: 0.001
+      custom_type: siem-collector-events
+connections:
+  - source: aws-iam
+    target: aws-billing-console
+    protocol: https
+    port: 443
+  - source: aws-iam
+    target: cloudtrail-firehose
+    protocol: https
+    port: 443
+  - source: aws-billing-console
+    target: cloudtrail-firehose
+    protocol: https
+    port: 443
+  - source: cloudtrail-firehose
+    target: siem-collector
+    protocol: tcp
+    port: 9200
+custom_types:
+  - id: aws-iam-events
+    name: aws-iam
+    description: Generic event log for aws-iam
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - aws-iam request received
+          - aws-iam processed event
+          - aws-iam returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} aws-iam [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} aws-iam [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: aws-billing-console-events
+    name: aws-billing-console
+    description: Generic event log for aws-billing-console
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - aws-billing-console request received
+          - aws-billing-console processed event
+          - aws-billing-console returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} aws-billing-console [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} aws-billing-console [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: cloudtrail-firehose-events
+    name: cloudtrail-firehose
+    description: Generic event log for cloudtrail-firehose
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - cloudtrail-firehose request received
+          - cloudtrail-firehose processed event
+          - cloudtrail-firehose returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} cloudtrail-firehose [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} cloudtrail-firehose [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
+  - id: siem-collector-events
+    name: siem-collector
+    description: Generic event log for siem-collector
+    default_port: 8080
+    default_rate: 5
+    placeholders:
+      timestamp:
+        kind: iso_timestamp
+      level:
+        kind: level
+      message:
+        kind: enum
+        enum_values:
+          - siem-collector request received
+          - siem-collector processed event
+          - siem-collector returned response
+    templates:
+      - id: info
+        template: '{{timestamp}} siem-collector [{{level}}] {{message}}'
+        weight: 0.95
+        level: info
+      - id: error
+        template: '{{timestamp}} siem-collector [ERROR] request failed unexpectedly'
+        weight: 0.05
+        level: error
+        is_error: true
