@@ -68,6 +68,7 @@ func (g *MysqlGenerator) Generate(target Target, _ []event.Flow, ctx event.TickC
 			Class:      "datastore_activity",
 			TraceID:    v.req.TraceID,
 			SpanID:     v.hop.SpanID,
+			CauseIDs:   v.hop.CauseIDs,
 			Raw:        raw,
 			Fields: map[string]any{
 				"conn_id":     connID,

@@ -113,6 +113,7 @@ func (g *NodejsGenerator) Generate(target Target, _ []event.Flow, ctx event.Tick
 			Class:      "http_activity",
 			TraceID:    v.req.TraceID,
 			SpanID:     v.hop.SpanID,
+			CauseIDs:   v.hop.CauseIDs,
 			Raw:        raw,
 			Fields:     fields,
 		})

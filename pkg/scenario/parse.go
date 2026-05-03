@@ -107,6 +107,8 @@ func applyTopLevelKey(s *Scenario, key string, node *yaml.Node) error {
 	case "editor":
 		s.Editor = &EditorMeta{}
 		return node.Decode(s.Editor)
+	case "causes":
+		return node.Decode(&s.Causes)
 	default:
 		return nil // forward-compat: ignore unknown keys
 	}

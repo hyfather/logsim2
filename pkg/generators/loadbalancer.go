@@ -71,6 +71,7 @@ func (g *LoadBalancerGenerator) Generate(target Target, _ []event.Flow, ctx even
 			Class:      "http_activity",
 			TraceID:    v.req.TraceID,
 			SpanID:     v.hop.SpanID,
+			CauseIDs:   v.hop.CauseIDs,
 			Raw:        raw,
 			Fields: map[string]any{
 				"client_ip":   clientIP,

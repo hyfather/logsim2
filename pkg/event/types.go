@@ -29,9 +29,14 @@ type LogEntry struct {
 	// SpanID is the per-hop identifier for this log within its trace. Two
 	// logs with the same TraceID can carry different SpanIDs when emitted by
 	// different components observing the same request.
-	SpanID string         `json:"span_id,omitempty"`
-	Raw    string         `json:"raw"`              // the rendered log line
-	Fields map[string]any `json:"fields,omitempty"` // structured form of Raw
+	SpanID string `json:"span_id,omitempty"`
+	// CauseIDs are the scenario.Cause IDs whose causal closure includes
+	// this log entry. Used as ground-truth labels in training data. The
+	// field is omitted from JSON when empty so legacy sinks see no schema
+	// difference for cause-free scenarios.
+	CauseIDs []string       `json:"cause_ids,omitempty"`
+	Raw      string         `json:"raw"`              // the rendered log line
+	Fields   map[string]any `json:"fields,omitempty"` // structured form of Raw
 }
 
 // Flow represents synthesized network traffic on one connection for one tick.
@@ -122,6 +127,13 @@ type Hop struct {
 	// when a service has a connection to a database. Stage 3 makes them
 	// declarable per-endpoint in YAML.
 	Children []ChildCall
+
+	// CauseIDs are the IDs of any scenario.Cause whose causal closure
+	// includes this hop — i.e. the cause(s) a downstream investigator
+	// should be able to identify as responsible for this hop's behaviour.
+	// Empty when no causes are active. Used by generators to tag emitted
+	// log entries for ground-truth labelling.
+	CauseIDs []string
 }
 
 // ChildCall is one explicit downstream call from a Hop — typically a

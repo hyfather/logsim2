@@ -27,6 +27,7 @@ type Engine struct {
 	scenario *scenario.Scenario
 	cfg      Config
 	traffic  *trafficSimulator
+	causes   *causeRegistry
 	channels SourceMap
 	rng      *rand.Rand
 
@@ -55,9 +56,11 @@ func New(s *scenario.Scenario, cfg Config) *Engine {
 		scenario: s,
 		cfg:      cfg,
 		traffic:  newTrafficSimulator(s),
+		causes:   newCauseRegistry(s.Causes),
 		channels: BuildSources(s),
 		rng:      rand.New(rand.NewSource(cfg.Seed)),
 	}
+	e.traffic.rs.causes = e.causes
 	e.buildTargets()
 	return e
 }

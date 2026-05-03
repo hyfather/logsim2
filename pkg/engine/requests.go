@@ -44,6 +44,9 @@ type requestSimulator struct {
 	nodeType map[string]scenario.NodeType
 	// Per-service ErrorRate (residual baseline error rate).
 	serviceErrorRate map[string]float64
+	// causes is the per-tick perturbation source (Stage 3 of
+	// PHYSICS_PLAN.md). Set by Engine.New after construction.
+	causes *causeRegistry
 }
 
 func newRequestSimulator(s *scenario.Scenario) *requestSimulator {
@@ -115,6 +118,10 @@ type plannedReq struct {
 // latencies (more rng). This split lets latency at each hop depend on
 // the tick's actual load rather than the configured per-endpoint mean —
 // the M/M/1 envelope of Stage 2 in PHYSICS_PLAN.md.
+//
+// Stage 3 layers causes on top: traffic_spike at user_clients scales
+// arrivals; capacity_loss at any entity reduces μ in phase 2;
+// network_latency_inject adds extra ms at matching hops in phase 2.
 func (rs *requestSimulator) Requests(
 	s *scenario.Scenario,
 	tickIndex int,
@@ -132,10 +139,12 @@ func (rs *requestSimulator) Requests(
 		if n.Type != scenario.NodeTypeUserClients {
 			continue
 		}
+		// Stage 3: traffic_spike scales arrivals at this user_clients.
+		causeMul := rs.causes.trafficMultiplier(n.Name, tickIndex)
 		for ci := range n.Clients {
 			client := &n.Clients[ci]
 			pat := matchPattern(client.TrafficPattern)
-			mult := multiplier(pat, tickIndex, rng)
+			mult := multiplier(pat, tickIndex, rng) * causeMul
 			arrivals := int(math.Round(client.RPS * tickSec * mult))
 			if arrivals <= 0 {
 				continue
@@ -172,11 +181,11 @@ func (rs *requestSimulator) Requests(
 	}
 
 	// ---- Phase 2: measure utilization, fill hops --------------------------
-	utilization := rs.computeUtilization(plans, tickSec)
+	utilization := rs.computeUtilization(plans, tickSec, tickIndex)
 
 	out := make([]event.Request, 0, len(plans))
 	for pi := range plans {
-		req := rs.materialize(&plans[pi], s, utilization, rng)
+		req := rs.materialize(&plans[pi], s, utilization, rng, tickIndex)
 		if req != nil {
 			out = append(out, *req)
 		}
@@ -185,9 +194,9 @@ func (rs *requestSimulator) Requests(
 }
 
 // computeUtilization returns ρ per entity given the planned arrivals.
-// ρ = arrival_rate / service_rate. Capacity defaults come from the
-// service or node type; YAML override is a Stage 2.5 follow-up.
-func (rs *requestSimulator) computeUtilization(plans []plannedReq, tickSec float64) map[string]float64 {
+// ρ = arrival_rate / effective_service_rate. Effective μ is the per-type
+// default scaled by any capacity_loss cause active on this entity.
+func (rs *requestSimulator) computeUtilization(plans []plannedReq, tickSec float64, tickIndex int) map[string]float64 {
 	arrivals := make(map[string]int, 16)
 	for pi := range plans {
 		for _, step := range plans[pi].path {
@@ -197,10 +206,16 @@ func (rs *requestSimulator) computeUtilization(plans []plannedReq, tickSec float
 	out := make(map[string]float64, len(arrivals))
 	for entity, count := range arrivals {
 		rate := float64(count) / tickSec
-		cap := rs.capacityFor(entity)
-		if cap > 0 {
-			out[entity] = rate / cap
+		nominalCap := rs.capacityFor(entity)
+		if nominalCap <= 0 {
+			continue
 		}
+		effective := nominalCap * rs.causes.capacityMultiplier(entity, tickIndex)
+		if effective <= 0 {
+			out[entity] = 100 // hard saturation when capacity drops to zero
+			continue
+		}
+		out[entity] = rate / effective
 	}
 	return out
 }
@@ -304,6 +319,7 @@ func (rs *requestSimulator) materialize(
 	s *scenario.Scenario,
 	utilization map[string]float64,
 	rng rng,
+	tickIndex int,
 ) *event.Request {
 	// Status: residual baseline OR a saturation error if any hop is
 	// over-utilized. The terminal entity dominates because that's where
@@ -335,7 +351,7 @@ func (rs *requestSimulator) materialize(
 		EntryNode: p.entry,
 	}
 
-	rs.fillHopsFromPlan(req, p, s, status, p.bodyIn, bodyOut, utilization, rng, clientIP)
+	rs.fillHopsFromPlan(req, p, s, status, p.bodyIn, bodyOut, utilization, rng, clientIP, tickIndex)
 
 	if status >= 500 && len(req.Hops) > 0 {
 		req.Failure = &event.RequestFailure{
@@ -411,7 +427,8 @@ func (rs *requestSimulator) pickStatusFromPlan(
 
 // fillHopsFromPlan populates req.Hops using the per-entity utilization
 // to scale each hop's base service time. Latencies along the path are
-// summed to produce the wall-clock observed time.
+// summed to produce the wall-clock observed time. Stage 3 also applies
+// network_latency_inject causes that target the (src, dst) of any hop.
 func (rs *requestSimulator) fillHopsFromPlan(
 	req *event.Request,
 	p *plannedReq,
@@ -421,6 +438,7 @@ func (rs *requestSimulator) fillHopsFromPlan(
 	utilization map[string]float64,
 	r rng,
 	clientIP string,
+	tickIndex int,
 ) {
 	cumLatencyMs := 0
 	parentSpan := ""
@@ -451,6 +469,7 @@ func (rs *requestSimulator) fillHopsFromPlan(
 		baseLatency := rs.sampleHopLatency(step.entity, p.urlPath, p.method, r)
 		mul := queueLatencyMul(utilization[step.entity])
 		hopLatency := int(math.Round(float64(baseLatency) * mul))
+		hopLatency += rs.causes.networkLatencyAdd(prevEntity, step.entity, tickIndex)
 		if hopLatency < 1 {
 			hopLatency = 1
 		}
@@ -464,6 +483,7 @@ func (rs *requestSimulator) fillHopsFromPlan(
 		}
 		spanID := newHexID(r, 8)
 		overhead := protocolOverhead(connProto)
+		causeIDs := rs.causes.causeIDsForHop(step.entity, prevEntity, tickIndex)
 		hop := event.Hop{
 			Entity:     step.entity,
 			SpanID:     spanID,
@@ -480,6 +500,7 @@ func (rs *requestSimulator) fillHopsFromPlan(
 			BytesIn:    bodyIn + overhead,
 			BytesOut:   bodyOut + overhead,
 			LatencyMs:  hopLatency,
+			CauseIDs:   causeIDs,
 		}
 		req.Hops = append(req.Hops, hop)
 		parentSpan = spanID
