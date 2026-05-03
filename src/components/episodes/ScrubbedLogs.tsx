@@ -144,7 +144,7 @@ export function ScrubbedLogs() {
 
   return (
     <div className="flex h-full flex-col bg-white">
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-b border-slate-200 px-3 py-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-slate-200 px-3 py-2">
         <div className="flex items-center gap-2 text-xs">
           <span className={cn(
             'inline-block size-1.5 rounded-full',
@@ -152,13 +152,11 @@ export function ScrubbedLogs() {
           )} />
           <span className="font-semibold text-slate-700">Logs at {fmtTime(Math.round(tick))}</span>
         </div>
-        <div className="flex items-center gap-2">
-          <FormatToggle value={outputFormat} onChange={setOutputFormat} />
-          <div className="flex items-center gap-1 font-mono text-[10px]">
-            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600">{counts.INFO}</span>
-            <span className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-700">{counts.WARN}</span>
-            <span className="rounded bg-red-50 px-1.5 py-0.5 text-red-700">{counts.ERROR}</span>
-          </div>
+        <FormatToggle value={outputFormat} onChange={setOutputFormat} />
+        <div className="ml-auto flex items-center gap-1 font-mono text-[10px]">
+          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600">{counts.INFO}</span>
+          <span className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-700">{counts.WARN}</span>
+          <span className="rounded bg-red-50 px-1.5 py-0.5 text-red-700">{counts.ERROR}</span>
         </div>
       </div>
 
