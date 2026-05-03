@@ -122,6 +122,7 @@ export function Topbar() {
   const { nodes, edges, metadata, setMetadata, loadScenario } = useScenarioStore()
   const setNewScenarioModalOpen = useUIStore(s => s.setNewScenarioModalOpen)
   const setModifyPanelOpen = useUIStore(s => s.setModifyPanelOpen)
+  const setLogPanelOpen = useUIStore(s => s.setLogPanelOpen)
   const episode = useEpisodeStore(s => s.episode)
   const setEpisode = useEpisodeStore(s => s.setEpisode)
   const setTick = useEpisodeStore(s => s.setTick)
@@ -382,8 +383,10 @@ export function Topbar() {
 
   const startPlayback = useCallback((nextSpeed: number) => {
     if (status === 'running') return
-    // Right rail is shared between chat and logs. Run swaps it back to logs.
+    // Right rail is shared between chat and logs. Run swaps it back to logs
+    // and forces the panel open so the user actually sees output stream in.
     setModifyPanelOpen(false)
+    setLogPanelOpen(true)
     const enabledCribl = destinationsRef.current.find(d => d.enabled && d.type === 'cribl-hec')
     const cribl = pickCriblPayload(destinationsRef.current)
     const yaml = buildScenarioYaml()
@@ -444,7 +447,7 @@ export function Topbar() {
         setRunStatus('idle')
       },
     })
-  }, [addLogs, buildScenarioYaml, clearLogs, outputFormat, recordSent, setDestStatus, setModifyPanelOpen, setRunError, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, status])
+  }, [addLogs, buildScenarioYaml, clearLogs, outputFormat, recordSent, setDestStatus, setLogPanelOpen, setModifyPanelOpen, setRunError, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, status])
 
   const stopPlayback = useCallback(() => {
     stopBackend()

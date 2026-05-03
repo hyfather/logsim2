@@ -306,7 +306,7 @@ const LogRow = memo(function LogRow({
   return (
     <div
       className={cn(
-        'group transition-colors',
+        'group min-w-0 overflow-hidden transition-colors',
         expanded ? 'bg-slate-50' : tone.hover,
       )}
     >
@@ -334,14 +334,20 @@ const LogRow = memo(function LogRow({
       </button>
 
       {expanded && (
-        <div className="space-y-2.5 px-4 pb-3 pt-1">
-          <dl className="grid grid-cols-[60px_1fr] gap-x-3 gap-y-1 text-[11px]">
+        <div className="min-w-0 space-y-2.5 px-4 pb-3 pt-1">
+          {/* minmax(0, 1fr) lets the value column shrink past its min-content
+              size — without it, a long unbroken channel/timestamp forces the
+              grid wider than the panel and the row clips off-screen. */}
+          <dl className="grid grid-cols-[60px_minmax(0,1fr)] gap-x-3 gap-y-1 text-[11px]">
             <Field label="Source" value={log.channel} mono />
             <Field label="Type" value={log.source.toLowerCase()} mono />
             <Field label="Time" value={log.ts} mono />
           </dl>
           {pretty && (
-            <pre className="whitespace-pre-wrap break-all rounded-md border border-slate-200 bg-white p-3 font-mono text-[11px] leading-relaxed text-slate-700">
+            <pre
+              className="min-w-0 overflow-hidden rounded-md border border-slate-200 bg-white p-3 font-mono text-[11px] leading-relaxed text-slate-700"
+              style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
+            >
               {pretty}
             </pre>
           )}
@@ -355,7 +361,12 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
   return (
     <>
       <dt className="font-mono text-[10px] uppercase tracking-wider text-slate-400">{label}</dt>
-      <dd className={cn('break-all text-slate-700', mono && 'font-mono')}>{value}</dd>
+      <dd
+        className={cn('min-w-0 text-slate-700', mono && 'font-mono')}
+        style={{ overflowWrap: 'anywhere' }}
+      >
+        {value}
+      </dd>
     </>
   )
 }
