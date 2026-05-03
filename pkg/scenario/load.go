@@ -34,14 +34,15 @@ func IsHTTPURL(src string) bool {
 	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
 }
 
-// Load resolves a scenario from either a local file path or an http(s) URL,
-// parses it, and returns the in-memory Scenario. It does NOT validate beyond
-// schema parsing; call Validate() or use LoadAndValidate.
+// Load resolves a scenario from a local file path, an http(s) URL, or a bare
+// slug from the LogSim catalog (e.g. "db-slowdown-cascade"). It does NOT
+// validate beyond schema parsing; call Validate() or use LoadAndValidate.
 func Load(src string, opts ...LoadOptions) (*Scenario, error) {
-	if IsHTTPURL(src) {
-		return loadURL(src, mergeOpts(opts))
+	resolved := ResolveSource(src)
+	if IsHTTPURL(resolved) {
+		return loadURL(resolved, mergeOpts(opts))
 	}
-	return ParseFile(src)
+	return ParseFile(resolved)
 }
 
 // LoadAndValidate is the one-call entry point used by the CLI: it accepts a

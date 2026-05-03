@@ -22,6 +22,7 @@ func main() {
 	root.AddCommand(
 		newValidateCmd(),
 		newRunCmd(),
+		newListCmd(),
 		newServeCmd(),
 		newDestinationsCmd(),
 		newUpgradeCmd(),
