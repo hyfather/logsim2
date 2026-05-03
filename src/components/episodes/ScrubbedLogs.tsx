@@ -341,7 +341,7 @@ const LogRow = memo(function LogRow({
             <Field label="Time" value={log.ts} mono />
           </dl>
           {pretty && (
-            <pre className="overflow-auto rounded-md border border-slate-200 bg-white p-3 font-mono text-[11px] leading-relaxed text-slate-700">
+            <pre className="whitespace-pre-wrap break-all rounded-md border border-slate-200 bg-white p-3 font-mono text-[11px] leading-relaxed text-slate-700">
               {pretty}
             </pre>
           )}
