@@ -96,14 +96,10 @@ export function RunLocallyModal({
     downloadText(yamlText, filename, 'application/x-yaml')
   }, [yamlText, filename])
 
-  const runCmd = `logsim run --scenario ./${filename} --ticks ${ticks} --format ${fmt} > ${outFile}`
+  const runCmd = `logsim run ./${filename} --ticks ${ticks} --format ${fmt} > ${outFile}`
   const runFromUrlCmd = `logsim run ${presetUrl} --ticks ${ticks} --format ${fmt} > ${outFile}`
-
-  const installAndRun = `curl -fsSL ${INSTALL_URL} | sh
-${isPristinePreset ? runFromUrlCmd : runCmd}`
-
-  const fromSource = `go install github.com/${REPO_SLUG}/cmd/logsim@latest
-${isPristinePreset ? runFromUrlCmd : runCmd}`
+  const primaryRunCmd = isPristinePreset ? runFromUrlCmd : runCmd
+  const installCmd = `curl -fsSL ${INSTALL_URL} | sh`
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) onClose() }}>
@@ -119,104 +115,34 @@ ${isPristinePreset ? runFromUrlCmd : runCmd}`
         </DialogHeader>
 
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto px-4 py-4">
-          {/* Mode note — explains why the steps below differ depending on
-              whether the user has touched the canned scenario. */}
-          <section
-            className={cn(
-              'rounded-md border px-3 py-2 text-[11px] leading-relaxed',
-              isPristinePreset
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                : 'border-amber-200 bg-amber-50 text-amber-800',
-            )}
-          >
-            {isPristinePreset ? (
-              <>
-                <p className="mb-0.5 font-semibold">Unmodified canned scenario detected.</p>
-                <p>
-                  Because this scenario matches the published version at{' '}
-                  <code className="rounded bg-white/70 px-1 py-px font-mono text-[10.5px]">{presetUrl}</code>,
-                  the CLI can fetch it directly — no download step needed. If you
-                  edit the canvas, this panel will switch to the download-and-run flow.
+          {/* Primary: the run command. URL form when pristine, file path
+              form (paired with the download button) when modified. */}
+          <section className="space-y-2">
+            <CommandBlock label="Run" command={primaryRunCmd} />
+            {!isPristinePreset && (
+              <div className="flex flex-wrap items-center gap-2">
+                <Button size="sm" onClick={handleDownload} disabled={!yamlText} type="button" className="h-8 gap-1.5 text-[12px]">
+                  <Download className="h-3.5 w-3.5" />
+                  Download {filename}
+                </Button>
+                <p className="text-[11px] text-slate-500">
+                  Save it next to where you&apos;ll run the command.
                 </p>
-              </>
-            ) : (
-              <>
-                <p className="mb-0.5 font-semibold">
-                  {presetSlug ? 'Modified scenario detected.' : 'Custom scenario.'}
-                </p>
-                <p>
-                  {presetSlug
-                    ? "Because you've changed the canned scenario, the CLI can't pull it from a URL. "
-                    : 'This scenario lives only in your browser, so the CLI needs the YAML on disk. '}
-                  Download the YAML below and run it with{' '}
-                  <code className="rounded bg-white/70 px-1 py-px font-mono text-[10.5px]">logsim run</code>.
-                </p>
-              </>
+              </div>
             )}
           </section>
 
-          {isPristinePreset ? (
-            // ── Pristine canned scenario: skip the download, run from URL ──
-            <section className="space-y-3">
-              <StepHeader index={1} title="Run it" />
-
-              <CommandBlock
-                label="Quick start"
-                hint="Installs the logsim binary into ~/.local/bin (or /usr/local/bin if writable), then runs the scenario from its public URL."
-                command={installAndRun}
-              />
-
-              <CommandBlock
-                label="Already have logsim"
-                hint={`Fetches the scenario from ${presetUrl} and writes ${ticks} ticks of ${fmt.toUpperCase()} logs to ${outFile} in the current directory.`}
-                command={runFromUrlCmd}
-              />
-
-              <CommandBlock
-                label="Run from source"
-                hint="Requires Go 1.25+. Builds the latest main and installs it on $GOPATH/bin."
-                command={fromSource}
-              />
-            </section>
-          ) : (
-            // ── Modified or custom scenario: download then run from disk ──
-            <>
-              <section className="space-y-2">
-                <StepHeader index={1} title="Download the scenario" />
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button size="sm" onClick={handleDownload} disabled={!yamlText} type="button" className="h-8 gap-1.5 text-[12px]">
-                    <Download className="h-3.5 w-3.5" />
-                    Download {filename}
-                  </Button>
-                  <p className="text-[11px] text-slate-500">
-                    Save it somewhere, then <code className="rounded bg-slate-100 px-1 py-px font-mono text-[10.5px]">cd</code> into that directory.
-                  </p>
-                </div>
-              </section>
-
-              <section className="space-y-3">
-                <StepHeader index={2} title="Run it" />
-
-                <CommandBlock
-                  label="Quick start"
-                  hint="Installs the logsim binary into ~/.local/bin (or /usr/local/bin if writable), then runs the scenario."
-                  command={installAndRun}
-                />
-
-                <CommandBlock
-                  label="Already have logsim"
-                  hint={`Writes ${ticks} ticks of ${fmt.toUpperCase()} logs to ${outFile} in the current directory.`}
-                  command={runCmd}
-                />
-
-                <CommandBlock
-                  label="Run from source"
-                  hint="Requires Go 1.25+. Builds the latest main and installs it on $GOPATH/bin."
-                  command={fromSource}
-                />
-              </section>
-            </>
-          )}
+          {/* Install (curl only) — kept below since most users only need it once. */}
+          <section className="space-y-2">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+              Don&apos;t have logsim yet?
+            </p>
+            <CommandBlock
+              label="Install"
+              hint="Drops the binary in ~/.local/bin (or /usr/local/bin if writable)."
+              command={installCmd}
+            />
+          </section>
 
           <section className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
             <p className="mb-1 font-semibold text-slate-700">Need a different platform or want to verify the binary?</p>
@@ -236,17 +162,6 @@ ${isPristinePreset ? runFromUrlCmd : runCmd}`
         </div>
       </DialogContent>
     </Dialog>
-  )
-}
-
-function StepHeader({ index, title }: { index: number; title: string }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-900 text-[10px] font-semibold text-white">
-        {index}
-      </span>
-      <span className="text-[12px] font-semibold uppercase tracking-[0.08em] text-slate-700">{title}</span>
-    </div>
   )
 }
 
