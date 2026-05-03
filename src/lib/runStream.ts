@@ -159,7 +159,7 @@ export async function runStream(opts: RunStreamOpts): Promise<void> {
     })
     if (!res.ok || !res.body) {
       const body = await res.text().catch(() => '')
-      throw new Error(`run ${res.status}: ${body.slice(0, 300)}`)
+      throw new Error(extractServerError(res.status, body))
     }
     const reader = res.body.getReader()
     const decoder = new TextDecoder()
@@ -214,6 +214,22 @@ export async function runStream(opts: RunStreamOpts): Promise<void> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+// Server errors come back as `{"error":"..."}` JSON; surface just the message
+// so the UI doesn't show a `run 400: {"error":"..."}` wrapper. Falls back to
+// the raw body when parsing fails (e.g. proxy/HTML error pages).
+function extractServerError(status: number, body: string): string {
+  const trimmed = body.trim()
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed) as { error?: unknown }
+      if (typeof parsed.error === 'string' && parsed.error) return parsed.error
+    } catch {
+      // fall through
+    }
+  }
+  return trimmed ? `HTTP ${status}: ${trimmed.slice(0, 300)}` : `HTTP ${status}`
 }
 
 function parseLine(line: string): Frame | null {
