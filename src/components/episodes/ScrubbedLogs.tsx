@@ -1,8 +1,10 @@
 'use client'
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { PanelRightClose } from 'lucide-react'
 import { useEpisodeStore } from '@/store/useEpisodeStore'
 import { useScenarioStore } from '@/store/useScenarioStore'
 import { useSimulationStore } from '@/store/useSimulationStore'
+import { useUIStore } from '@/store/useUIStore'
 import { logsAt } from '@/lib/logsAt'
 import { canvasToScenarioYaml } from '@/lib/canvasToScenarioYaml'
 import { fmtTime } from '@/lib/episodeBehavior'
@@ -29,6 +31,8 @@ export function ScrubbedLogs() {
   const liveLogs = useSimulationStore(s => s.logBuffer)
   const outputFormat = useSimulationStore(s => s.outputFormat)
   const setOutputFormat = useSimulationStore(s => s.setOutputFormat)
+  const setLogPanelOpen = useUIStore(s => s.setLogPanelOpen)
+  const setCanvasOpen = useUIStore(s => s.setCanvasOpen)
 
   const [scrubLogs, setScrubLogs] = useState<LogEntry[]>([])
   const [filter, setFilter] = useState('')
@@ -147,6 +151,23 @@ export function ScrubbedLogs() {
         </div>
         <FormatToggle value={outputFormat} onChange={setOutputFormat} />
         <Counts counts={counts} className="ml-auto" />
+        <button
+          type="button"
+          onClick={() => {
+            setLogPanelOpen(false)
+            // On mobile both panels are mutually exclusive; closing logs would
+            // leave the user staring at two collapsed chromes. Reveal the
+            // canvas so there's something to look at.
+            if (typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches) {
+              setCanvasOpen(true)
+            }
+          }}
+          title="Hide log panel"
+          aria-label="Hide log panel"
+          className="rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+        >
+          <PanelRightClose className="size-4" />
+        </button>
       </header>
 
       <div className="flex flex-col gap-1.5 border-b border-slate-100 px-4 py-2">
