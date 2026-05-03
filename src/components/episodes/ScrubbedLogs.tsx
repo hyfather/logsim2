@@ -149,45 +149,47 @@ export function ScrubbedLogs() {
         <Counts counts={counts} className="ml-auto" />
       </header>
 
-      <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-100 px-4 py-2">
+      <div className="flex flex-col gap-1.5 border-b border-slate-100 px-4 py-2">
         <input
           placeholder="Filter logs…"
           value={filter}
           onChange={e => setFilter(e.target.value)}
-          className="h-7 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2.5 text-[12px] text-slate-700 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-100"
+          className="h-7 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[12px] text-slate-700 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-100"
         />
-        <MultiSelectMenu
-          label="Sources"
-          options={sourceOptions}
-          selected={selectedChannels}
-          onChange={setSelectedChannels}
-          renderTriggerText={sel =>
-            sel.length === 0
-              ? 'Sources'
-              : <>Sources <span className="ml-1 rounded bg-sky-100 px-1 font-mono text-[10px] tabular-nums text-sky-700">{sel.length}</span></>
-          }
-          triggerClassName={cn(
-            'h-7 px-2.5 text-[11px] font-medium',
-            selectedChannels.length > 0
-              ? 'border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-100'
-              : 'text-slate-600 hover:bg-slate-50',
-          )}
-        />
-        <LevelFilter value={levelFilter} onChange={setLevelFilter} />
-        <button
-          type="button"
-          onClick={() => setFollow(f => !f)}
-          className={cn(
-            'flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-[11px] font-medium transition-colors',
-            follow
-              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-              : 'border-slate-200 bg-white text-slate-500 hover:text-slate-900',
-          )}
-          title="Auto-scroll to latest"
-        >
-          <span className={cn('size-1.5 rounded-full', follow ? 'bg-emerald-500' : 'bg-slate-300')} />
-          Tail
-        </button>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <MultiSelectMenu
+            label="Sources"
+            options={sourceOptions}
+            selected={selectedChannels}
+            onChange={setSelectedChannels}
+            renderTriggerText={sel =>
+              sel.length === 0
+                ? 'Sources'
+                : <>Sources <span className="ml-1 rounded bg-sky-100 px-1 font-mono text-[10px] tabular-nums text-sky-700">{sel.length}</span></>
+            }
+            triggerClassName={cn(
+              'h-7 px-2.5 text-[11px] font-medium',
+              selectedChannels.length > 0
+                ? 'border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-100'
+                : 'text-slate-600 hover:bg-slate-50',
+            )}
+          />
+          <LevelFilter value={levelFilter} onChange={setLevelFilter} />
+          <button
+            type="button"
+            onClick={() => setFollow(f => !f)}
+            className={cn(
+              'ml-auto flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-[11px] font-medium transition-colors',
+              follow
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                : 'border-slate-200 bg-white text-slate-500 hover:text-slate-900',
+            )}
+            title="Auto-scroll to latest"
+          >
+            <span className={cn('size-1.5 rounded-full', follow ? 'bg-emerald-500' : 'bg-slate-300')} />
+            Tail
+          </button>
+        </div>
       </div>
 
       <div ref={bodyRef} className="flex-1 overflow-auto">
