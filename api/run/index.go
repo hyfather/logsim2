@@ -34,10 +34,7 @@ type Request struct {
 	StartTimeMs    int64                `json:"start_time_ms"`
 	Seed           int64                `json:"seed"`
 	SourceFilter   string               `json:"source_filter"`
-	// Rate paces the run to wall-clock: 1.0 emits at simulated speed, 8.0
-	// burns 8× faster, 0 means as fast as possible (no sleeping).
-	Rate  float64              `json:"rate,omitempty"`
-	Cribl *apihelp.CriblConfig `json:"cribl,omitempty"`
+	Cribl          *apihelp.CriblConfig `json:"cribl,omitempty"`
 	// Format selects the schema applied to each entry's Raw field before
 	// streaming. "native" (default) preserves the generator's own log line;
 	// "ocsf" replaces it with an OCSF v1.x JSON event; "otel" emits an
@@ -141,7 +138,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		StartTime:      start,
 		StartTick:      startTick,
 		TickIntervalMs: tickInterval,
-		Rate:           req.Rate,
 		SourceFilter:   req.SourceFilter,
 	})
 

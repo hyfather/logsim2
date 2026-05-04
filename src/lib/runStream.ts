@@ -8,16 +8,14 @@ export interface RunStreamOpts {
   startTimeMs?: number
   seed?: number
   sourceFilter?: string
-  /** 1.0 = simulated wall-clock speed; 8.0 = 8× faster; 0 = as fast as possible. */
-  rate?: number
   cribl?: CriblPayload
   /** Wire schema applied per log entry. Defaults to "native" on the backend. */
   format?: LogFormat
   /** Resume playback at this tick index instead of starting at 0. */
   startTick?: number
   /** When > 0, delay each onTick by this many ms so the client paces playback
-   *  even if the server returned all frames at once. Lets us run the engine
-   *  at rate=0 (one short request) on platforms that buffer responses
+   *  even if the server returned all frames at once. The engine itself runs
+   *  unpaced (one short request) on platforms that buffer responses
    *  (e.g. Vercel Functions) while still showing a moving scrubber. */
   paceMs?: number
   signal?: AbortSignal
@@ -150,7 +148,6 @@ export async function runStream(opts: RunStreamOpts): Promise<void> {
         start_time_ms: startTimeMs,
         seed,
         source_filter: opts.sourceFilter ?? '*',
-        rate: opts.rate ?? 0,
         cribl: isLast ? opts.cribl : undefined,
         format: opts.format ?? 'native',
         start_tick: chunkStart,

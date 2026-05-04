@@ -581,3 +581,45 @@ func TestForwardingReporter_EndToEnd(t *testing.T) {
 	}
 }
 
+// confirmYesNo: only "y"/"yes" (case-insensitive) advance.
+func TestConfirmYesNo(t *testing.T) {
+	cases := map[string]bool{
+		"y\n":   true,
+		"Y\n":   true,
+		"yes\n": true,
+		"YES\n": true,
+		"n\n":   false,
+		"\n":    false,
+		"":      false,
+		"foo\n": false,
+	}
+	for in, want := range cases {
+		var stderr bytes.Buffer
+		got := confirmYesNo(strings.NewReader(in), &stderr, "go? ")
+		if got != want {
+			t.Errorf("input %q: got %v, want %v", in, got, want)
+		}
+		if !strings.Contains(stderr.String(), "go? ") {
+			t.Errorf("input %q: prompt missing from stderr (%q)", in, stderr.String())
+		}
+	}
+}
+
+// shouldPrompt: quiet mode + non-tty stdin both suppress the prompt.
+func TestShouldPrompt(t *testing.T) {
+	if shouldPrompt(strings.NewReader(""), false) {
+		t.Errorf("non-tty Reader should never prompt")
+	}
+	if shouldPrompt(strings.NewReader(""), true) {
+		t.Errorf("quiet mode should never prompt")
+	}
+	// A regular file is not a char-device; same path as a pipe.
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("open devnull: %v", err)
+	}
+	defer f.Close()
+	if shouldPrompt(f, false) {
+		t.Errorf("regular file (not a tty) should not prompt")
+	}
+}

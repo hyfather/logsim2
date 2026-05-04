@@ -16,10 +16,9 @@ import (
 type Config struct {
 	Seed           int64
 	StartTime      time.Time
-	StartTick      int     // first tick index to emit (default 0; lets Run resume mid-episode)
-	TickIntervalMs int     // simulated milliseconds per tick (default 1000)
-	Rate           float64 // wall-clock pacing: 0 = instant, 1.0 = real-time
-	SourceFilter   string  // glob on the source path; "" or "*" means all
+	StartTick      int    // first tick index to emit (default 0; lets Run resume mid-episode)
+	TickIntervalMs int    // simulated milliseconds per tick (default 1000)
+	SourceFilter   string // glob on the source path; "" or "*" means all
 }
 
 // Engine orchestrates the tick loop for a scenario.
@@ -117,10 +116,6 @@ func (e *Engine) buildTargets() {
 // to every sink. Respects ctx cancellation.
 func (e *Engine) Run(ctx context.Context, totalTicks int, sinkList []sinks.Sink) error {
 	tickInterval := time.Duration(e.cfg.TickIntervalMs) * time.Millisecond
-	var sleepDur time.Duration
-	if e.cfg.Rate > 0 {
-		sleepDur = time.Duration(float64(tickInterval) / e.cfg.Rate)
-	}
 
 	startTick := e.cfg.StartTick
 	if startTick < 0 {
@@ -154,14 +149,6 @@ func (e *Engine) Run(ctx context.Context, totalTicks int, sinkList []sinks.Sink)
 		for _, s := range sinkList {
 			if err := s.Write(entries); err != nil {
 				return err
-			}
-		}
-
-		if sleepDur > 0 {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(sleepDur):
 			}
 		}
 	}

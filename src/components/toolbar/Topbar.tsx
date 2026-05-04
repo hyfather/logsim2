@@ -429,10 +429,8 @@ export function Topbar() {
       startTick: 0,
       seed: seedRef.current,
       // Run the engine flat-out server-side and pace the scrubber on the
-      // client. Vercel Functions buffer the streaming response, so a paced
-      // server run would produce no visible motion until the function ends —
-      // and at rate=1 that's hundreds of seconds, well past maxDuration.
-      rate: 0,
+      // client. Vercel Functions buffer the streaming response, so server-
+      // side pacing would produce no visible motion until the function ends.
       paceMs: nextSpeed > 0 ? Math.max(16, Math.round(1000 / nextSpeed)) : 0,
       cribl,
       format: outputFormat,

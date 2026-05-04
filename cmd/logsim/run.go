@@ -11,14 +11,15 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/nikhilm/logsim2/pkg/config"
 	"github.com/nikhilm/logsim2/pkg/encoders"
 	"github.com/nikhilm/logsim2/pkg/engine"
+	"github.com/nikhilm/logsim2/pkg/event"
 	"github.com/nikhilm/logsim2/pkg/scenario"
 	"github.com/nikhilm/logsim2/pkg/sinks"
 )
@@ -41,7 +42,7 @@ func newRunCmd() *cobra.Command {
 		scenarioPath string
 		ticks        int
 		tickInterval string
-		rate         float64
+		force        bool
 
 		// Modern, intent-driven flags.
 		out     []string // -o/--out: "-" stdout, path = file, may repeat / comma-split
@@ -178,9 +179,22 @@ Examples:
 				Seed:           seed,
 				StartTime:      time.Now(),
 				TickIntervalMs: intervalMs,
-				Rate:           rate,
 				SourceFilter:   sourceFilter,
 			}
+
+			// Long scenarios (cache-failure-cascade is 1080 ticks → ~55k logs)
+			// can dump a *lot* of output. Sample one tick to estimate the total
+			// and prompt before continuing if it's beyond the threshold;
+			// --force / --quiet / non-tty stdin all skip the prompt.
+			estimated := estimateLogCount(s, cfg, totalTicks)
+			if estimated > promptThreshold && !force && shouldPrompt(cmd.InOrStdin(), quiet) {
+				if !confirmYesNo(cmd.InOrStdin(), cmd.ErrOrStderr(),
+					fmt.Sprintf("logsim: %q will produce ~%d log lines over %d ticks. continue? [y/N] ",
+						s.Name, estimated, totalTicks)) {
+					return errors.New("aborted")
+				}
+			}
+
 			eng := engine.New(s, cfg)
 
 			sinkList, err := buildSinks(buildSinksOpts{
@@ -229,7 +243,7 @@ Examples:
 	cmd.Flags().StringVar(&scenarioPath, "scenario", "", "path or http(s) URL of the scenario YAML (or pass it positionally)")
 	cmd.Flags().IntVar(&ticks, "ticks", 0, "number of ticks to emit (default: scenario duration; falls back to 100)")
 	cmd.Flags().StringVar(&tickInterval, "tick-interval", "", "simulated time per tick (default: scenario tick_interval_ms; falls back to 1s)")
-	cmd.Flags().Float64Var(&rate, "rate", 0, "wall-clock pacing multiplier (0 = instant)")
+	cmd.Flags().BoolVar(&force, "force", false, "skip the >5k-log confirmation prompt")
 
 	// Modern outputs.
 	cmd.Flags().StringSliceVarP(&out, "out", "o", nil,
@@ -557,19 +571,14 @@ func resolveTickIntervalMs(flagVal string, flagSet bool, scenarioMs int) (int, e
 	return 1000, nil
 }
 
-// forwardingReporter watches every CriblSink in the sink list and, when at
-// least one is present, prints a one-line "POST → <status>" trace per HTTP
-// attempt plus a closing summary listing events sent and any errors.
-//
-// In quiet mode the reporter is inert (callbacks are nil); the engine still
-// forwards normally — only the human-facing chatter is suppressed.
+// forwardingReporter prints HEC progress for every CriblSink in the list:
+// one "POST → <status>" trace per HTTP attempt, plus a closing per-sink
+// summary. Quiet mode silences the per-attempt chatter but keeps the
+// summary so scripts can grep the final tally.
 type forwardingReporter struct {
 	sinks  []*sinks.CriblSink
 	stderr io.Writer
 	quiet  bool
-
-	mu     sync.Mutex
-	errors []string
 }
 
 func attachForwardingReporter(sinkList []sinks.Sink, stderr io.Writer, quiet bool) *forwardingReporter {
@@ -581,85 +590,118 @@ func attachForwardingReporter(sinkList []sinks.Sink, stderr io.Writer, quiet boo
 		}
 		r.sinks = append(r.sinks, c)
 		if !quiet {
-			r.printHeader(c)
+			fmt.Fprintf(stderr, "logsim: forwarding → %s\n", labelOrURL(c))
 		}
 		c.SetObserver(r.onAttempt)
 	}
 	return r
 }
 
-func (r *forwardingReporter) printHeader(c *sinks.CriblSink) {
-	label := c.Name()
-	if label == "" {
-		fmt.Fprintf(r.stderr, "logsim: forwarding → %s\n", c.URL())
-		return
-	}
-	fmt.Fprintf(r.stderr, "logsim: forwarding → %s (%s)\n", label, c.URL())
-}
-
 func (r *forwardingReporter) onAttempt(res sinks.SendResult) {
-	if !r.quiet {
-		fmt.Fprintln(r.stderr, formatAttempt(res))
-	}
-	if res.Final && res.Err != nil {
-		r.mu.Lock()
-		r.errors = append(r.errors, fmt.Sprintf("%s: %v", res.URL, res.Err))
-		r.mu.Unlock()
-	}
-}
-
-// Summarize prints a closing tally for every CriblSink the reporter is
-// attached to. Always emitted (even in quiet mode) so scripts can grep the
-// final confirmation; quiet mode just suppresses the per-attempt chatter.
-func (r *forwardingReporter) Summarize(w io.Writer) {
-	if len(r.sinks) == 0 {
+	if r.quiet {
 		return
 	}
+	fmt.Fprintln(r.stderr, formatAttempt(res))
+}
+
+// Summarize prints a closing tally per sink. Always emitted — quiet mode
+// only silences the per-attempt chatter.
+func (r *forwardingReporter) Summarize(w io.Writer) {
 	for _, c := range r.sinks {
-		label := c.Name()
-		if label == "" {
-			label = c.URL()
-		}
-		events := c.EventsSent()
-		batches := c.BatchesSent()
-		failed := c.BatchesFailed()
+		events, batches, failed := c.EventsSent(), c.BatchesSent(), c.BatchesFailed()
 		if failed > 0 {
 			fmt.Fprintf(w, "logsim: sent %d events to %s in %d batches (%d batch(es) failed — see above)\n",
-				events, label, batches, failed)
+				events, labelOrURL(c), batches, failed)
 			continue
 		}
-		fmt.Fprintf(w, "logsim: sent %d events to %s in %d batches\n", events, label, batches)
+		fmt.Fprintf(w, "logsim: sent %d events to %s in %d batches\n", events, labelOrURL(c), batches)
 	}
 }
 
+func labelOrURL(c *sinks.CriblSink) string {
+	if n := c.Name(); n != "" {
+		return n
+	}
+	return c.URL()
+}
+
+// formatAttempt renders one HTTP attempt as a single stderr line. The shape
+// is part of the CLI contract.
 func formatAttempt(r sinks.SendResult) string {
 	took := r.Duration.Round(time.Millisecond)
-	switch {
-	case r.Err == nil:
-		return fmt.Sprintf("logsim:   POST → %d %s (%d events, %s)",
-			r.StatusCode, http.StatusText(r.StatusCode), r.BatchSize, took)
-	case r.StatusCode == 0:
-		// Transport failure — no HTTP response.
-		retry := ""
-		if !r.Final {
-			retry = " — retrying"
-		} else {
-			retry = " — gave up"
-		}
-		return fmt.Sprintf("logsim:   POST → ERR %v (%d events, %s)%s",
-			r.Err, r.BatchSize, took, retry)
-	default:
-		retry := ""
-		if r.Final {
-			if r.StatusCode >= 400 && r.StatusCode < 500 {
-				retry = " — dropped"
-			} else {
-				retry = " — gave up"
-			}
-		} else {
-			retry = " — retrying"
-		}
-		return fmt.Sprintf("logsim:   POST → %d %s (%d events, %s)%s",
-			r.StatusCode, http.StatusText(r.StatusCode), r.BatchSize, took, retry)
+	head := fmt.Sprintf("%d %s", r.StatusCode, http.StatusText(r.StatusCode))
+	if r.StatusCode == 0 {
+		head = fmt.Sprintf("ERR %v", r.Err)
 	}
+	return fmt.Sprintf("logsim:   POST → %s (%d events, %s)%s",
+		head, r.BatchSize, took, attemptSuffix(r))
+}
+
+func attemptSuffix(r sinks.SendResult) string {
+	if r.Err == nil {
+		return ""
+	}
+	if !r.Final {
+		return " — retrying"
+	}
+	if r.StatusCode >= 400 && r.StatusCode < 500 {
+		return " — dropped"
+	}
+	return " — gave up"
+}
+
+// promptThreshold is the log-count above which `logsim run` asks for
+// confirmation. Tuned so a typical short scenario (web-service, ~150 ticks)
+// runs unprompted while long catalog episodes (cache-failure-cascade, etc.)
+// surface a heads-up.
+const promptThreshold = 5000
+
+// estimateLogCount samples one tick of the scenario into a counter sink and
+// extrapolates to totalTicks. A new engine is spun up so the real run starts
+// with fresh RNG state.
+func estimateLogCount(s *scenario.Scenario, cfg engine.Config, totalTicks int) int {
+	if totalTicks <= 0 {
+		return 0
+	}
+	sample := engine.New(s, cfg)
+	c := &countingSink{}
+	if err := sample.Run(context.Background(), 1, []sinks.Sink{c}); err != nil {
+		return 0
+	}
+	return c.count * totalTicks
+}
+
+type countingSink struct{ count int }
+
+func (c *countingSink) Write(entries []event.LogEntry) error { c.count += len(entries); return nil }
+func (c *countingSink) Flush() error                          { return nil }
+func (c *countingSink) Close() error                          { return nil }
+
+// shouldPrompt is false in quiet mode and when stdin isn't a terminal —
+// pipelines and scripts should never block on a prompt. Callers must also
+// respect --force.
+func shouldPrompt(stdin io.Reader, quiet bool) bool {
+	if quiet {
+		return false
+	}
+	f, ok := stdin.(*os.File)
+	if !ok {
+		return false
+	}
+	return term.IsTerminal(int(f.Fd()))
+}
+
+// confirmYesNo writes the prompt and reads one line; returns true only on
+// "y"/"yes" (case-insensitive).
+func confirmYesNo(stdin io.Reader, stderr io.Writer, prompt string) bool {
+	fmt.Fprint(stderr, prompt)
+	var line string
+	if _, err := fmt.Fscanln(stdin, &line); err != nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true
+	}
+	return false
 }
