@@ -122,6 +122,8 @@ export function Topbar() {
   const { nodes, edges, metadata, setMetadata, loadScenario } = useScenarioStore()
   const setNewScenarioModalOpen = useUIStore(s => s.setNewScenarioModalOpen)
   const setModifyPanelOpen = useUIStore(s => s.setModifyPanelOpen)
+  const setLogPanelOpen = useUIStore(s => s.setLogPanelOpen)
+  const setCanvasOpen = useUIStore(s => s.setCanvasOpen)
   const episode = useEpisodeStore(s => s.episode)
   const setEpisode = useEpisodeStore(s => s.setEpisode)
   const setTick = useEpisodeStore(s => s.setTick)
@@ -138,7 +140,6 @@ export function Topbar() {
     clearLogs,
     logBuffer,
     outputFormat,
-    setOutputFormat,
     setRunError,
   } = useSimulationStore()
   const {
@@ -383,8 +384,16 @@ export function Topbar() {
 
   const startPlayback = useCallback((nextSpeed: number) => {
     if (status === 'running') return
-    // Right rail is shared between chat and logs. Run swaps it back to logs.
+    // Right rail is shared between chat and logs. Run swaps it back to logs
+    // and forces the panel open so the user actually sees output stream in.
+    // On mobile, canvas + logs are mutually exclusive — collapse the canvas
+    // so the log panel gets full-width flex-1 instead of a fixed width that
+    // would overflow the viewport.
     setModifyPanelOpen(false)
+    setLogPanelOpen(true)
+    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches) {
+      setCanvasOpen(false)
+    }
     const enabledCribl = destinationsRef.current.find(d => d.enabled && d.type === 'cribl-hec')
     const cribl = pickCriblPayload(destinationsRef.current)
     const yaml = buildScenarioYaml()
@@ -445,7 +454,7 @@ export function Topbar() {
         setRunStatus('idle')
       },
     })
-  }, [addLogs, buildScenarioYaml, clearLogs, outputFormat, recordSent, setDestStatus, setModifyPanelOpen, setRunError, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, status])
+  }, [addLogs, buildScenarioYaml, clearLogs, outputFormat, recordSent, setCanvasOpen, setDestStatus, setLogPanelOpen, setModifyPanelOpen, setRunError, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, status])
 
   const stopPlayback = useCallback(() => {
     stopBackend()
@@ -878,31 +887,6 @@ export function Topbar() {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-
-        {/* Output schema toggle — generators emit a canonical event, the
-            backend maps it to Native / OCSF / OTEL / (later) UDM / ASIM
-            before the line reaches the UI. Switching clears the buffer
-            because formats don't mix cleanly. */}
-        <div className="hidden h-8 shrink-0 items-center gap-0.5 rounded-lg border border-slate-200 bg-slate-50 p-[3px] sm:flex">
-          {(['native', 'ocsf', 'otel'] as const).map(f => (
-            <button
-              key={f}
-              type="button"
-              onClick={() => setOutputFormat(f)}
-              className={cn(
-                'rounded-[5px] px-2 py-[2px] font-mono text-[10.5px] font-semibold uppercase transition-colors',
-                outputFormat === f
-                  ? 'bg-white text-slate-900 shadow-[0_1px_2px_rgba(15,23,42,0.05)]'
-                  : 'text-slate-500 hover:text-slate-900',
-              )}
-              title={
-                f === 'native' ? 'Generator-native log lines'
-                : f === 'ocsf' ? 'OCSF v1.x JSON events'
-                : 'OpenTelemetry OTLP/JSON LogRecords'
-              }
-            >{f}</button>
-          ))}
-        </div>
 
         {/* Transport tray — unified container with subtle dividers */}
         <div

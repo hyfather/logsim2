@@ -1,19 +1,25 @@
 'use client'
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { PanelRightClose } from 'lucide-react'
 import { useEpisodeStore } from '@/store/useEpisodeStore'
 import { useScenarioStore } from '@/store/useScenarioStore'
 import { useSimulationStore } from '@/store/useSimulationStore'
+import { useUIStore } from '@/store/useUIStore'
 import { logsAt } from '@/lib/logsAt'
 import { canvasToScenarioYaml } from '@/lib/canvasToScenarioYaml'
 import { fmtTime } from '@/lib/episodeBehavior'
-import type { LogEntry } from '@/types/logs'
+import type { LogEntry, LogFormat, LogLevel } from '@/types/logs'
 import { cn } from '@/lib/utils'
+import { MultiSelectMenu } from '@/components/panels/MultiSelectMenu'
 
 const DEBOUNCE_MS = 120
 const MAX_DISPLAY = 200
-const SPARK_BUCKETS = 30
+const LEVELS: readonly Level[] = ['ALL', 'INFO', 'WARN', 'ERROR'] as const
+const FORMATS: readonly LogFormat[] = ['native', 'ocsf', 'otel'] as const
 
-type Level = 'ALL' | 'DEBUG' | 'INFO' | 'WARN' | 'ERROR'
+type Level = 'ALL' | LogLevel
+
+interface LogCounts { INFO: number; WARN: number; ERROR: number }
 
 export function ScrubbedLogs() {
   const tick = useEpisodeStore(s => s.tick)
@@ -24,15 +30,17 @@ export function ScrubbedLogs() {
   const metadata = useScenarioStore(s => s.metadata)
   const liveLogs = useSimulationStore(s => s.logBuffer)
   const outputFormat = useSimulationStore(s => s.outputFormat)
+  const setOutputFormat = useSimulationStore(s => s.setOutputFormat)
+  const setLogPanelOpen = useUIStore(s => s.setLogPanelOpen)
+  const setCanvasOpen = useUIStore(s => s.setCanvasOpen)
 
   const [scrubLogs, setScrubLogs] = useState<LogEntry[]>([])
   const [filter, setFilter] = useState('')
   const [levelFilter, setLevelFilter] = useState<Level>('ALL')
-  const [selectedChannels, setSelectedChannels] = useState<Set<string>>(new Set())
-  const [sourceMenuOpen, setSourceMenuOpen] = useState(false)
+  const [selectedChannels, setSelectedChannels] = useState<string[]>([])
   const [follow, setFollow] = useState(true)
+  const [expandedId, setExpandedId] = useState<string | null>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
-  const sourceMenuRef = useRef<HTMLDivElement>(null)
 
   const isRunning = runStatus === 'running'
 
@@ -82,36 +90,25 @@ export function ScrubbedLogs() {
     return Array.from(set).sort()
   }, [logs])
 
-  // Drop selections that no longer exist in the current log set so the badge count stays accurate.
   useEffect(() => {
-    if (selectedChannels.size === 0) return
-    const next = new Set<string>()
-    for (const c of selectedChannels) if (allChannels.includes(c)) next.add(c)
-    if (next.size !== selectedChannels.size) setSelectedChannels(next)
+    if (selectedChannels.length === 0) return
+    const next = selectedChannels.filter(c => allChannels.includes(c))
+    if (next.length !== selectedChannels.length) setSelectedChannels(next)
   }, [allChannels, selectedChannels])
 
-  useEffect(() => {
-    if (!sourceMenuOpen) return
-    const onClick = (e: MouseEvent) => {
-      if (sourceMenuRef.current && !sourceMenuRef.current.contains(e.target as Node)) {
-        setSourceMenuOpen(false)
-      }
-    }
-    window.addEventListener('mousedown', onClick)
-    return () => window.removeEventListener('mousedown', onClick)
-  }, [sourceMenuOpen])
+  const selectedSet = useMemo(() => new Set(selectedChannels), [selectedChannels])
 
   const filtered = useMemo(() => logs.filter(l => {
     if (levelFilter !== 'ALL' && l.level !== levelFilter) return false
-    if (selectedChannels.size > 0 && !selectedChannels.has(l.channel)) return false
+    if (selectedSet.size > 0 && !selectedSet.has(l.channel)) return false
     if (filter) {
       const q = filter.toLowerCase()
       if (!l.raw.toLowerCase().includes(q) && !l.channel.toLowerCase().includes(q)) return false
     }
     return true
-  }), [logs, filter, levelFilter, selectedChannels])
+  }), [logs, filter, levelFilter, selectedSet])
 
-  const counts = useMemo(() => {
+  const counts: LogCounts = useMemo(() => {
     const c = { INFO: 0, WARN: 0, ERROR: 0 }
     for (const l of logs) {
       if (l.level === 'INFO') c.INFO++
@@ -121,194 +118,114 @@ export function ScrubbedLogs() {
     return c
   }, [logs])
 
-  const sparklines = useMemo(() => buildSparklines(logs, allChannels), [logs, allChannels])
-
-  const commonAffixes = useMemo(
-    () => computeCommonAffixes(sparklines.map(s => s.channel)),
-    [sparklines],
-  )
-
   useEffect(() => {
     if (follow && bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight
   }, [filtered, follow])
 
-  const toggleChannel = (ch: string) => {
-    setSelectedChannels(prev => {
-      const next = new Set(prev)
-      if (next.has(ch)) next.delete(ch)
-      else next.add(ch)
-      return next
-    })
-  }
+  useEffect(() => {
+    if (!expandedId) return
+    if (!filtered.some(l => l.id === expandedId)) setExpandedId(null)
+  }, [filtered, expandedId])
+
+  const handleToggleRow = useCallback((id: string) => {
+    setExpandedId(prev => (prev === id ? null : id))
+  }, [])
+
+  const sourceOptions = useMemo(
+    () => allChannels.map(ch => ({ value: ch, label: ch, title: ch })),
+    [allChannels],
+  )
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-white">
-      <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-3 py-2">
-        <div className="flex items-center gap-2 text-xs">
+    <div className="flex h-full flex-col bg-white">
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-slate-100 px-4 py-2.5">
+        <div className="flex items-center gap-2">
           <span className={cn(
-            'inline-block size-1.5 rounded-full',
+            'size-1.5 rounded-full',
             isRunning ? 'animate-pulse bg-emerald-500' : 'bg-slate-300',
           )} />
-          <span className="font-semibold text-slate-700">Logs at {fmtTime(Math.round(tick))}</span>
+          <h2 className="text-[13px] font-semibold tracking-tight text-slate-900">Logs</h2>
+          <span className="font-mono text-[11px] tabular-nums text-slate-400">
+            {fmtTime(Math.round(tick))}
+          </span>
         </div>
-        <div className="flex items-center gap-1 font-mono text-[10px]">
-          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600">{counts.INFO}</span>
-          <span className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-700">{counts.WARN}</span>
-          <span className="rounded bg-red-50 px-1.5 py-0.5 text-red-700">{counts.ERROR}</span>
-        </div>
-      </div>
+        <FormatToggle value={outputFormat} onChange={setOutputFormat} />
+        <Counts counts={counts} className="ml-auto" />
+        <button
+          type="button"
+          onClick={() => {
+            setLogPanelOpen(false)
+            // On mobile both panels are mutually exclusive; closing logs would
+            // leave the user staring at two collapsed chromes. Reveal the
+            // canvas so there's something to look at.
+            if (typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches) {
+              setCanvasOpen(true)
+            }
+          }}
+          title="Hide log panel"
+          aria-label="Hide log panel"
+          className="rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+        >
+          <PanelRightClose className="size-4" />
+        </button>
+      </header>
 
-      {sparklines.length > 0 && (
-        <div className="border-b border-slate-200 bg-slate-50/60 px-3 py-2">
-          <div className="mb-1 flex items-center justify-between text-[10px] font-medium uppercase tracking-wide text-slate-500">
-            <span>Volume by source</span>
-            <span className="font-mono">{sparklines.length} {sparklines.length === 1 ? 'source' : 'sources'}</span>
-          </div>
-          {(commonAffixes.prefix || commonAffixes.suffix) && (
-            <div
-              className="mb-1 truncate font-mono text-[9px] text-slate-400"
-              title={`Shared by all sources: ${commonAffixes.prefix}…${commonAffixes.suffix}`}
-            >
-              {commonAffixes.prefix && <span>{commonAffixes.prefix}</span>}
-              <span className="text-slate-300">…</span>
-              {commonAffixes.suffix && <span>{commonAffixes.suffix}</span>}
-            </div>
-          )}
-          <div className="space-y-0.5">
-            {sparklines.map(s => {
-              const active = selectedChannels.size === 0 || selectedChannels.has(s.channel)
-              const distinct = s.channel.slice(
-                commonAffixes.prefix.length,
-                s.channel.length - commonAffixes.suffix.length,
-              ) || s.channel
-              return (
-                <button
-                  key={s.channel}
-                  onClick={() => toggleChannel(s.channel)}
-                  className={cn(
-                    'group relative flex w-full items-center gap-2 rounded px-1 py-0.5 text-left text-[10px] transition-colors hover:bg-slate-100',
-                    !active && 'opacity-40',
-                  )}
-                >
-                  <span className="w-32 shrink-0 truncate font-mono text-slate-700">{distinct}</span>
-                  <Sparkline buckets={s.buckets} max={s.max} />
-                  <span className="w-10 shrink-0 text-right font-mono tabular-nums text-slate-500">{s.total}</span>
-                  {distinct !== s.channel && (
-                    <span className="pointer-events-none absolute left-1 top-full z-10 hidden whitespace-nowrap rounded border border-slate-200 bg-white px-1.5 py-0.5 font-mono text-[10px] text-slate-700 shadow-sm group-hover:block">
-                      {s.channel}
-                    </span>
-                  )}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-      )}
-
-      <div className="flex items-center gap-1.5 border-b border-slate-200 px-3 py-1.5">
+      <div className="flex flex-col gap-1.5 border-b border-slate-100 px-4 py-2">
         <input
-          placeholder="Filter…"
+          placeholder="Filter logs…"
           value={filter}
           onChange={e => setFilter(e.target.value)}
-          className="h-7 min-w-0 flex-1 rounded border border-slate-200 bg-white px-2 text-[11px] focus:border-slate-400 focus:outline-none"
+          className="h-7 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[12px] text-slate-700 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-100"
         />
-
-        <div ref={sourceMenuRef} className="relative">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <MultiSelectMenu
+            label="Sources"
+            options={sourceOptions}
+            selected={selectedChannels}
+            onChange={setSelectedChannels}
+            renderTriggerText={sel =>
+              sel.length === 0
+                ? 'Sources'
+                : <>Sources <span className="ml-1 rounded bg-sky-100 px-1 font-mono text-[10px] tabular-nums text-sky-700">{sel.length}</span></>
+            }
+            triggerClassName={cn(
+              'h-7 px-2.5 text-[11px] font-medium',
+              selectedChannels.length > 0
+                ? 'border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-100'
+                : 'text-slate-600 hover:bg-slate-50',
+            )}
+          />
+          <LevelFilter value={levelFilter} onChange={setLevelFilter} />
           <button
-            onClick={() => setSourceMenuOpen(o => !o)}
-            disabled={allChannels.length === 0}
+            type="button"
+            onClick={() => setFollow(f => !f)}
             className={cn(
-              'flex h-7 items-center gap-1 rounded border px-2 text-[10px] font-medium',
-              selectedChannels.size > 0
-                ? 'border-sky-300 bg-sky-50 text-sky-700'
-                : 'border-slate-200 bg-white text-slate-600 hover:text-slate-900',
-              allChannels.length === 0 && 'cursor-not-allowed opacity-50',
+              'ml-auto flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-[11px] font-medium transition-colors',
+              follow
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                : 'border-slate-200 bg-white text-slate-500 hover:text-slate-900',
             )}
+            title="Auto-scroll to latest"
           >
-            <span>Sources</span>
-            {selectedChannels.size > 0 && (
-              <span className="rounded bg-sky-200 px-1 font-mono text-[9px] text-sky-800">{selectedChannels.size}</span>
-            )}
-            <svg width="8" height="8" viewBox="0 0 8 8" className="text-slate-400">
-              <path d="M1 2 L4 6 L7 2" fill="none" stroke="currentColor" strokeWidth="1.2" />
-            </svg>
+            <span className={cn('size-1.5 rounded-full', follow ? 'bg-emerald-500' : 'bg-slate-300')} />
+            Tail
           </button>
-          {sourceMenuOpen && (
-            <div className="absolute right-0 top-full z-20 mt-1 max-h-64 w-64 overflow-auto rounded border border-slate-200 bg-white shadow-lg">
-              <div className="flex items-center justify-between border-b border-slate-100 px-2 py-1.5 text-[10px]">
-                <span className="font-medium text-slate-500">
-                  {selectedChannels.size === 0 ? 'All sources' : `${selectedChannels.size} selected`}
-                </span>
-                <button
-                  onClick={() => setSelectedChannels(new Set())}
-                  className="text-sky-600 hover:underline disabled:opacity-40"
-                  disabled={selectedChannels.size === 0}
-                >
-                  Clear
-                </button>
-              </div>
-              {allChannels.map(ch => {
-                const checked = selectedChannels.has(ch)
-                return (
-                  <label
-                    key={ch}
-                    className="flex cursor-pointer items-center gap-2 px-2 py-1 text-[11px] hover:bg-slate-50"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => toggleChannel(ch)}
-                      className="size-3 accent-sky-600"
-                    />
-                    <span className="min-w-0 flex-1 truncate font-mono text-slate-700">{ch}</span>
-                  </label>
-                )
-              })}
-            </div>
-          )}
         </div>
-
-        <div className="flex rounded border border-slate-200 bg-slate-50 text-[10px]">
-          {(['ALL', 'INFO', 'WARN', 'ERROR'] as Level[]).map(l => (
-            <button
-              key={l}
-              onClick={() => setLevelFilter(l)}
-              className={cn(
-                'px-1.5 py-1 font-medium',
-                levelFilter === l ? 'bg-slate-700 text-white' : 'text-slate-600 hover:text-slate-900',
-              )}
-            >
-              {l}
-            </button>
-          ))}
-        </div>
-        <button
-          onClick={() => setFollow(f => !f)}
-          className={cn(
-            'flex items-center gap-1 rounded border px-1.5 py-1 text-[10px] font-medium',
-            follow
-              ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
-              : 'border-slate-200 bg-white text-slate-500',
-          )}
-          title="Auto-scroll to latest"
-        >
-          Tail
-        </button>
       </div>
 
-      <div ref={bodyRef} className="flex-1 overflow-auto bg-white px-2 py-1.5 font-mono text-[11px] text-slate-800">
+      <div ref={bodyRef} className="flex-1 overflow-auto">
         {filtered.length === 0 ? (
-          <div className="px-2 py-6 text-center text-[11px] italic text-slate-400">
+          <div className="flex h-full items-center justify-center px-6 py-12 text-center text-[12px] text-slate-400">
             {isRunning ? 'Waiting for logs…' : 'Scrub the timeline or add a behavior block to generate logs.'}
           </div>
         ) : (
           filtered.map(l => (
-            <div key={l.id} className="flex gap-2 whitespace-pre-wrap border-b border-slate-100 py-0.5 leading-snug last:border-0">
-              <span className="shrink-0 text-slate-400">{new Date(l.ts).toISOString().slice(11, 19)}</span>
-              <span className="shrink-0 truncate text-cyan-700" style={{ maxWidth: 120 }}>{l.channel}</span>
-              <span className={cn('w-12 shrink-0', levelClass(l.level))}>{l.level}</span>
-              <span className="min-w-0 flex-1 break-all text-slate-800">{l.raw}</span>
-            </div>
+            <LogRow
+              key={l.id}
+              log={l}
+              expanded={expandedId === l.id}
+              onToggle={handleToggleRow}
+            />
           ))
         )}
       </div>
@@ -316,118 +233,181 @@ export function ScrubbedLogs() {
   )
 }
 
-function levelClass(level: string): string {
-  switch (level) {
-    case 'ERROR':
-    case 'FATAL':
-      return 'text-red-600'
-    case 'WARN':
-      return 'text-amber-600'
-    case 'INFO':
-      return 'text-slate-600'
-    case 'DEBUG':
-      return 'text-slate-400'
-    default:
-      return 'text-slate-500'
-  }
-}
-
-interface SparkSeries {
-  channel: string
-  buckets: number[]
-  total: number
-  max: number
-}
-
-const AFFIX_DELIMS = '.-_:/'
-
-function computeCommonAffixes(channels: string[]): { prefix: string; suffix: string } {
-  if (channels.length < 2) return { prefix: '', suffix: '' }
-  let prefix = channels[0]
-  let suffix = channels[0]
-  for (let i = 1; i < channels.length; i++) {
-    const c = channels[i]
-    while (prefix && !c.startsWith(prefix)) prefix = prefix.slice(0, -1)
-    while (suffix && !c.endsWith(suffix)) suffix = suffix.slice(1)
-    if (!prefix && !suffix) break
-  }
-  // Snap to delimiter boundaries so we don't cut mid-segment.
-  let pi = prefix.length
-  while (pi > 0 && !AFFIX_DELIMS.includes(prefix[pi - 1])) pi--
-  prefix = prefix.slice(0, pi)
-  let si = 0
-  while (si < suffix.length && !AFFIX_DELIMS.includes(suffix[si])) si++
-  suffix = suffix.slice(si)
-  // Bail out if stripping would empty any label or the saving is trivial.
-  if (prefix.length + suffix.length < 4) return { prefix: '', suffix: '' }
-  for (const c of channels) {
-    if (c.length - prefix.length - suffix.length <= 0) return { prefix: '', suffix: '' }
-  }
-  return { prefix, suffix }
-}
-
-function buildSparklines(logs: LogEntry[], channels: string[]): SparkSeries[] {
-  if (logs.length === 0 || channels.length === 0) return []
-  let minTs = Infinity
-  let maxTs = -Infinity
-  for (const l of logs) {
-    const t = Date.parse(l.ts)
-    if (!Number.isNaN(t)) {
-      if (t < minTs) minTs = t
-      if (t > maxTs) maxTs = t
-    }
-  }
-  if (!Number.isFinite(minTs) || !Number.isFinite(maxTs)) return []
-  const span = Math.max(1, maxTs - minTs)
-  const series: Record<string, number[]> = {}
-  for (const c of channels) series[c] = new Array(SPARK_BUCKETS).fill(0)
-  for (const l of logs) {
-    const t = Date.parse(l.ts)
-    if (Number.isNaN(t)) continue
-    const idx = Math.min(SPARK_BUCKETS - 1, Math.floor(((t - minTs) / span) * SPARK_BUCKETS))
-    const arr = series[l.channel]
-    if (arr) arr[idx]++
-  }
-  return channels
-    .map(channel => {
-      const buckets = series[channel]
-      let total = 0
-      let max = 0
-      for (const v of buckets) {
-        total += v
-        if (v > max) max = v
-      }
-      return { channel, buckets, total, max }
-    })
-    .filter(s => s.total > 0)
-    .sort((a, b) => b.total - a.total)
-}
-
-function Sparkline({ buckets, max }: { buckets: number[]; max: number }) {
-  const W = 160
-  const H = 18
-  const PAD = 1.5
-  const n = buckets.length
-  if (n === 0) return <svg width={W} height={H} aria-hidden />
-  const safeMax = Math.max(1, max)
-  const xs = buckets.map((_, i) => (n === 1 ? W / 2 : (i / (n - 1)) * W))
-  const ys = buckets.map(v => H - PAD - (v / safeMax) * (H - PAD * 2))
-  const linePath = xs.map((x, i) => `${i === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${ys[i].toFixed(2)}`).join(' ')
-  const areaPath = `${linePath} L ${xs[n - 1].toFixed(2)} ${H} L ${xs[0].toFixed(2)} ${H} Z`
-  const lastX = xs[n - 1]
-  const lastY = ys[n - 1]
+function FormatToggle({ value, onChange }: { value: LogFormat; onChange: (f: LogFormat) => void }) {
   return (
-    <svg width={W} height={H} className="shrink-0 overflow-visible" aria-hidden>
-      <path d={areaPath} className="fill-sky-500/15" />
-      <path
-        d={linePath}
-        className="stroke-sky-500"
-        strokeWidth={1.25}
-        fill="none"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <circle cx={lastX} cy={lastY} r={1.6} className="fill-sky-500" />
-    </svg>
+    <div
+      className="flex h-6 items-center rounded-md bg-slate-100 p-0.5"
+      title="Output schema (switching clears the buffer)"
+    >
+      {FORMATS.map(f => (
+        <button
+          key={f}
+          type="button"
+          onClick={() => onChange(f)}
+          className={cn(
+            'rounded-[4px] px-2 py-[1px] font-mono text-[10px] font-semibold uppercase tracking-wider transition-all',
+            value === f
+              ? 'bg-white text-slate-900 shadow-[0_1px_2px_rgba(15,23,42,0.06)]'
+              : 'text-slate-500 hover:text-slate-700',
+          )}
+        >
+          {f}
+        </button>
+      ))}
+    </div>
   )
+}
+
+function LevelFilter({ value, onChange }: { value: Level; onChange: (l: Level) => void }) {
+  return (
+    <div className="flex h-7 items-center rounded-md bg-slate-100 p-0.5">
+      {LEVELS.map(l => (
+        <button
+          key={l}
+          type="button"
+          onClick={() => onChange(l)}
+          className={cn(
+            'rounded-[4px] px-2 py-[2px] text-[11px] font-medium transition-all',
+            value === l
+              ? 'bg-white text-slate-900 shadow-[0_1px_2px_rgba(15,23,42,0.06)]'
+              : 'text-slate-500 hover:text-slate-700',
+          )}
+        >
+          {l === 'ALL' ? 'All' : l.charAt(0) + l.slice(1).toLowerCase()}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function Counts({ counts, className }: { counts: LogCounts; className?: string }) {
+  const total = counts.INFO + counts.WARN + counts.ERROR
+  return (
+    <div className={cn('flex items-center gap-2.5 text-[11px] tabular-nums', className)}>
+      <span className="text-slate-500">{total}</span>
+      {counts.WARN > 0 && (
+        <span className="flex items-center gap-1 font-medium text-amber-600">
+          <span className="size-1 rounded-full bg-amber-500" />
+          {counts.WARN}
+        </span>
+      )}
+      {counts.ERROR > 0 && (
+        <span className="flex items-center gap-1 font-medium text-red-600">
+          <span className="size-1 rounded-full bg-red-500" />
+          {counts.ERROR}
+        </span>
+      )}
+    </div>
+  )
+}
+
+const LogRow = memo(function LogRow({
+  log, expanded, onToggle,
+}: {
+  log: LogEntry
+  expanded: boolean
+  onToggle: (id: string) => void
+}) {
+  const time = safeIsoTime(log.ts)
+  const tone = LEVEL_TONE[log.level] ?? LEVEL_TONE.INFO
+
+  // JSON is only re-parsed when expanded flips true, since pretty-printing
+  // megabytes of stringified OCSF for collapsed rows would be wasted work.
+  const pretty = useMemo(() => {
+    if (!expanded) return null
+    const trimmed = log.raw.trimStart()
+    if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return null
+    try {
+      return JSON.stringify(JSON.parse(trimmed), null, 2)
+    } catch {
+      return null
+    }
+  }, [log.raw, expanded])
+
+  return (
+    <div
+      className={cn(
+        'group min-w-0 overflow-hidden transition-colors',
+        expanded ? 'bg-slate-50' : tone.hover,
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => onToggle(log.id)}
+        aria-expanded={expanded}
+        className="flex w-full items-baseline gap-3 px-4 py-1.5 text-left"
+      >
+        <span className="w-[60px] shrink-0 font-mono text-[10.5px] tabular-nums text-slate-400">
+          {time}
+        </span>
+        <span className={cn('flex w-12 shrink-0 items-center gap-1.5', tone.text)}>
+          <span className={cn('size-1.5 shrink-0 rounded-full', tone.dot)} />
+          <span className="font-mono text-[10px] font-medium uppercase tracking-wider">
+            {log.level}
+          </span>
+        </span>
+        <span className={cn(
+          'min-w-0 flex-1 font-mono text-[12px] leading-relaxed text-slate-700',
+          expanded ? 'whitespace-pre-wrap break-all' : 'truncate',
+        )}>
+          {log.raw}
+        </span>
+      </button>
+
+      {expanded && (
+        <div className="min-w-0 space-y-2.5 px-4 pb-3 pt-1">
+          {/* minmax(0, 1fr) lets the value column shrink past its min-content
+              size — without it, a long unbroken channel/timestamp forces the
+              grid wider than the panel and the row clips off-screen. */}
+          <dl className="grid grid-cols-[60px_minmax(0,1fr)] gap-x-3 gap-y-1 text-[11px]">
+            <Field label="Source" value={log.channel} mono />
+            <Field label="Type" value={log.source.toLowerCase()} mono />
+            <Field label="Time" value={log.ts} mono />
+          </dl>
+          {pretty && (
+            <pre
+              className="min-w-0 overflow-hidden rounded-md border border-slate-200 bg-white p-3 font-mono text-[11px] leading-relaxed text-slate-700"
+              style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
+            >
+              {pretty}
+            </pre>
+          )}
+        </div>
+      )}
+    </div>
+  )
+})
+
+function Field({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <>
+      <dt className="font-mono text-[10px] uppercase tracking-wider text-slate-400">{label}</dt>
+      <dd
+        className={cn('min-w-0 text-slate-700', mono && 'font-mono')}
+        style={{ overflowWrap: 'anywhere' }}
+      >
+        {value}
+      </dd>
+    </>
+  )
+}
+
+function safeIsoTime(ts: string): string {
+  const d = new Date(ts)
+  if (Number.isNaN(d.getTime())) return ts.slice(11, 19) || ts
+  return d.toISOString().slice(11, 19)
+}
+
+interface LevelTone {
+  text: string
+  dot: string
+  hover: string
+}
+
+const LEVEL_TONE: Record<LogLevel, LevelTone> = {
+  FATAL: { text: 'text-red-700', dot: 'bg-red-500', hover: 'hover:bg-red-50/60' },
+  ERROR: { text: 'text-red-700', dot: 'bg-red-500', hover: 'hover:bg-red-50/60' },
+  WARN: { text: 'text-amber-700', dot: 'bg-amber-500', hover: 'hover:bg-amber-50/60' },
+  INFO: { text: 'text-slate-500', dot: 'bg-sky-400', hover: 'hover:bg-slate-50' },
+  DEBUG: { text: 'text-slate-400', dot: 'bg-slate-300', hover: 'hover:bg-slate-50' },
 }
