@@ -202,6 +202,84 @@ func TestHandler_ForwardEndToEnd(t *testing.T) {
 	}
 }
 
+// Forward mode honors start_tick: the engine begins at the requested tick
+// and the by_source counts only reflect the windowed range. Two contiguous
+// chunks should together produce the same total events as a single full
+// run (modulo deterministic engine RNG-restart-per-request).
+func TestHandler_ForwardChunkedRespectsStartTick(t *testing.T) {
+	hec := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer hec.Close()
+
+	yaml := loadTestScenario(t)
+	cribl := &apihelp.CriblConfig{Enabled: true, URL: hec.URL, Token: "tok"}
+
+	// Run a chunk covering ticks [0, 5).
+	first := post(t, Request{
+		ScenarioYAML:   yaml,
+		Duration:       5,
+		TickIntervalMs: 1000,
+		Seed:           42,
+		Mode:           "forward",
+		Cribl:          cribl,
+		StartTick:      0,
+	})
+	firstDone := first[len(first)-1]
+	if firstDone["type"] != "done" {
+		t.Fatalf("first chunk did not end with done: %v", firstDone)
+	}
+	firstProduced := int(firstDone["events_produced"].(float64))
+	if firstProduced == 0 {
+		t.Fatalf("first chunk produced 0 events, expected some")
+	}
+
+	// Run a second chunk covering ticks [5, 10).
+	second := post(t, Request{
+		ScenarioYAML:   yaml,
+		Duration:       10,
+		TickIntervalMs: 1000,
+		Seed:           42,
+		Mode:           "forward",
+		Cribl:          cribl,
+		StartTick:      5,
+	})
+	secondDone := second[len(second)-1]
+	if secondDone["type"] != "done" {
+		t.Fatalf("second chunk did not end with done: %v", secondDone)
+	}
+	secondProduced := int(secondDone["events_produced"].(float64))
+	if secondProduced == 0 {
+		t.Fatalf("second chunk produced 0 events; start_tick may be ignored")
+	}
+
+	// Sanity: a single 0..10 run should produce roughly the sum of both
+	// chunks (RNG restarts per request, so it's not exact, but the order
+	// of magnitude must match — within a tick's worth of variance is fine).
+	full := post(t, Request{
+		ScenarioYAML:   yaml,
+		Duration:       10,
+		TickIntervalMs: 1000,
+		Seed:           42,
+		Mode:           "forward",
+		Cribl:          cribl,
+		StartTick:      0,
+	})
+	fullProduced := int(full[len(full)-1]["events_produced"].(float64))
+	chunkedTotal := firstProduced + secondProduced
+	if abs(fullProduced-chunkedTotal) > fullProduced/4 {
+		t.Errorf("chunked total (%d) deviates from full run (%d) by more than 25%%",
+			chunkedTotal, fullProduced)
+	}
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
+}
+
 // Forward mode reports HEC failures: if the destination returns 4xx, the
 // sink drops the batch and the summary's batches_failed counter advances.
 func TestHandler_ForwardSurfacesHECFailures(t *testing.T) {

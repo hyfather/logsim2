@@ -78,79 +78,163 @@ type BackendFrame =
   | BackendDoneFrame
   | BackendErrorFrame
 
+// Tick window per /api/run forward request. The Vercel function timeout
+// (60s in vercel.json) is the binding constraint — at typical Cribl Cloud
+// HEC latency, batch=500, ~50 logs/tick, 300 ticks ≈ 12s of POST work, so
+// each chunk fits with comfortable margin and a long episode trickles
+// through 4 sequential requests rather than one timeout-prone marathon.
+const CHUNK_TICKS_FORWARD = 300
+
 /**
  * Runs the scenario in forward mode: backend produces every event, ships it
  * to the configured Cribl HEC destination, and streams progress NDJSON
  * (no log frames). Mirrors `logsim run --to <dest>` in the CLI.
+ *
+ * The episode is split into CHUNK_TICKS_FORWARD-tick windows so each /api/run
+ * call lives well within the function timeout. Per-chunk summaries are
+ * aggregated client-side; the consumer sees one onStart, repeated onPost /
+ * onProgress, and a single final onDone.
  */
 export async function runForward(opts: RunForwardOpts): Promise<void> {
   const seed = opts.seed ?? Math.floor(Math.random() * 1e9)
   const startTimeMs = opts.startTimeMs ?? Date.now()
+  const totalDuration = Math.max(0, opts.duration ?? 0)
 
-  let res: Response
-  try {
-    res = await fetch('/api/run', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        scenario_yaml: opts.scenarioYaml,
-        duration: opts.duration ?? 0,
-        tick_interval_ms: opts.tickIntervalMs ?? 0,
-        start_time_ms: startTimeMs,
-        seed,
-        source_filter: opts.sourceFilter ?? '*',
-        cribl: opts.cribl,
-        format: opts.format ?? 'native',
-        mode: 'forward',
-      }),
-      signal: opts.signal,
-    })
-  } catch (err) {
-    if ((err as Error).name === 'AbortError') return
-    opts.onError(err instanceof Error ? err : new Error(String(err)))
-    return
+  let cursor = 0
+  const totals: ForwardSummary = {
+    eventsProduced: 0,
+    eventsSent: 0,
+    batchesSent: 0,
+    batchesFailed: 0,
+    bySource: {},
   }
+  let startEmitted = false
+  let aborted = false
+  let failed = false
+
+  // Chunk callbacks: surface posts/progress live, but suppress per-chunk
+  // start/done — we want one start and one done across the whole run.
+  const chunkCallbacks: ChunkCallbacks = {
+    onStart: (info) => {
+      if (!startEmitted) {
+        opts.onStart({ ...info, duration: totalDuration })
+        startEmitted = true
+      }
+    },
+    onPost: (post) => opts.onPost(post),
+    onProgress: ({ tick, eventsProduced, eventsSent }) => {
+      // tick is absolute already; events_* are per-chunk, fold into totals
+      // before reporting so the UI sees a monotonic counter.
+      const cumulativeProduced = totals.eventsProduced + eventsProduced
+      const cumulativeSent = totals.eventsSent + eventsSent
+      opts.onProgress({ tick, eventsProduced: cumulativeProduced, eventsSent: cumulativeSent })
+    },
+    onChunkDone: (summary) => {
+      totals.eventsProduced += summary.eventsProduced
+      totals.eventsSent += summary.eventsSent
+      totals.batchesSent += summary.batchesSent
+      totals.batchesFailed += summary.batchesFailed
+      for (const [src, n] of Object.entries(summary.bySource)) {
+        totals.bySource[src] = (totals.bySource[src] ?? 0) + n
+      }
+    },
+    onError: (err) => {
+      failed = true
+      opts.onError(err)
+    },
+  }
+
+  while (!aborted && !failed && cursor < totalDuration) {
+    if (opts.signal?.aborted) {
+      aborted = true
+      break
+    }
+    const chunkEnd = Math.min(cursor + CHUNK_TICKS_FORWARD, totalDuration)
+    try {
+      await fetchForwardChunk(
+        {
+          ...opts,
+          duration: chunkEnd, // backend uses this as the absolute end
+          startTimeMs,
+          seed,
+        },
+        cursor,
+        chunkCallbacks,
+      )
+    } catch (err) {
+      if ((err as Error).name === 'AbortError') {
+        aborted = true
+        break
+      }
+      failed = true
+      opts.onError(err instanceof Error ? err : new Error(String(err)))
+      return
+    }
+    cursor = chunkEnd
+  }
+
+  if (failed || aborted) return
+  opts.onDone(totals)
+}
+
+interface ChunkCallbacks {
+  onStart: (info: { duration: number; destination: string; tickIntervalMs: number }) => void
+  onPost: (post: PostFrame) => void
+  onProgress: (info: { tick: number; eventsProduced: number; eventsSent: number }) => void
+  onChunkDone: (summary: ForwardSummary) => void
+  onError: (err: Error) => void
+}
+
+async function fetchForwardChunk(
+  opts: RunForwardOpts & { duration: number; startTimeMs: number; seed: number },
+  startTick: number,
+  cb: ChunkCallbacks,
+): Promise<void> {
+  const res = await fetch('/api/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      scenario_yaml: opts.scenarioYaml,
+      duration: opts.duration,
+      tick_interval_ms: opts.tickIntervalMs ?? 0,
+      start_time_ms: opts.startTimeMs,
+      seed: opts.seed,
+      source_filter: opts.sourceFilter ?? '*',
+      cribl: opts.cribl,
+      format: opts.format ?? 'native',
+      mode: 'forward',
+      start_tick: startTick,
+    }),
+    signal: opts.signal,
+  })
   if (!res.ok || !res.body) {
     const body = await res.text().catch(() => '')
-    opts.onError(new Error(extractServerError(res.status, body)))
-    return
+    throw new Error(extractServerError(res.status, body))
   }
 
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buf = ''
-  let done = false
-  try {
-    for (;;) {
-      const { value, done: streamDone } = await reader.read()
-      if (streamDone) break
-      buf += decoder.decode(value, { stream: true })
-      let nl = buf.indexOf('\n')
-      while (nl !== -1) {
-        const line = buf.slice(0, nl).trim()
-        buf = buf.slice(nl + 1)
-        if (line) {
-          done = handleLine(line, opts) || done
-        }
-        nl = buf.indexOf('\n')
+  let chunkSawDone = false
+  for (;;) {
+    const { value, done: streamDone } = await reader.read()
+    if (streamDone) break
+    buf += decoder.decode(value, { stream: true })
+    let nl = buf.indexOf('\n')
+    while (nl !== -1) {
+      const line = buf.slice(0, nl).trim()
+      buf = buf.slice(nl + 1)
+      if (line) {
+        chunkSawDone = handleChunkLine(line, cb) || chunkSawDone
       }
+      nl = buf.indexOf('\n')
     }
-    if (buf.trim()) handleLine(buf.trim(), opts)
-  } catch (err) {
-    if ((err as Error).name === 'AbortError') return
-    opts.onError(err instanceof Error ? err : new Error(String(err)))
-    return
   }
-  // If the server hung up without a done frame, treat it as an error so
-  // the UI doesn't get stuck.
-  if (!done) {
-    opts.onError(new Error('forward run ended without a done frame'))
-  }
+  if (buf.trim()) chunkSawDone = handleChunkLine(buf.trim(), cb) || chunkSawDone
+  if (!chunkSawDone) throw new Error('forward chunk ended without a done frame')
 }
 
-// handleLine returns true once a terminal frame (done/error) has been
-// dispatched, so the outer loop can verify the stream closed cleanly.
-function handleLine(line: string, opts: RunForwardOpts): boolean {
+function handleChunkLine(line: string, cb: ChunkCallbacks): boolean {
   let frame: BackendFrame | null = null
   try {
     frame = JSON.parse(line) as BackendFrame
@@ -160,14 +244,14 @@ function handleLine(line: string, opts: RunForwardOpts): boolean {
   if (!frame) return false
   switch (frame.type) {
     case 'start':
-      opts.onStart({
+      cb.onStart({
         duration: frame.duration,
         destination: frame.destination,
         tickIntervalMs: frame.tick_interval_ms,
       })
       return false
     case 'post':
-      opts.onPost({
+      cb.onPost({
         status: frame.status,
         size: frame.size,
         durationMs: frame.duration_ms,
@@ -177,14 +261,14 @@ function handleLine(line: string, opts: RunForwardOpts): boolean {
       })
       return false
     case 'progress':
-      opts.onProgress({
+      cb.onProgress({
         tick: frame.tick,
         eventsProduced: frame.events_produced,
         eventsSent: frame.events_sent,
       })
       return false
     case 'done':
-      opts.onDone({
+      cb.onChunkDone({
         eventsProduced: frame.events_produced,
         eventsSent: frame.events_sent,
         batchesSent: frame.batches_sent,
@@ -193,7 +277,7 @@ function handleLine(line: string, opts: RunForwardOpts): boolean {
       })
       return true
     case 'error':
-      opts.onError(new Error(frame.error))
+      cb.onError(new Error(frame.error))
       return true
   }
   return false

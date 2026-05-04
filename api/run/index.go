@@ -345,9 +345,12 @@ func handleForward(w http.ResponseWriter, r *http.Request, req *Request, sc *sce
 		"destination":      req.Cribl.URL,
 	})
 
-	// Build the HEC sink the engine writes into. Default batch is 100 (matches
-	// the CLI / dotfile default); 0 flush interval means batches go on size only.
-	cribl := sinks.NewCriblWithFormat(req.Cribl.URL, req.Cribl.Token, 100, 0, sinks.Format(req.Format))
+	// Build the HEC sink. Batch=500 (the per-destination max) keeps the
+	// number of round-trips low — at typical Cribl Cloud HEC latency
+	// (~150–300 ms RTT from sfo1) a 1080-tick episode would otherwise
+	// burn most of the function timeout on POSTs alone. 0 flush interval
+	// means batches go on size only.
+	cribl := sinks.NewCriblWithFormat(req.Cribl.URL, req.Cribl.Token, 500, 0, sinks.Format(req.Format))
 	cribl.SetName("destination")
 
 	// Each HTTP attempt becomes one "post" frame. The observer fires from
@@ -368,16 +371,28 @@ func handleForward(w http.ResponseWriter, r *http.Request, req *Request, sc *sce
 		emit(frame)
 	})
 
-	forward := &countingForwarder{inner: cribl, bySource: map[string]int{}}
+	startTick := req.StartTick
+	if startTick < 0 {
+		startTick = 0
+	}
+	if startTick > duration {
+		startTick = duration
+	}
+
+	forward := &countingForwarder{inner: cribl, bySource: map[string]int{}, tick: startTick}
 	// Periodic progress frame so the UI can show a live counter without
 	// waiting for `done`. Tied to tick count to keep deterministic behavior
 	// across scenarios; ~10 frames is enough for a smooth progress bar.
-	progressEvery := duration / 10
+	span := duration - startTick
+	progressEvery := span / 10
 	if progressEvery < 5 {
 		progressEvery = 5
 	}
 	forward.onTick = func(tick int) {
-		if tick > 0 && tick%progressEvery == 0 {
+		// tick is the absolute tick index within the scenario; emit on the
+		// nth tick relative to the chunk's start so chunked runs each get
+		// ~10 progress frames.
+		if (tick-startTick) > 0 && (tick-startTick)%progressEvery == 0 {
 			emit(map[string]any{
 				"type":            "progress",
 				"tick":            tick,
@@ -390,6 +405,7 @@ func handleForward(w http.ResponseWriter, r *http.Request, req *Request, sc *sce
 	eng := engine.New(sc, engine.Config{
 		Seed:           req.Seed,
 		StartTime:      start,
+		StartTick:      startTick,
 		TickIntervalMs: tickInterval,
 		SourceFilter:   req.SourceFilter,
 	})
@@ -414,7 +430,10 @@ func handleForward(w http.ResponseWriter, r *http.Request, req *Request, sc *sce
 }
 
 // countingForwarder wraps a sink with a per-source counter and a per-tick
-// callback so the API can stream progress while the engine is running.
+// callback so the API can stream progress while the engine is running. tick
+// is the absolute tick index within the scenario (set to startTick by the
+// handler, advanced once per Write — engine.Run calls Write exactly once per
+// tick).
 type countingForwarder struct {
 	inner       sinks.Sink
 	bySource    map[string]int
