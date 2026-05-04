@@ -143,7 +143,7 @@ func TestCribl_HECEnvelope(t *testing.T) {
 	if env["event"] != "hello world" {
 		t.Errorf("event: got %v, want raw log string", env["event"])
 	}
-	// indexed fields must carry the channel/level/generator metadata
+	// indexed fields must carry the channel/level/id metadata
 	fields, ok := env["fields"].(map[string]any)
 	if !ok {
 		t.Fatalf("fields: want object, got %T", env["fields"])
@@ -154,11 +154,13 @@ func TestCribl_HECEnvelope(t *testing.T) {
 	if fields["level"] != "INFO" {
 		t.Errorf("fields.level: got %v", fields["level"])
 	}
-	if fields["generator"] != "mysql" {
-		t.Errorf("fields.generator: got %v", fields["generator"])
-	}
 	if fields["id"] != "abc" {
 		t.Errorf("fields.id: got %v", fields["id"])
+	}
+	// fields must not leak the generator/sourcetype identity — the whole
+	// point of forwarded logs is to look like real production data.
+	if _, ok := fields["generator"]; ok {
+		t.Errorf("fields.generator should not be present; got %v", fields["generator"])
 	}
 	// time must be epoch seconds (float), not an ISO string
 	if _, ok := env["time"].(float64); !ok {

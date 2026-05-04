@@ -222,15 +222,8 @@ func ocsfBase(e *event.LogEntry, categoryUID int, categoryName string,
 		"status":         "Success",
 		"observables":    nil, // omit; encoders set up specifics if needed
 		"metadata": map[string]any{
-			"version":  "1.4.0",
-			"log_name": e.Source,
-			"product": map[string]any{
-				"name":         "logsim",
-				"vendor_name":  "logsim",
-				"feature": map[string]any{
-					"name": e.Sourcetype,
-				},
-			},
+			"version":       "1.4.0",
+			"log_name":      e.Source,
 			"original_time": e.TS,
 			"uid":           e.ID,
 		},

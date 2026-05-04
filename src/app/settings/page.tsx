@@ -192,7 +192,7 @@ function CriblHecForm({ initial, isEdit, destId, onSave, onDelete, onCancel }: C
   const [url, setUrl]               = useState(initial.url ?? '')
   const [token, setToken]           = useState(initial.token ?? '')
   const [source, setSource]         = useState(initial.source ?? '')
-  const [sourcetype, setSourcetype] = useState(initial.sourcetype ?? 'logsim:json')
+  const [sourcetype, setSourcetype] = useState(initial.sourcetype ?? '')
   const [batchSize, setBatchSize]   = useState(String(initial.batchSize ?? 100))
   const [testState, setTestState]   = useState<TestState>('idle')
   const [testError, setTestError]   = useState('')
@@ -204,7 +204,7 @@ function CriblHecForm({ initial, isEdit, destId, onSave, onDelete, onCancel }: C
     setUrl(initial.url ?? '')
     setToken(initial.token ?? '')
     setSource(initial.source ?? '')
-    setSourcetype(initial.sourcetype ?? 'logsim:json')
+    setSourcetype(initial.sourcetype ?? '')
     setBatchSize(String(initial.batchSize ?? 100))
     setTestState('idle')
     setTestError('')
@@ -218,7 +218,7 @@ function CriblHecForm({ initial, isEdit, destId, onSave, onDelete, onCancel }: C
     url: url.trim(),
     token: token.trim(),
     source: source.trim(),
-    sourcetype: sourcetype.trim() || 'logsim:json',
+    sourcetype: sourcetype.trim(),
     batchSize: Math.max(1, Math.min(500, parseInt(batchSize, 10) || 100)),
     enabled,
   })
@@ -340,7 +340,7 @@ function CriblHecForm({ initial, isEdit, destId, onSave, onDelete, onCancel }: C
             <Input
               value={sourcetype}
               onChange={e => setSourcetype(e.target.value)}
-              placeholder="logsim:json"
+              placeholder="(auto-map per generator)"
               className="h-8 text-xs font-mono"
             />
           </FieldRow>
