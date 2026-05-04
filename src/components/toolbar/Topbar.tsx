@@ -49,6 +49,7 @@ import { cn } from '@/lib/utils'
 import { pickCriblPayload } from '@/lib/backendClient'
 import { canvasToScenarioYaml } from '@/lib/canvasToScenarioYaml'
 import { runStream } from '@/lib/runStream'
+import { runForward, type ForwardSummary, type PostFrame } from '@/lib/runForward'
 import { logsAt } from '@/lib/logsAt'
 import { ExportPreviewModal, type ExportTab } from '@/components/toolbar/ExportPreviewModal'
 import { RunLocallyModal } from '@/components/toolbar/RunLocallyModal'
@@ -116,6 +117,56 @@ const DIFFICULTY_TINT: Record<string, string> = {
   easy:   'bg-emerald-100 text-emerald-700',
   medium: 'bg-amber-100 text-amber-800',
   hard:   'bg-rose-100 text-rose-700',
+}
+
+// Forwarding mode reuses the log panel as a CLI-style console: the
+// backend isn't streaming logs, so we synthesize entries that mirror the
+// `logsim run --to <dest>` output. The channel is fixed so the panel can
+// filter or style them later if needed.
+const FORWARD_CHANNEL = '__forward__'
+let forwardSeq = 0
+
+function appendForwardLine(
+  addLogs: (entries: import('@/types/logs').LogEntry[]) => void,
+  raw: string,
+  level: import('@/types/logs').LogLevel = 'INFO',
+) {
+  forwardSeq++
+  addLogs([{
+    id: `__fwd-${Date.now()}-${forwardSeq}`,
+    ts: new Date().toISOString(),
+    channel: FORWARD_CHANNEL,
+    level,
+    source: 'custom',
+    raw,
+  }])
+}
+
+function appendForwardSummary(
+  addLogs: (entries: import('@/types/logs').LogEntry[]) => void,
+  summary: ForwardSummary,
+  destinationName: string,
+) {
+  const lines: string[] = []
+  if (summary.batchesFailed > 0) {
+    lines.push(`logsim: sent ${summary.eventsSent.toLocaleString()} events to ${destinationName} in ${summary.batchesSent.toLocaleString()} batches (${summary.batchesFailed} batch(es) failed)`)
+  } else {
+    lines.push(`logsim: sent ${summary.eventsSent.toLocaleString()} events to ${destinationName} in ${summary.batchesSent.toLocaleString()} batches`)
+  }
+  // Top sources, descending by event count, capped so the summary stays
+  // skimmable on big scenarios with hundreds of channels.
+  const top = Object.entries(summary.bySource)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 12)
+  if (top.length > 0) {
+    lines.push('logsim: events by source:')
+    for (const [src, n] of top) {
+      lines.push(`logsim:   ${n.toLocaleString().padStart(8)}  ${src}`)
+    }
+  }
+  for (const line of lines) {
+    appendForwardLine(addLogs, line, summary.batchesFailed > 0 ? 'WARN' : 'INFO')
+  }
 }
 
 export function Topbar() {
@@ -404,6 +455,15 @@ export function Topbar() {
     }
     const enabledCribl = destinationsRef.current.find(d => d.enabled && d.type === 'cribl-hec')
     const cribl = pickCriblPayload(destinationsRef.current)
+
+    if (mode === 'fast' && (!enabledCribl || !cribl)) {
+      // Fast mode is just a frontend over `logsim run --to <dest>` — no
+      // destination means nowhere to send the events. Surface the
+      // requirement instead of silently falling back to realtime.
+      setRunError('Fast mode forwards to a destination — enable a Cribl HEC destination first.')
+      return
+    }
+
     const yaml = buildScenarioYaml()
     const ep = useEpisodeStore.getState().episode
     const simStart = Date.now()
@@ -422,11 +482,63 @@ export function Topbar() {
     const ctrl = new AbortController()
     abortRef.current = ctrl
 
-    // realtime: pace the scrubber 1 tick/sec wall-clock — an 18-min scenario
-    // really takes 18 minutes. fast: 0 = no pacing, the engine streams flat
-    // out and forwarding (if configured) ships at the end.
-    const paceMs = mode === 'realtime' ? 1000 : 0
+    if (mode === 'fast' && cribl && enabledCribl) {
+      runForward({
+        scenarioYaml: yaml,
+        duration: ep.duration,
+        tickIntervalMs: 1000,
+        startTimeMs: simStart,
+        seed: seedRef.current,
+        cribl,
+        format: outputFormat,
+        signal: ctrl.signal,
+        onStart: ({ destination, duration }) => {
+          appendForwardLine(addLogs, `logsim: forwarding ${duration} ticks → ${destination}`)
+        },
+        onPost: (post) => {
+          // Only surface non-success attempts in the panel — successful
+          // POSTs would dwarf the panel (one per batch). The progress
+          // counters keep the user informed of the success path.
+          if (post.err || post.status >= 400) {
+            const suffix = !post.final ? ' — retrying' : (post.status >= 400 && post.status < 500 ? ' — dropped' : ' — gave up')
+            appendForwardLine(addLogs, `logsim:   POST → ${post.status || 'ERR'} ${post.err ?? ''} (${post.size} events, ${post.durationMs}ms)${suffix}`, 'WARN')
+          }
+        },
+        onProgress: ({ tick: t, eventsProduced, eventsSent }) => {
+          setTick(t)
+          setTickCount(eventsSent)
+          setSimulatedTime(new Date(simStart + t * 1000))
+          appendForwardLine(addLogs, `logsim:   sent ${eventsSent.toLocaleString()} / ${eventsProduced.toLocaleString()} events (tick ${t})`)
+        },
+        onDone: (summary: ForwardSummary) => {
+          appendForwardSummary(addLogs, summary, enabledCribl.name || 'destination')
+          if (enabledCribl) {
+            if (summary.eventsSent > 0) recordSent(enabledCribl.id, summary.eventsSent)
+            if (summary.batchesFailed > 0) {
+              setDestStatus(enabledCribl.id, 'error', `${summary.batchesFailed} batch(es) failed`)
+            } else {
+              setDestStatus(enabledCribl.id, 'idle')
+            }
+          }
+          setTickCount(summary.eventsSent)
+          abortRef.current = null
+          setStatus('idle')
+          setRunStatus('idle')
+        },
+        onError: (err) => {
+          console.error('run forward error:', err)
+          setRunError(err.message)
+          if (enabledCribl) setDestStatus(enabledCribl.id, 'error', err.message)
+          abortRef.current = null
+          setStatus('idle')
+          setRunStatus('idle')
+        },
+      })
+      return
+    }
 
+    // realtime: pace the scrubber 1 tick/sec wall-clock — an 18-min scenario
+    // really takes 18 minutes.
     runStream({
       scenarioYaml: yaml,
       duration: ep.duration,
@@ -434,7 +546,7 @@ export function Topbar() {
       startTimeMs: simStart,
       startTick: 0,
       seed: seedRef.current,
-      paceMs,
+      paceMs: 1000,
       cribl,
       format: outputFormat,
       signal: ctrl.signal,

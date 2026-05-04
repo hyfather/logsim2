@@ -7,7 +7,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
+
+	"github.com/nikhilm/logsim2/pkg/apihelp"
 )
 
 // loadTestScenario returns a YAML-on-disk scenario the api can parse end to end.
@@ -105,5 +108,142 @@ func TestHandler_PartialFrameWhenBudgetExhausted(t *testing.T) {
 	}
 	if _, hasDone := last["done"]; hasDone {
 		t.Errorf("partial frame should not also carry done; got %v", last)
+	}
+}
+
+// Forward mode without a destination is a 400 — there's nowhere to send.
+func TestHandler_ForwardRequiresDestination(t *testing.T) {
+	yaml := loadTestScenario(t)
+	body, _ := json.Marshal(Request{
+		ScenarioYAML:   yaml,
+		Duration:       5,
+		TickIntervalMs: 1000,
+		Mode:           "forward",
+	})
+	r := httptest.NewRequest(http.MethodPost, "/api/run", strings.NewReader(string(body)))
+	r.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	Handler(rec, r)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d (body=%s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "destination") {
+		t.Errorf("error body should mention destination requirement, got %q", rec.Body.String())
+	}
+}
+
+// Forward mode posts every batch to the configured HEC endpoint and emits a
+// progress trace + closing summary. We stub HEC with an httptest server,
+// run a small scenario, and verify the response contains start/post/done
+// frames with consistent counts.
+func TestHandler_ForwardEndToEnd(t *testing.T) {
+	var hits int32
+	hec := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer hec.Close()
+
+	yaml := loadTestScenario(t)
+	frames := post(t, Request{
+		ScenarioYAML:   yaml,
+		Duration:       10,
+		TickIntervalMs: 1000,
+		Seed:           42,
+		Mode:           "forward",
+		Cribl: &apihelp.CriblConfig{
+			Enabled: true,
+			URL:     hec.URL,
+			Token:   "test-token",
+		},
+	})
+
+	if len(frames) < 2 {
+		t.Fatalf("expected at least start+done, got %d frames", len(frames))
+	}
+	if frames[0]["type"] != "start" {
+		t.Errorf("first frame should be start, got %v", frames[0])
+	}
+	last := frames[len(frames)-1]
+	if last["type"] != "done" {
+		t.Fatalf("last frame should be done, got %v", last)
+	}
+	produced := int(last["events_produced"].(float64))
+	sent := int(last["events_sent"].(float64))
+	if produced == 0 {
+		t.Errorf("expected non-zero events_produced, got %d", produced)
+	}
+	if sent != produced {
+		t.Errorf("events_sent (%d) should equal events_produced (%d) when no batches fail", sent, produced)
+	}
+	if int(last["batches_failed"].(float64)) != 0 {
+		t.Errorf("expected zero failed batches against a 200-OK stub, got %v", last["batches_failed"])
+	}
+	bySource, ok := last["by_source"].(map[string]any)
+	if !ok || len(bySource) == 0 {
+		t.Errorf("by_source should be populated, got %v", last["by_source"])
+	}
+	// At least one POST must have hit the stub.
+	if atomic.LoadInt32(&hits) == 0 {
+		t.Errorf("expected the HEC stub to receive at least one POST")
+	}
+	// At least one post-frame should have arrived between start and done.
+	sawPost := false
+	for _, f := range frames[1 : len(frames)-1] {
+		if f["type"] == "post" {
+			sawPost = true
+			if _, hasStatus := f["status"]; !hasStatus {
+				t.Errorf("post frame missing status field: %v", f)
+			}
+		}
+	}
+	if !sawPost {
+		t.Errorf("expected at least one post frame in the stream")
+	}
+}
+
+// Forward mode reports HEC failures: if the destination returns 4xx, the
+// sink drops the batch and the summary's batches_failed counter advances.
+func TestHandler_ForwardSurfacesHECFailures(t *testing.T) {
+	hec := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer hec.Close()
+
+	yaml := loadTestScenario(t)
+	frames := post(t, Request{
+		ScenarioYAML:   yaml,
+		Duration:       5,
+		TickIntervalMs: 1000,
+		Seed:           42,
+		Mode:           "forward",
+		Cribl: &apihelp.CriblConfig{
+			Enabled: true,
+			URL:     hec.URL,
+			Token:   "bad-token",
+		},
+	})
+
+	last := frames[len(frames)-1]
+	if last["type"] != "done" {
+		t.Fatalf("last frame should be done even when batches fail, got %v", last)
+	}
+	failed := int(last["batches_failed"].(float64))
+	if failed == 0 {
+		t.Errorf("expected at least one failed batch against a 401 stub, got %d", failed)
+	}
+	// Some post frame should carry an err / non-2xx status.
+	sawErr := false
+	for _, f := range frames {
+		if f["type"] != "post" {
+			continue
+		}
+		if _, hasErr := f["err"]; hasErr {
+			sawErr = true
+			break
+		}
+	}
+	if !sawErr {
+		t.Errorf("expected at least one post frame with err set")
 	}
 }
