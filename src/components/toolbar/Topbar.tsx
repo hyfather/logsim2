@@ -38,7 +38,7 @@ import { Switch } from '@/components/ui/switch'
 import { useScenarioStore } from '@/store/useScenarioStore'
 import { useUIStore } from '@/store/useUIStore'
 import { useEpisodeStore } from '@/store/useEpisodeStore'
-import { useSimulationStore } from '@/store/useSimulationStore'
+import { useSimulationStore, type PlaybackMode } from '@/store/useSimulationStore'
 import { useDestinationsStore } from '@/store/useDestinationsStore'
 import { useScenarioLibraryStore, type SavedScenario } from '@/store/useScenarioLibraryStore'
 import { DESTINATION_TYPE_META } from '@/types/destinations'
@@ -130,7 +130,8 @@ export function Topbar() {
   const setRunStatus = useEpisodeStore(s => s.setRunStatus)
   const {
     status,
-    speed,
+    playbackMode,
+    setPlaybackMode,
     tickCount,
     setStatus,
     setTickCount,
@@ -389,7 +390,7 @@ export function Topbar() {
     abortRef.current = null
   }, [])
 
-  const startPlayback = useCallback((nextSpeed: number) => {
+  const startPlayback = useCallback((mode: PlaybackMode) => {
     if (status === 'running') return
     // Right rail is shared between chat and logs. Run swaps it back to logs
     // and forces the panel open so the user actually sees output stream in.
@@ -421,6 +422,11 @@ export function Topbar() {
     const ctrl = new AbortController()
     abortRef.current = ctrl
 
+    // realtime: pace the scrubber 1 tick/sec wall-clock — an 18-min scenario
+    // really takes 18 minutes. fast: 0 = no pacing, the engine streams flat
+    // out and forwarding (if configured) ships at the end.
+    const paceMs = mode === 'realtime' ? 1000 : 0
+
     runStream({
       scenarioYaml: yaml,
       duration: ep.duration,
@@ -428,10 +434,7 @@ export function Topbar() {
       startTimeMs: simStart,
       startTick: 0,
       seed: seedRef.current,
-      // Run the engine flat-out server-side and pace the scrubber on the
-      // client. Vercel Functions buffer the streaming response, so server-
-      // side pacing would produce no visible motion until the function ends.
-      paceMs: nextSpeed > 0 ? Math.max(16, Math.round(1000 / nextSpeed)) : 0,
+      paceMs,
       cribl,
       format: outputFormat,
       signal: ctrl.signal,
@@ -470,8 +473,8 @@ export function Topbar() {
 
   const handlePlayPause = useCallback(() => {
     if (status === 'running') stopPlayback()
-    else startPlayback(speed)
-  }, [speed, startPlayback, status, stopPlayback])
+    else startPlayback(playbackMode)
+  }, [playbackMode, startPlayback, status, stopPlayback])
 
   const handleStep = useCallback(async () => {
     if (status === 'running') return
@@ -927,12 +930,18 @@ export function Topbar() {
             type="button"
             onClick={handlePlayPause}
             className={cn(
-              'inline-flex h-full items-center gap-1.5 px-3 text-[12px] font-medium transition-colors',
+              'inline-flex h-full items-center gap-1.5 pl-3 pr-2 text-[12px] font-medium transition-colors',
               isRunning
                 ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
                 : 'text-slate-700 hover:bg-slate-50',
             )}
-            title={isRunning ? 'Pause simulation' : 'Run simulation'}
+            title={
+              isRunning
+                ? 'Pause simulation'
+                : playbackMode === 'fast'
+                  ? 'Run as fast as possible — forwards all events to the destination at the end'
+                  : 'Run in real time — an N-tick scenario takes N seconds'
+            }
           >
             {isRunning ? (
               <>
@@ -946,10 +955,58 @@ export function Topbar() {
             ) : (
               <>
                 <Play className="h-3.5 w-3.5 fill-current" />
-                <span className="hidden sm:inline">Run</span>
+                <span className="hidden sm:inline">
+                  {playbackMode === 'fast' ? 'Run fast' : 'Run'}
+                </span>
               </>
             )}
           </button>
+          {!isRunning && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="inline-flex h-full w-6 items-center justify-center border-l border-slate-200 text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-900"
+                  title="Choose playback mode"
+                >
+                  <ChevronDown className="h-3 w-3" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-64 text-xs">
+                <DropdownMenuLabel className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                  Playback mode
+                </DropdownMenuLabel>
+                <DropdownMenuItem
+                  className="cursor-pointer flex-col items-start gap-0.5 py-2"
+                  onClick={() => setPlaybackMode('realtime')}
+                >
+                  <span className="flex w-full items-center gap-1.5">
+                    {playbackMode === 'realtime' && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />}
+                    <span className={cn('font-medium', playbackMode === 'realtime' ? 'text-slate-900' : 'text-slate-700')}>
+                      Real time
+                    </span>
+                  </span>
+                  <span className="pl-3 text-[11px] text-slate-500">
+                    Scrubber moves at 1 tick/sec — an 18-min scenario takes 18 minutes.
+                  </span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="cursor-pointer flex-col items-start gap-0.5 py-2"
+                  onClick={() => setPlaybackMode('fast')}
+                >
+                  <span className="flex w-full items-center gap-1.5">
+                    {playbackMode === 'fast' && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />}
+                    <span className={cn('font-medium', playbackMode === 'fast' ? 'text-slate-900' : 'text-slate-700')}>
+                      Fast
+                    </span>
+                  </span>
+                  <span className="pl-3 text-[11px] text-slate-500">
+                    Stream every frame as fast as possible; forwarded events ship at the end.
+                  </span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
 
         {/* Export primary */}

@@ -4,6 +4,12 @@ import type { LogEntry, LogFilter, LogFormat } from '@/types/logs'
 import type { ConnectionActivity } from '@/types/connections'
 
 export type SimulationStatus = 'idle' | 'running'
+/** 'realtime' paces the scrubber 1 tick/sec wall-clock so an N-tick scenario
+ *  takes N seconds — an 18-min episode plays out over 18 wall-clock minutes.
+ *  'fast' streams every frame as quickly as the engine can produce it; useful
+ *  when forwarding to a destination, since the run finishes in a few seconds
+ *  and the cribl batch ships at the end. */
+export type PlaybackMode = 'realtime' | 'fast'
 
 const MAX_LOG_BUFFER = 50000
 
@@ -11,6 +17,8 @@ interface SimulationState {
   status: SimulationStatus
   tickCount: number
   speed: number // ticks per second
+  /** How `Run` paces the scrubber — see PlaybackMode. */
+  playbackMode: PlaybackMode
   simulatedTime: Date
   logBuffer: LogEntry[]
   activeConnections: Record<string, ConnectionActivity>
@@ -28,6 +36,7 @@ interface SimulationState {
   // Actions
   setStatus: (status: SimulationStatus) => void
   setSpeed: (speed: number) => void
+  setPlaybackMode: (mode: PlaybackMode) => void
   setTickCount: (count: number) => void
   setSimulatedTime: (time: Date) => void
   addLogs: (logs: LogEntry[]) => void
@@ -47,6 +56,7 @@ export const useSimulationStore = create<SimulationState>()((set) => ({
   status: 'idle',
   tickCount: 0,
   speed: 1,
+  playbackMode: 'realtime',
   simulatedTime: new Date(),
   logBuffer: [],
   activeConnections: {},
@@ -65,6 +75,7 @@ export const useSimulationStore = create<SimulationState>()((set) => ({
 
   setStatus: (status) => set({ status }),
   setSpeed: (speed) => set({ speed }),
+  setPlaybackMode: (playbackMode) => set({ playbackMode }),
   setTickCount: (tickCount) => set({ tickCount }),
   setSimulatedTime: (simulatedTime) => set({ simulatedTime }),
 
