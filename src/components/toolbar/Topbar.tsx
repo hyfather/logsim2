@@ -152,7 +152,14 @@ export function Topbar() {
   } = useDestinationsStore()
 
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const titleInputRef = useRef<HTMLInputElement>(null)
+  const titleInputRef = useRef<HTMLInputElement | null>(null)
+  // The scenario name renders inline on desktop and on a second row on mobile;
+  // the visible input wins the ref so focus targets the right element.
+  const setTitleInputRef = useCallback((el: HTMLInputElement | null) => {
+    if (el && el.offsetParent !== null) {
+      titleInputRef.current = el
+    }
+  }, [])
 
   const [draftName, setDraftName] = useState(metadata.name)
   const [editingTitle, setEditingTitle] = useState(false)
@@ -566,7 +573,32 @@ export function Topbar() {
         ? enabledDests[0].name
         : `${enabledDests.length} destinations`
 
+  const scenarioNameEditor = editingTitle ? (
+    <input
+      ref={setTitleInputRef}
+      value={draftName}
+      onChange={e => setDraftName(e.target.value)}
+      onBlur={e => commitName(e.target.value)}
+      onKeyDown={e => {
+        if (e.key === 'Enter') commitName(draftName)
+        if (e.key === 'Escape') { setDraftName(metadata.name); setEditingTitle(false) }
+      }}
+      className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-[13px] font-medium text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+    />
+  ) : (
+    <button
+      type="button"
+      onClick={() => setEditingTitle(true)}
+      className="group/name flex min-w-0 flex-1 items-center gap-1.5 truncate rounded-md px-2 py-1 text-left text-[13px] font-medium text-slate-900 transition-colors hover:bg-slate-100"
+      title="Rename scenario"
+    >
+      <span className="truncate">{metadata.name}</span>
+      <Pencil className="h-3 w-3 shrink-0 text-slate-400 opacity-0 transition-opacity group-hover/name:opacity-100" />
+    </button>
+  )
+
   return (
+    <>
     <div className="flex h-12 shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-3 sm:px-4">
       {/* LEFT: brand + scenarios menu + scenario name */}
       <div className="flex min-w-0 flex-1 items-center gap-2.5">
@@ -778,31 +810,9 @@ export function Topbar() {
         {/* Subtle separator */}
         <span className="hidden h-4 w-px bg-slate-200 sm:inline-block" aria-hidden />
 
-        {/* Scenario name */}
-        <div className="flex min-w-0 items-center">
-          {editingTitle ? (
-            <input
-              ref={titleInputRef}
-              value={draftName}
-              onChange={e => setDraftName(e.target.value)}
-              onBlur={e => commitName(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter') commitName(draftName)
-                if (e.key === 'Escape') { setDraftName(metadata.name); setEditingTitle(false) }
-              }}
-              className="min-w-0 rounded-md border border-slate-300 bg-white px-2 py-1 text-[13px] font-medium text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-            />
-          ) : (
-            <button
-              type="button"
-              onClick={() => setEditingTitle(true)}
-              className="group/name flex min-w-0 items-center gap-1.5 truncate rounded-md px-2 py-1 text-[13px] font-medium text-slate-900 transition-colors hover:bg-slate-100"
-              title="Rename scenario"
-            >
-              <span className="truncate">{metadata.name}</span>
-              <Pencil className="h-3 w-3 shrink-0 text-slate-400 opacity-0 transition-opacity group-hover/name:opacity-100" />
-            </button>
-          )}
+        {/* Scenario name (inline on desktop; mobile renders it on a second row below) */}
+        <div className="hidden min-w-0 items-center sm:flex">
+          {scenarioNameEditor}
         </div>
       </div>
 
@@ -990,6 +1000,36 @@ export function Topbar() {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+    </div>
+
+    {/* Mobile-only second row: scenario name (hidden on sm+ where it sits inline) */}
+    <div className="flex h-10 shrink-0 items-center gap-2 border-b border-slate-200 bg-slate-50/70 px-3 sm:hidden">
+      <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Scenario</span>
+      <span className="h-3 w-px bg-slate-300" aria-hidden />
+      {editingTitle ? (
+        <input
+          ref={setTitleInputRef}
+          value={draftName}
+          onChange={e => setDraftName(e.target.value)}
+          onBlur={e => commitName(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') commitName(draftName)
+            if (e.key === 'Escape') { setDraftName(metadata.name); setEditingTitle(false) }
+          }}
+          className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 py-0.5 text-[13px] font-medium text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => setEditingTitle(true)}
+          className="flex min-w-0 flex-1 items-center justify-between gap-2 text-left"
+          title="Rename scenario"
+        >
+          <span className="truncate text-[13px] font-medium text-slate-900">{metadata.name}</span>
+          <Pencil className="h-3 w-3 shrink-0 text-slate-400" />
+        </button>
+      )}
+    </div>
 
       {/* hidden file input */}
       <input ref={fileInputRef} type="file" accept=".json,.logsim.json" className="hidden" onChange={handleScenarioFileChange} />
@@ -1060,7 +1100,7 @@ export function Topbar() {
           </div>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   )
 }
 
