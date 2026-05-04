@@ -65,10 +65,7 @@ func buildOTEL(e *event.LogEntry) map[string]any {
 				},
 				"scopeLogs": []any{
 					map[string]any{
-						"scope": map[string]any{
-							"name":    "logsim",
-							"version": "1.0.0",
-						},
+						"scope":      map[string]any{},
 						"logRecords": []any{record},
 					},
 				},
@@ -91,13 +88,7 @@ func otelBody(e *event.LogEntry) map[string]any {
 // (https://opentelemetry.io/docs/specs/semconv/). Unknown classes still emit
 // the raw Fields under flat keys so the data isn't lost.
 func otelAttributes(e *event.LogEntry) []any {
-	attrs := []any{
-		otelKV("log.source", e.Source),
-		otelKV("log.sourcetype", e.Sourcetype),
-	}
-	if e.ID != "" {
-		attrs = append(attrs, otelKV("log.record.uid", e.ID))
-	}
+	attrs := []any{}
 
 	switch e.Class {
 	case ClassHTTPActivity:
@@ -122,12 +113,13 @@ func otelAttributes(e *event.LogEntry) []any {
 // level so a collector groups records by emitter as OTLP expects, rather than
 // repeating the same identity on every log line's attributes.
 func otelResourceAttributes(e *event.LogEntry) []any {
-	return []any{
-		otelKV("service.name", firstNonEmpty(e.Source, "logsim")),
-		otelKV("service.namespace", "logsim"),
-		otelKV("telemetry.sdk.name", "logsim"),
+	attrs := []any{
 		otelKV("telemetry.sdk.language", "go"),
 	}
+	if e.Source != "" {
+		attrs = append([]any{otelKV("service.name", e.Source)}, attrs...)
+	}
+	return attrs
 }
 
 // --- attribute builders for each Class -----------------------------------

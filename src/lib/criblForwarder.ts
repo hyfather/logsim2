@@ -18,7 +18,6 @@ interface HecEvent {
     id: string
     channel: string
     level: string
-    generator: string
   }
 }
 
@@ -36,7 +35,6 @@ function toHecEvent(entry: LogEntry, dest: CriblHecDestination): HecEvent {
       id: entry.id,
       channel: entry.channel,
       level: entry.level,
-      generator: entry.source,
     },
   }
 }
@@ -80,11 +78,11 @@ export async function forwardToHec(logs: LogEntry[], dest: CriblHecDestination):
 export async function testHecConnection(dest: CriblHecDestination): Promise<void> {
   const testEvent = JSON.stringify({
     time: Date.now() / 1000,
-    host: 'logsim-test',
-    source: dest.source || 'logsim-test',
-    sourcetype: dest.sourcetype || 'logsim:test',
-    event: 'LogSim connectivity test',
-    fields: { level: 'INFO', generator: 'logsim-test' },
+    host: 'connectivity-test',
+    source: dest.source || 'connectivity-test',
+    sourcetype: dest.sourcetype || 'connectivity:test',
+    event: 'connectivity test',
+    fields: { level: 'INFO' },
   })
   await postViaProxy(testEvent, dest)
 }

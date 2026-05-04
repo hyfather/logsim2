@@ -177,12 +177,12 @@ func (s *CriblSink) post(body []byte) error {
 //     with the schema-mapped JSON object so the consumer sees structured data.
 //   - host:       the hierarchical channel (origin node path)
 //   - source:     same channel (overridable by a Cribl/Splunk pipeline)
-//   - sourcetype: mapped from the generator kind to vendor:product:type form
-//     (mysql → mysql:query, nginx → nginx:access, …) so Splunk
-//     picks the right parser per log family. OCSF events use "ocsf:1.4:json"
-//     so Splunk routes them to a schema-aware index.
-//   - fields:     indexed metadata (id, level, channel, generator) — searchable
-//     without cluttering _raw
+//   - sourcetype: mapped to vendor:product:type form (mysql → mysql:query,
+//     nginx → nginx:access, …) so Splunk picks the right parser per log
+//     family. OCSF events use "ocsf:1.4:json" so Splunk routes them to a
+//     schema-aware index.
+//   - fields:     indexed metadata (id, level, channel) — searchable without
+//     cluttering _raw
 func encodeBatch(batch []event.LogEntry, format Format) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -194,10 +194,9 @@ func encodeBatch(batch []event.LogEntry, format Format) ([]byte, error) {
 	for i := range batch {
 		e := &batch[i]
 		fields := map[string]any{
-			"id":        e.ID,
-			"level":     e.Level,
-			"channel":   e.Source,
-			"generator": e.Sourcetype,
+			"id":      e.ID,
+			"level":   e.Level,
+			"channel": e.Source,
 		}
 		for k, v := range e.Fields {
 			fields[k] = v
@@ -249,7 +248,7 @@ func schemaSourcetype(f Format) string {
 	case FormatASIM:
 		return "asim:json"
 	default:
-		return "logsim:json"
+		return ""
 	}
 }
 

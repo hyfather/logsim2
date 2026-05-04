@@ -312,7 +312,7 @@ func probeHEC(ctx context.Context, d config.Destination) error {
 		ctx = context.Background()
 	}
 	body := []byte(fmt.Sprintf(
-		`{"time":%d,"host":"logsim-cli","source":"logsim:test","sourcetype":"logsim:test","event":"logsim destinations test probe"}`+"\n",
+		`{"time":%d,"host":"connectivity-test","source":"connectivity-test","sourcetype":"connectivity:test","event":"destination connectivity probe"}`+"\n",
 		time.Now().Unix(),
 	))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.URL, bytes.NewReader(body))

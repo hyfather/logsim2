@@ -68,9 +68,9 @@ func (s *Server) handleTestDestination(w http.ResponseWriter, r *http.Request) {
 	defer sink.Close()
 
 	testEntry := event.LogEntry{
-		ID:         "logsim-test",
-		Sourcetype: "logsim",
-		Raw:        "logsim connectivity test",
+		ID:         "connectivity-test",
+		Sourcetype: "connectivity-test",
+		Raw:        "destination connectivity probe",
 		Fields:     map[string]any{"test": true},
 	}
 	if err := sink.Write([]event.LogEntry{testEntry}); err != nil {
