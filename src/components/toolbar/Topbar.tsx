@@ -599,7 +599,7 @@ export function Topbar() {
 
   return (
     <>
-    <div className="flex h-12 shrink-0 items-center gap-3 border-slate-200 bg-white px-3 sm:border-b sm:px-4">
+    <div className="flex h-12 shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-3 sm:px-4">
       {/* LEFT: brand + scenarios menu + scenario name */}
       <div className="flex min-w-0 flex-1 items-center gap-2.5">
         {/* Brand: LogSim2 — opens About / GitHub menu */}
@@ -1003,8 +1003,32 @@ export function Topbar() {
     </div>
 
     {/* Mobile-only second row: scenario name (hidden on sm+ where it sits inline) */}
-    <div className="flex h-9 shrink-0 items-center border-b border-slate-200 bg-white px-3 sm:hidden">
-      {scenarioNameEditor}
+    <div className="flex h-10 shrink-0 items-center gap-2 border-b border-slate-200 bg-slate-50/70 px-3 sm:hidden">
+      <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Scenario</span>
+      <span className="h-3 w-px bg-slate-300" aria-hidden />
+      {editingTitle ? (
+        <input
+          ref={setTitleInputRef}
+          value={draftName}
+          onChange={e => setDraftName(e.target.value)}
+          onBlur={e => commitName(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') commitName(draftName)
+            if (e.key === 'Escape') { setDraftName(metadata.name); setEditingTitle(false) }
+          }}
+          className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 py-0.5 text-[13px] font-medium text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => setEditingTitle(true)}
+          className="flex min-w-0 flex-1 items-center justify-between gap-2 text-left"
+          title="Rename scenario"
+        >
+          <span className="truncate text-[13px] font-medium text-slate-900">{metadata.name}</span>
+          <Pencil className="h-3 w-3 shrink-0 text-slate-400" />
+        </button>
+      )}
     </div>
 
       {/* hidden file input */}
