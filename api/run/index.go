@@ -7,6 +7,7 @@ package run
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -24,6 +25,21 @@ import (
 // a worker indefinitely. 600 ticks at 1s ticks is 10 simulated minutes — more
 // than enough for the timeline UI's typical episode lengths.
 const maxTicksPerRunRequest = 600
+
+// maxResponseBytes is a soft cap on a single /api/run NDJSON response.
+// Vercel's function runtime rejects (with HTTP 413) responses larger than
+// ~4.5 MiB even when the handler streams them — the platform buffers the
+// whole body before returning to the edge. We stop early at 3 MiB so the
+// closing "partial" frame plus envelope overhead still fits comfortably.
+//
+// var (not const) so tests can shrink the budget to exercise the
+// partial-frame path against small fixtures.
+var maxResponseBytes int64 = 3 << 20
+
+// errBudgetExceeded is the sentinel streamSink returns when the NDJSON body
+// passes maxResponseBytes. The handler catches it and emits a partial frame
+// so the client can resume the run from the next tick.
+var errBudgetExceeded = errors.New("response byte budget exceeded")
 
 // Request streams logs for an entire episode. duration and tick_interval_ms
 // are read from the request first, then from the scenario YAML as fallback.
@@ -122,7 +138,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 
 	flusher, _ := w.(http.Flusher)
-	enc := json.NewEncoder(w)
+	counter := &byteCounter{w: w}
+	enc := json.NewEncoder(counter)
 	enc.SetEscapeHTML(false)
 
 	startTick := req.StartTick
@@ -144,17 +161,30 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	stream := &streamSink{
 		enc:     enc,
 		flusher: flusher,
+		counter: counter,
+		budget:  maxResponseBytes,
 		start:   start,
 		tickMs:  tickInterval,
 		tick:    startTick,
 		format:  encoders.Parse(req.Format),
 	}
 
-	if err := eng.Run(r.Context(), duration, []sinks.Sink{stream}); err != nil {
-		_ = enc.Encode(map[string]any{"error": err.Error()})
+	runErr := eng.Run(r.Context(), duration, []sinks.Sink{stream})
+	switch {
+	case errors.Is(runErr, errBudgetExceeded):
+		// Stopped early to stay under Vercel's response cap. Tell the
+		// client where to resume so the next chunk picks up cleanly.
+		_ = enc.Encode(map[string]any{
+			"partial":    true,
+			"next_tick":  stream.tick,
+			"total_logs": stream.total,
+		})
+	case runErr != nil:
+		_ = enc.Encode(map[string]any{"error": runErr.Error()})
 		return
+	default:
+		_ = enc.Encode(map[string]any{"done": true, "total_logs": stream.total})
 	}
-	_ = enc.Encode(map[string]any{"done": true, "total_logs": stream.total})
 	if flusher != nil {
 		flusher.Flush()
 	}
@@ -164,12 +194,27 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// byteCounter wraps the response writer so streamSink can stop the run before
+// the NDJSON body crosses Vercel's response-size threshold.
+type byteCounter struct {
+	w       io.Writer
+	counted int64
+}
+
+func (b *byteCounter) Write(p []byte) (int, error) {
+	n, err := b.w.Write(p)
+	b.counted += int64(n)
+	return n, err
+}
+
 // streamSink emits one NDJSON frame per tick. Engine.Run calls Write once per
 // tick (after sorting that tick's logs by timestamp), which lets the client
 // render incrementally.
 type streamSink struct {
 	enc       *json.Encoder
 	flusher   http.Flusher
+	counter   *byteCounter // monitors NDJSON body size; nil disables the budget
+	budget    int64        // bytes; once counter.counted reaches this, return errBudgetExceeded
 	start     time.Time
 	tickMs    int
 	tick      int
@@ -198,6 +243,12 @@ func (s *streamSink) Write(entries []event.LogEntry) error {
 	s.total += len(entries)
 	if len(entries) > 0 {
 		s.collected = append(s.collected, entries...)
+	}
+	// Bail before the next tick if the response is approaching the
+	// platform cap. The handler converts this sentinel into a partial
+	// frame so the client resumes from s.tick on the next request.
+	if s.counter != nil && s.budget > 0 && s.counter.counted >= s.budget {
+		return errBudgetExceeded
 	}
 	return nil
 }

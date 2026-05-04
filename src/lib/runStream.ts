@@ -44,17 +44,28 @@ interface DoneFrame {
   total_logs: number
 }
 
+interface PartialFrame {
+  partial: true
+  /** Tick index the next chunk should start from (the server bailed before
+   *  emitting this tick). */
+  next_tick: number
+  total_logs?: number
+}
+
 interface ErrorFrame {
   error: string
 }
 
-type Frame = TickFrame | DoneFrame | ErrorFrame
+type Frame = TickFrame | DoneFrame | PartialFrame | ErrorFrame
 
-// Tick window per /api/run request. Vercel's Lambda runtime collects the full
-// response before posting it back and rejects payloads above ~6 MB with a 413.
-// 30 ticks of OCSF-formatted logs comfortably fits; smaller windows just mean
-// more (still cheap) requests.
-const CHUNK_TICKS = 30
+// Tick window per /api/run request. Vercel's Lambda runtime buffers the full
+// response and rejects bodies above ~4.5 MB with HTTP 413. The server now
+// short-circuits at 3 MB and emits a `partial` frame so any one chunk is
+// guaranteed to fit; this client cap is a secondary defense and just keeps
+// per-request work small even on dense scenarios (cache-failure-cascade
+// peaks at ~54 logs/tick — 15 ticks ≈ 800 entries per request, well under
+// the budget). Smaller windows mean more requests, all still cheap.
+const CHUNK_TICKS = 15
 // Pause fetching new chunks once the dispatch queue gets this far ahead of the
 // scrubber, so we don't pile up megabytes of buffered frames at slow paces.
 const QUEUE_HIGH_WATERMARK = CHUNK_TICKS * 4
@@ -112,9 +123,19 @@ export async function runStream(opts: RunStreamOpts): Promise<void> {
     }, paceMs)
   }
 
+  // resumeFrom is set by a partial frame from the server when it bails
+  // before reaching the requested chunkEnd (Vercel response-size guard).
+  // The main loop reads it after each fetchChunk to advance the cursor.
+  let resumeFrom: number | null = null
+
   const handleFrame = (frame: Frame) => {
     if ('error' in frame) {
       fail(new Error(frame.error))
+      return
+    }
+    if ('partial' in frame) {
+      resumeFrom = frame.next_tick
+      totalLogs += frame.total_logs ?? 0
       return
     }
     if ('done' in frame) {
@@ -194,8 +215,16 @@ export async function runStream(opts: RunStreamOpts): Promise<void> {
 
       const chunkEnd = Math.min(cursor + CHUNK_TICKS, totalDuration)
       const isLast = chunkEnd >= totalDuration
+      resumeFrom = null
       await fetchChunk(cursor, chunkEnd, isLast)
-      cursor = chunkEnd
+      // If the server bailed early to stay under the response cap, resume
+      // from the tick it pointed at; otherwise advance to the chunk's end.
+      // Guard against a no-progress loop (server returns next_tick <= cursor).
+      if (resumeFrom !== null && resumeFrom > cursor) {
+        cursor = resumeFrom
+      } else {
+        cursor = chunkEnd
+      }
     }
   } catch (err) {
     if ((err as Error).name === 'AbortError') return
