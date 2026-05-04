@@ -12,7 +12,9 @@ import (
 func ForDestination(d *config.Destination) (Sink, error) {
 	switch d.Type {
 	case config.DestinationTypeCribl:
-		return NewCriblWithFormat(d.URL, d.Token, d.BatchSize, d.FlushInterval, Format(d.Format)), nil
+		c := NewCriblWithFormat(d.URL, d.Token, d.BatchSize, d.FlushInterval, Format(d.Format))
+		c.SetName(d.Name)
+		return c, nil
 	default:
 		return nil, fmt.Errorf("unknown destination type %q", d.Type)
 	}

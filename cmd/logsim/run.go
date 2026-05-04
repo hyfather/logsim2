@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -72,12 +74,18 @@ path, an http(s) URL, or a bare catalog slug (see ` + "`logsim list`" + `). Slug
 resolve to ` + scenario.DefaultBaseURL + `/s/<slug>.yaml; remote scenarios are
 fetched, capped at 4 MiB, and parsed exactly like local files.
 
+By default, Run plays the entire scenario — every tick declared by
+` + "`duration:`" + ` in the YAML, at the cadence in ` + "`tick_interval_ms:`" + `. Pass --ticks
+to truncate, or --tick-interval to override pacing.
+
 Stdout is the default — pipe or redirect as you like. Pass -o/--out to write
 to a file (or "-" for stdout), or --to to forward to one or more named
-destinations from the dotfile (which is entirely optional).
+destinations. With --to, Run does NOT print log lines; it streams the
+forwarding status (POST → status code, batch size, latency) to stderr and
+finishes with a one-line confirmation listing events sent per destination.
 
 Examples:
-  # stdout (default) — pipe into anything
+  # play the whole scenario to stdout (full duration from the YAML)
   logsim run scenarios/web-service.yaml | jq .
 
   # run a catalog scenario by slug — see ` + "`logsim list`" + ` for the full set
@@ -85,6 +93,9 @@ Examples:
 
   # or pass the URL explicitly
   logsim run https://logsim2.vercel.app/s/db-slowdown-cascade.yaml
+
+  # truncate to a sample
+  logsim run cache-failure-cascade --ticks 60
 
   # emit OCSF or OTEL to stdout
   logsim run scenarios/web-service.yaml --ocsf
@@ -94,9 +105,9 @@ Examples:
   logsim run scenarios/web-service.yaml -o /tmp/logs.jsonl
   logsim run scenarios/web-service.yaml -o /tmp/logs.ocsf.json
 
-  # forward to a configured destination (opt-in via --to)
-  logsim run scenarios/web-service.yaml --to prod-cribl
-  logsim run scenarios/web-service.yaml --to all
+  # forward to a configured destination — prints HEC status, not log lines
+  logsim run cache-failure-cascade --to prod-cribl
+  logsim run cache-failure-cascade --to all
 
   # forward and keep a local copy
   logsim run scenarios/web-service.yaml --to prod-cribl -o ./trace.jsonl`,
@@ -148,10 +159,16 @@ Examples:
 				return fmt.Errorf("scenario: %w", err)
 			}
 
-			interval, err := time.ParseDuration(tickInterval)
+			// Tick interval: explicit flag wins, then scenario.tick_interval_ms,
+			// then a 1s default. Same shape for total ticks: explicit --ticks wins,
+			// then scenario.duration, then 100. Running the *whole* scenario by
+			// default — not a 100-tick stub — is what users expect when they say
+			// `logsim run <slug>`.
+			intervalMs, err := resolveTickIntervalMs(tickInterval, cmd.Flags().Changed("tick-interval"), s.TickIntervalMs)
 			if err != nil {
-				return fmt.Errorf("--tick-interval: %w", err)
+				return err
 			}
+			totalTicks := resolveTicks(ticks, cmd.Flags().Changed("ticks"), s.Duration)
 
 			if seed == 0 {
 				seed = rand.New(rand.NewSource(time.Now().UnixNano())).Int63()
@@ -160,7 +177,7 @@ Examples:
 			cfg := engine.Config{
 				Seed:           seed,
 				StartTime:      time.Now(),
-				TickIntervalMs: int(interval.Milliseconds()),
+				TickIntervalMs: intervalMs,
 				Rate:           rate,
 				SourceFilter:   sourceFilter,
 			}
@@ -184,18 +201,34 @@ Examples:
 			if err != nil {
 				return err
 			}
-			defer closeSinks(sinkList)
+			// Close-once guard: the happy path closes sinks explicitly before
+			// summarising (Cribl's partial-batch flush has to fire the observer
+			// before the summary reads its counters), but an early error must
+			// still close. The closure reads `sinkList` lazily so the explicit
+			// close can null it out.
+			defer func() { closeSinks(sinkList) }()
+
+			// When forwarding to destinations, the user wants HEC visibility,
+			// not log lines. attachForwardingReporter wires the per-attempt
+			// observer; Summarize prints the final tally.
+			reporter := attachForwardingReporter(sinkList, cmd.ErrOrStderr(), quiet)
 
 			if !quiet {
-				fmt.Fprintf(os.Stderr, "logsim: running %d ticks for %q (seed=%d)\n", ticks, s.Name, seed)
+				fmt.Fprintf(cmd.ErrOrStderr(), "logsim: running %d ticks for %q (seed=%d)\n", totalTicks, s.Name, seed)
 			}
-			return eng.Run(context.Background(), ticks, sinkList)
+			runErr := eng.Run(context.Background(), totalTicks, sinkList)
+			// Flush the trailing partial batch before reading observer counters
+			// so the summary line reflects every event, including the tail.
+			closeSinks(sinkList)
+			sinkList = nil
+			reporter.Summarize(cmd.ErrOrStderr())
+			return runErr
 		},
 	}
 
 	cmd.Flags().StringVar(&scenarioPath, "scenario", "", "path or http(s) URL of the scenario YAML (or pass it positionally)")
-	cmd.Flags().IntVar(&ticks, "ticks", 100, "number of ticks to emit")
-	cmd.Flags().StringVar(&tickInterval, "tick-interval", "1s", "simulated time per tick")
+	cmd.Flags().IntVar(&ticks, "ticks", 0, "number of ticks to emit (default: scenario duration; falls back to 100)")
+	cmd.Flags().StringVar(&tickInterval, "tick-interval", "", "simulated time per tick (default: scenario tick_interval_ms; falls back to 1s)")
 	cmd.Flags().Float64Var(&rate, "rate", 0, "wall-clock pacing multiplier (0 = instant)")
 
 	// Modern outputs.
@@ -477,5 +510,156 @@ func splitNames(spec string, cfg *config.DestinationsConfig) []string {
 func closeSinks(list []sinks.Sink) {
 	for _, s := range list {
 		_ = s.Close()
+	}
+}
+
+// resolveTicks decides how many ticks the engine should run.
+//
+//	explicit --ticks  → honour it verbatim (lets you sample a long scenario)
+//	scenario.duration → run the entire episode end-to-end
+//	otherwise         → 100, the legacy default
+//
+// "Run the whole scenario" is the default users expect from
+// `logsim run cache-failure-cascade` — anything less truncates the story.
+func resolveTicks(flag int, flagSet bool, scenarioDuration int) int {
+	if flagSet && flag > 0 {
+		return flag
+	}
+	if scenarioDuration > 0 {
+		return scenarioDuration
+	}
+	if flag > 0 { // user passed a non-zero value via --ticks=N (legacy form)
+		return flag
+	}
+	return 100
+}
+
+// resolveTickIntervalMs picks the simulated-time-per-tick value, mirroring
+// resolveTicks: explicit flag wins, then scenario.tick_interval_ms, then 1s.
+func resolveTickIntervalMs(flagVal string, flagSet bool, scenarioMs int) (int, error) {
+	if flagSet && strings.TrimSpace(flagVal) != "" {
+		d, err := time.ParseDuration(flagVal)
+		if err != nil {
+			return 0, fmt.Errorf("--tick-interval: %w", err)
+		}
+		return int(d.Milliseconds()), nil
+	}
+	if scenarioMs > 0 {
+		return scenarioMs, nil
+	}
+	if strings.TrimSpace(flagVal) != "" {
+		d, err := time.ParseDuration(flagVal)
+		if err != nil {
+			return 0, fmt.Errorf("--tick-interval: %w", err)
+		}
+		return int(d.Milliseconds()), nil
+	}
+	return 1000, nil
+}
+
+// forwardingReporter watches every CriblSink in the sink list and, when at
+// least one is present, prints a one-line "POST → <status>" trace per HTTP
+// attempt plus a closing summary listing events sent and any errors.
+//
+// In quiet mode the reporter is inert (callbacks are nil); the engine still
+// forwards normally — only the human-facing chatter is suppressed.
+type forwardingReporter struct {
+	sinks  []*sinks.CriblSink
+	stderr io.Writer
+	quiet  bool
+
+	mu     sync.Mutex
+	errors []string
+}
+
+func attachForwardingReporter(sinkList []sinks.Sink, stderr io.Writer, quiet bool) *forwardingReporter {
+	r := &forwardingReporter{stderr: stderr, quiet: quiet}
+	for _, s := range sinkList {
+		c, ok := s.(*sinks.CriblSink)
+		if !ok {
+			continue
+		}
+		r.sinks = append(r.sinks, c)
+		if !quiet {
+			r.printHeader(c)
+		}
+		c.SetObserver(r.onAttempt)
+	}
+	return r
+}
+
+func (r *forwardingReporter) printHeader(c *sinks.CriblSink) {
+	label := c.Name()
+	if label == "" {
+		fmt.Fprintf(r.stderr, "logsim: forwarding → %s\n", c.URL())
+		return
+	}
+	fmt.Fprintf(r.stderr, "logsim: forwarding → %s (%s)\n", label, c.URL())
+}
+
+func (r *forwardingReporter) onAttempt(res sinks.SendResult) {
+	if !r.quiet {
+		fmt.Fprintln(r.stderr, formatAttempt(res))
+	}
+	if res.Final && res.Err != nil {
+		r.mu.Lock()
+		r.errors = append(r.errors, fmt.Sprintf("%s: %v", res.URL, res.Err))
+		r.mu.Unlock()
+	}
+}
+
+// Summarize prints a closing tally for every CriblSink the reporter is
+// attached to. Always emitted (even in quiet mode) so scripts can grep the
+// final confirmation; quiet mode just suppresses the per-attempt chatter.
+func (r *forwardingReporter) Summarize(w io.Writer) {
+	if len(r.sinks) == 0 {
+		return
+	}
+	for _, c := range r.sinks {
+		label := c.Name()
+		if label == "" {
+			label = c.URL()
+		}
+		events := c.EventsSent()
+		batches := c.BatchesSent()
+		failed := c.BatchesFailed()
+		if failed > 0 {
+			fmt.Fprintf(w, "logsim: sent %d events to %s in %d batches (%d batch(es) failed — see above)\n",
+				events, label, batches, failed)
+			continue
+		}
+		fmt.Fprintf(w, "logsim: sent %d events to %s in %d batches\n", events, label, batches)
+	}
+}
+
+func formatAttempt(r sinks.SendResult) string {
+	took := r.Duration.Round(time.Millisecond)
+	switch {
+	case r.Err == nil:
+		return fmt.Sprintf("logsim:   POST → %d %s (%d events, %s)",
+			r.StatusCode, http.StatusText(r.StatusCode), r.BatchSize, took)
+	case r.StatusCode == 0:
+		// Transport failure — no HTTP response.
+		retry := ""
+		if !r.Final {
+			retry = " — retrying"
+		} else {
+			retry = " — gave up"
+		}
+		return fmt.Sprintf("logsim:   POST → ERR %v (%d events, %s)%s",
+			r.Err, r.BatchSize, took, retry)
+	default:
+		retry := ""
+		if r.Final {
+			if r.StatusCode >= 400 && r.StatusCode < 500 {
+				retry = " — dropped"
+			} else {
+				retry = " — gave up"
+			}
+		} else {
+			retry = " — retrying"
+		}
+		return fmt.Sprintf("logsim:   POST → %d %s (%d events, %s)%s",
+			r.StatusCode, http.StatusText(r.StatusCode), r.BatchSize, took, retry)
 	}
 }
