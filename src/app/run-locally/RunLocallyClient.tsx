@@ -61,13 +61,16 @@ export default function RunLocallyClient({ index }: Props) {
   const installCmd = `curl -fsSL ${INSTALL_URL} | sh`
   const fromSourceCmd = `go install github.com/${REPO_SLUG}/cmd/logsim@latest`
   const verifyCmd = `logsim --help`
-  const featuredUrl = featured ? `${origin}/s/${featured.slug}.yaml` : ''
-  const featuredCmd = featured ? `logsim run ${featuredUrl}` : ''
+  const listCmd = `logsim list`
+  const featuredCmd = featured ? `logsim run ${featured.slug}` : ''
   const featuredOcsf = featured
-    ? `logsim run ${featuredUrl} --ocsf -o ${featured.slug}.ocsf.json`
+    ? `logsim run ${featured.slug} --ocsf -o ${featured.slug}.ocsf.json`
     : ''
+  const destAddCmd = `logsim destinations add`
+  const destListCmd = `logsim destinations list`
+  const destTestCmd = `logsim destinations test prod-cribl`
   const featuredCribl = featured
-    ? `logsim run ${featuredUrl} --to prod-cribl`
+    ? `logsim run ${featured.slug} --to prod-cribl`
     : ''
 
   return (
@@ -116,7 +119,7 @@ export default function RunLocallyClient({ index }: Props) {
           </h1>
           <p className="mt-3 max-w-2xl text-[15px] leading-relaxed text-slate-600">
             Install the <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[13px]">logsim</code> binary,
-            then run any built-in scenario by URL — no Vercel, no browser, no copy-paste. Same engine
+            then run any built-in scenario by name — no Vercel, no browser, no copy-paste. Same engine
             that powers the editor canvas, just streaming straight to your terminal, a file, or your SIEM.
           </p>
         </section>
@@ -149,44 +152,89 @@ export default function RunLocallyClient({ index }: Props) {
           </p>
         </Step>
 
-        {/* Step 2 — Verify */}
-        <Step number={2} title="Verify it&rsquo;s on your PATH">
-          <CommandBlock
-            label="Sanity check"
-            command={verifyCmd}
-            hint="Prints the top-level help — `run`, `validate`, `serve`, `destinations`."
-          />
+        {/* Step 2 — CLI at a glance */}
+        <Step number={2} title="The CLI at a glance">
+          <p className="mb-3 text-[13px] leading-relaxed text-slate-600">
+            One binary, six subcommands. Print the top-level help to confirm the binary is on your{' '}
+            <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[12px]">PATH</code>:
+          </p>
+          <CommandBlock label="Top-level help" command={verifyCmd} />
+          <ul className="mt-3 grid gap-1.5 sm:grid-cols-2">
+            <SubcommandItem name="run" desc="Stream a scenario to stdout, a file, or a SIEM." />
+            <SubcommandItem name="list" desc="Print every built-in catalog scenario by slug." />
+            <SubcommandItem name="validate" desc="Lint a scenario YAML before you run it." />
+            <SubcommandItem name="destinations" desc="Add / list / test forwarders (Cribl, Splunk HEC)." />
+            <SubcommandItem name="serve" desc="Run the editor and HTTP API locally." />
+            <SubcommandItem name="upgrade" desc="Self-update to the latest release." />
+          </ul>
+          <p className="mt-3 text-[12px] leading-relaxed text-slate-500">
+            Append <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px]">--help</code> to any
+            subcommand for its full flag list (e.g.{' '}
+            <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px]">logsim run --help</code>).
+          </p>
         </Step>
 
-        {/* Step 3 — Run from a URL */}
-        <Step number={3} title="Run any default scenario by URL">
+        {/* Step 3 — Run by name */}
+        <Step number={3} title="Run any default scenario by name">
           <p className="mb-3 text-[13px] leading-relaxed text-slate-600">
-            Every built-in scenario lives at a short URL pair:{' '}
-            <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[12px]">{origin}/s/&lt;slug&gt;</code>{' '}
-            opens it in the canvas editor,{' '}
+            The CLI ships with the full catalog index baked in. Pass any{' '}
+            <strong className="font-semibold text-slate-800">slug</strong> from{' '}
+            <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[12px]">logsim list</code> and{' '}
+            <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[12px]">run</code> resolves it to{' '}
             <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[12px]">{origin}/s/&lt;slug&gt;.yaml</code>{' '}
-            is the runnable YAML. Hand the YAML URL to{' '}
-            <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[12px]">logsim run</code> and it&rsquo;ll fetch,
-            parse, and stream — no <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[12px]">git clone</code> needed.
+            and streams — no <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[12px]">git clone</code>,
+            no copy-paste. A path or full URL works too if you&rsquo;re bringing your own YAML.
           </p>
+          <CommandBlock
+            label="Browse the catalog"
+            command={listCmd}
+            hint="Prints every slug, title, and category. Add `-q` for slugs only (xargs-friendly)."
+          />
           {featured && (
             <>
               <CommandBlock
                 label={`Quick demo — ${featured.title}`}
                 command={featuredCmd}
-                hint="Fetches the YAML over HTTPS, runs the scenario, prints JSONL to stdout. Ctrl-C to stop."
+                hint="Resolves the slug, fetches the YAML over HTTPS, prints JSONL to stdout. Ctrl-C to stop."
               />
               <CommandBlock
                 label="As OCSF events into a file"
                 command={featuredOcsf}
                 hint="`-o` writes to a file; the .ocsf.json suffix auto-selects --format=ocsf."
               />
-              <CommandBlock
-                label="Forward to a configured destination"
-                command={featuredCribl}
-                hint="Configure once with `logsim destinations add`, then `--to <name>` (or `--to all`)."
-              />
             </>
+          )}
+        </Step>
+
+        {/* Step 4 — Destinations */}
+        <Step number={4} title="Forward to your SIEM">
+          <p className="mb-3 text-[13px] leading-relaxed text-slate-600">
+            Destinations are named forwarders stored in{' '}
+            <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[12px]">~/.config/logsim/destinations.yaml</code>.
+            Add one interactively — the form prompts for type (Cribl Stream, Splunk HEC, …), URL, token, and
+            batch settings — then reference it by name from any{' '}
+            <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[12px]">logsim run</code>.
+          </p>
+          <CommandBlock
+            label="Add a destination (interactive)"
+            command={destAddCmd}
+            hint="Walks you through a Cribl Stream / Splunk HEC config. Pick a short, memorable name like `prod-cribl`."
+          />
+          <CommandBlock
+            label="See what&rsquo;s configured"
+            command={destListCmd}
+            hint="`enable` / `disable` / `remove <name>` round out the lifecycle."
+          />
+          <CommandBlock
+            label="Send a probe event to verify connectivity"
+            command={destTestCmd}
+          />
+          {featured && (
+            <CommandBlock
+              label="Run a scenario and forward by name"
+              command={featuredCribl}
+              hint="`--to` accepts a single name, a comma-separated list, or `all` for every enabled destination."
+            />
           )}
         </Step>
 
@@ -431,7 +479,7 @@ function ScenarioRow({
 }) {
   const url = `${origin}/s/${scenario.slug}.yaml`
   const editorUrl = `/s/${scenario.slug}`
-  const cmd = `logsim run ${url}`
+  const cmd = `logsim run ${scenario.slug}`
   const [expanded, setExpanded] = useState(false)
   return (
     <li>
@@ -473,8 +521,8 @@ function ScenarioRow({
       </button>
       {expanded && (
         <div className="space-y-2 border-t border-slate-100 bg-slate-50/60 px-4 py-3 pl-11">
-          <RowCommand label="URL" command={url} icon={<Globe className="h-3 w-3" />} />
           <RowCommand label="CLI" command={cmd} icon={<Terminal className="h-3 w-3" />} />
+          <RowCommand label="YAML" command={url} icon={<Globe className="h-3 w-3" />} />
           <div className="pt-1">
             <Link
               href={editorUrl}
@@ -532,6 +580,17 @@ function RowCommand({
         {copied ? 'Copied' : 'Copy'}
       </button>
     </div>
+  )
+}
+
+function SubcommandItem({ name, desc }: { name: string; desc: string }) {
+  return (
+    <li className="flex items-baseline gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-1.5">
+      <code className="shrink-0 rounded bg-slate-900 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-slate-100">
+        {name}
+      </code>
+      <span className="text-[12px] leading-snug text-slate-600">{desc}</span>
+    </li>
   )
 }
 
