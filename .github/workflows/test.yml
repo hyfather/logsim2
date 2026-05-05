@@ -1,0 +1,86 @@
+name: Tests
+
+# Runs the Go test suite on every pull request targeting master and on every
+# push to master. Required-status-check: configure branch protection on
+# master to require the `Go tests` job before merging — that's what gates a
+# branch from landing.
+#
+# The `paths-ignore` block keeps doc-only changes from triggering a 90s test
+# run; touching anything that affects the CLI / engine / encoders does.
+
+on:
+  pull_request:
+    branches: [master]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
+  push:
+    branches: [master]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel in-flight runs when a new commit lands on the same PR — avoids
+# burning minutes on stale revisions.
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go-test:
+    name: Go tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        # Build before testing so a broken compile fails fast with a cleaner
+        # error than `go test`'s output.
+        run: go build ./...
+
+      - name: go test (race detector + coverage)
+        # -race catches concurrency bugs in the engine/sink pipeline; the
+        # encoders are pure functions but the sinks (CriblSink) hold mutex
+        # state, so flipping it on across the whole module is cheap insurance.
+        # -count=1 disables the test cache so flake-prone tests are surfaced.
+        run: go test -race -count=1 -coverprofile=coverage.out ./...
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage.out
+          retention-days: 7
+
+  encoder-suite:
+    # Dedicated job that runs ONLY the encoder + pipeline integration tests.
+    # Splitting it out gives the merge gate a fast, focused signal that the
+    # log-generation contract (native, OCSF, OTEL) is intact even when an
+    # unrelated package fails for an unrelated reason. The CLI also powers
+    # the frontend, so this is the test set that protects the UI.
+    name: Encoder pipeline (native / OCSF / OTEL)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run encoder + pipeline tests
+        run: go test -race -count=1 -v ./pkg/encoders/...
