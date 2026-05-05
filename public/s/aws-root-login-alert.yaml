@@ -56,9 +56,17 @@ services:
         to: 540
         state: compromised
         note: rootUser console + AK creation
+        template_weights:
+          iam_baseline_read: 0.30
+          root_console_login: 0.40
+          root_create_access_key: 0.30
       - from: 540
         to: 900
         state: recovering
+        template_weights:
+          iam_baseline_read: 0.50
+          root_password_reset: 0.20
+          root_delete_access_key: 0.30
   - type: custom
     name: aws-billing-console
     host: aws-billing-console-host
@@ -76,6 +84,9 @@ services:
         to: 540
         state: under_attack
         note: anomalous root browse
+        template_weights:
+          billing_baseline_read: 0.20
+          billing_root_browse: 0.80
       - from: 540
         to: 900
         state: healthy
@@ -117,105 +128,324 @@ connections:
 custom_types:
   - id: aws-iam-events
     name: aws-iam
-    description: Generic event log for aws-iam
+    description: CloudTrail-shaped IAM events. Each template carries an OCSF class hint and fields so the encoder emits truthful Authentication / Account Change / API Activity records instead of generic Application Activity.
     default_port: 8080
     default_rate: 5
     placeholders:
       timestamp:
         kind: iso_timestamp
-      level:
-        kind: level
-      message:
+      request_uid:
+        kind: uuid
+      iam_read_op:
+        kind: enum
+        enum_values: [ListUsers, GetUser, ListAccessKeys, ListAttachedUserPolicies, GetAccountSummary, ListRoles, GetRole]
+      employee_user:
+        kind: enum
+        enum_values: [alice, bob, carol, dave, erin]
+      foreign_ip:
+        kind: enum
+        enum_values: [5.34.180.42, 5.34.180.77, 5.34.180.118, 185.220.101.5, 91.219.236.81]
+      foreign_ua:
         kind: enum
         enum_values:
-          - aws-iam request received
-          - aws-iam processed event
-          - aws-iam returned response
+          - Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Firefox/115.0
+          - Mozilla/5.0 (Windows NT 10.0; rv:109.0) Gecko/20100101 Firefox/115.0
     templates:
-      - id: info
-        template: '{{timestamp}} aws-iam [{{level}}] {{message}}'
+      - id: iam_baseline_read
+        template: '{{timestamp}} aws-iam [INFO] eventSource=iam.amazonaws.com eventName={{iam_read_op}} userIdentity.type=IAMUser userIdentity.userName={{employee_user}} requestID={{request_uid}}'
         weight: 0.95
         level: info
+        class: api_activity
+        fields:
+          operation: '{{iam_read_op}}'
+          event_name: '{{iam_read_op}}'
+          service_name: iam.amazonaws.com
+          request_uid: '{{request_uid}}'
+          user_type: IAMUser
+          user_name: '{{employee_user}}'
+          user_account_uid: '111122223333'
+          actor_user_type: IAMUser
+          actor_user_name: '{{employee_user}}'
+          actor_user_uid: 'arn:aws:iam::111122223333:user/{{employee_user}}'
+          actor_account_uid: '111122223333'
+          region: us-east-1
+          cloud_provider: AWS
+          status: Success
+      - id: root_console_login
+        template: '{{timestamp}} aws-iam [INFO] eventSource=signin.amazonaws.com eventName=ConsoleLogin userIdentity.type=Root sourceIPAddress={{foreign_ip}} additionalEventData.MFAUsed=No requestID={{request_uid}}'
+        weight: 0.0
+        level: info
+        class: authentication
+        fields:
+          operation: ConsoleLogin
+          event_name: ConsoleLogin
+          activity_id: 1
+          service_name: signin.amazonaws.com
+          request_uid: '{{request_uid}}'
+          user_type: Root
+          user_name: root
+          user_uid: 'arn:aws:iam::111122223333:root'
+          user_account_uid: '111122223333'
+          actor_user_type: Root
+          actor_user_name: root
+          actor_user_uid: 'arn:aws:iam::111122223333:root'
+          actor_account_uid: '111122223333'
+          src_ip: '{{foreign_ip}}'
+          src_country: TR
+          user_agent: '{{foreign_ua}}'
+          auth_protocol: AWS Console Sign-In
+          logon_type: Interactive
+          is_mfa: false
+          is_remote: true
+          dst_svc_name: signin.amazonaws.com
+          region: us-east-1
+          cloud_provider: AWS
+          status: Success
+      - id: root_create_access_key
+        template: '{{timestamp}} aws-iam [WARN] eventSource=iam.amazonaws.com eventName=CreateAccessKey userIdentity.type=Root sourceIPAddress={{foreign_ip}} requestParameters.userName=root requestID={{request_uid}}'
+        weight: 0.0
+        level: warn
+        class: account_change
+        fields:
+          operation: CreateAccessKey
+          event_name: CreateAccessKey
+          activity_id: 1
+          service_name: iam.amazonaws.com
+          request_uid: '{{request_uid}}'
+          user_type: Root
+          user_name: root
+          user_uid: 'arn:aws:iam::111122223333:root'
+          user_account_uid: '111122223333'
+          actor_user_type: Root
+          actor_user_name: root
+          actor_user_uid: 'arn:aws:iam::111122223333:root'
+          src_ip: '{{foreign_ip}}'
+          src_country: TR
+          user_agent: '{{foreign_ua}}'
+          region: us-east-1
+          cloud_provider: AWS
+          status: Success
+      - id: root_password_reset
+        template: '{{timestamp}} aws-iam [INFO] eventSource=iam.amazonaws.com eventName=UpdateLoginProfile userIdentity.type=Root requestParameters.userName=root passwordResetRequired=true requestID={{request_uid}}'
+        weight: 0.0
+        level: info
+        class: account_change
+        fields:
+          operation: UpdateLoginProfile
+          event_name: UpdateLoginProfile
+          activity_id: 4
+          service_name: iam.amazonaws.com
+          request_uid: '{{request_uid}}'
+          user_type: Root
+          user_name: root
+          user_uid: 'arn:aws:iam::111122223333:root'
+          user_account_uid: '111122223333'
+          actor_user_type: Root
+          actor_user_name: root
+          actor_user_uid: 'arn:aws:iam::111122223333:root'
+          region: us-east-1
+          cloud_provider: AWS
+          status: Success
+      - id: root_delete_access_key
+        template: '{{timestamp}} aws-iam [INFO] eventSource=iam.amazonaws.com eventName=DeleteAccessKey userIdentity.type=Root requestParameters.userName=root requestID={{request_uid}}'
+        weight: 0.0
+        level: info
+        class: account_change
+        fields:
+          operation: DeleteAccessKey
+          event_name: DeleteAccessKey
+          service_name: iam.amazonaws.com
+          request_uid: '{{request_uid}}'
+          user_type: Root
+          user_name: root
+          user_uid: 'arn:aws:iam::111122223333:root'
+          user_account_uid: '111122223333'
+          actor_user_type: Root
+          actor_user_name: root
+          actor_user_uid: 'arn:aws:iam::111122223333:root'
+          region: us-east-1
+          cloud_provider: AWS
+          status: Success
       - id: error
-        template: '{{timestamp}} aws-iam [ERROR] request failed unexpectedly'
+        template: '{{timestamp}} aws-iam [ERROR] eventSource=iam.amazonaws.com errorCode=Throttling errorMessage="Rate exceeded" requestID={{request_uid}}'
         weight: 0.05
         level: error
         is_error: true
+        class: api_activity
+        fields:
+          operation: GetUser
+          event_name: GetUser
+          service_name: iam.amazonaws.com
+          request_uid: '{{request_uid}}'
+          region: us-east-1
+          cloud_provider: AWS
+          status: Failure
   - id: aws-billing-console-events
     name: aws-billing-console
-    description: Generic event log for aws-billing-console
+    description: AWS Billing/Cost Explorer API reads. Mapped to OCSF API Activity (6003) with activity_id=2 (Read).
     default_port: 8080
     default_rate: 5
     placeholders:
       timestamp:
         kind: iso_timestamp
-      level:
-        kind: level
-      message:
+      request_uid:
+        kind: uuid
+      billing_op:
         kind: enum
-        enum_values:
-          - aws-billing-console request received
-          - aws-billing-console processed event
-          - aws-billing-console returned response
+        enum_values: [GetCostAndUsage, GetCostForecast, DescribeBudget, ListTagsForResource]
+      billing_root_op:
+        kind: enum
+        enum_values: [GetCostAndUsage, GetReservationUtilization, ListAccountAliases, GetCostExplorerPreferences, DescribeReportDefinitions, GetSavingsPlansUtilization]
+      employee_user:
+        kind: enum
+        enum_values: [alice, bob, carol, dave, erin]
+      foreign_ip:
+        kind: enum
+        enum_values: [5.34.180.42, 5.34.180.77, 5.34.180.118]
     templates:
-      - id: info
-        template: '{{timestamp}} aws-billing-console [{{level}}] {{message}}'
+      - id: billing_baseline_read
+        template: '{{timestamp}} aws-billing-console [INFO] eventSource=ce.amazonaws.com eventName={{billing_op}} userIdentity.type=IAMUser userIdentity.userName={{employee_user}} requestID={{request_uid}}'
         weight: 0.95
         level: info
+        class: api_activity
+        fields:
+          operation: '{{billing_op}}'
+          event_name: '{{billing_op}}'
+          service_name: ce.amazonaws.com
+          request_uid: '{{request_uid}}'
+          user_type: IAMUser
+          user_name: '{{employee_user}}'
+          user_account_uid: '111122223333'
+          actor_user_type: IAMUser
+          actor_user_name: '{{employee_user}}'
+          actor_user_uid: 'arn:aws:iam::111122223333:user/{{employee_user}}'
+          region: us-east-1
+          cloud_provider: AWS
+          status: Success
+      - id: billing_root_browse
+        template: '{{timestamp}} aws-billing-console [WARN] eventSource=ce.amazonaws.com eventName={{billing_root_op}} userIdentity.type=Root sourceIPAddress={{foreign_ip}} requestID={{request_uid}}'
+        weight: 0.0
+        level: warn
+        class: api_activity
+        fields:
+          operation: '{{billing_root_op}}'
+          event_name: '{{billing_root_op}}'
+          activity_id: 2
+          service_name: ce.amazonaws.com
+          request_uid: '{{request_uid}}'
+          user_type: Root
+          user_name: root
+          user_uid: 'arn:aws:iam::111122223333:root'
+          user_account_uid: '111122223333'
+          actor_user_type: Root
+          actor_user_name: root
+          actor_user_uid: 'arn:aws:iam::111122223333:root'
+          src_ip: '{{foreign_ip}}'
+          src_country: TR
+          region: us-east-1
+          cloud_provider: AWS
+          status: Success
       - id: error
-        template: '{{timestamp}} aws-billing-console [ERROR] request failed unexpectedly'
+        template: '{{timestamp}} aws-billing-console [ERROR] eventSource=ce.amazonaws.com errorCode=AccessDeniedException requestID={{request_uid}}'
         weight: 0.05
         level: error
         is_error: true
+        class: api_activity
+        fields:
+          operation: GetCostAndUsage
+          event_name: GetCostAndUsage
+          service_name: ce.amazonaws.com
+          request_uid: '{{request_uid}}'
+          region: us-east-1
+          cloud_provider: AWS
+          status: Failure
   - id: cloudtrail-firehose-events
     name: cloudtrail-firehose
-    description: Generic event log for cloudtrail-firehose
+    description: Kinesis Data Firehose calls used to fan CloudTrail records out to the audit store. Mapped to OCSF API Activity (6003).
     default_port: 8080
-    default_rate: 5
+    default_rate: 11
     placeholders:
       timestamp:
         kind: iso_timestamp
-      level:
-        kind: level
-      message:
+      request_uid:
+        kind: uuid
+      firehose_op:
         kind: enum
-        enum_values:
-          - cloudtrail-firehose request received
-          - cloudtrail-firehose processed event
-          - cloudtrail-firehose returned response
+        enum_values: [PutRecord, PutRecordBatch, DescribeDeliveryStream]
     templates:
       - id: info
-        template: '{{timestamp}} cloudtrail-firehose [{{level}}] {{message}}'
+        template: '{{timestamp}} cloudtrail-firehose [INFO] eventSource=firehose.amazonaws.com eventName={{firehose_op}} deliveryStreamName=cloudtrail-to-audit requestID={{request_uid}}'
         weight: 0.95
         level: info
+        class: api_activity
+        fields:
+          operation: '{{firehose_op}}'
+          event_name: '{{firehose_op}}'
+          service_name: firehose.amazonaws.com
+          request_uid: '{{request_uid}}'
+          user_type: AWSService
+          user_name: cloudtrail.amazonaws.com
+          actor_user_type: AWSService
+          actor_user_name: cloudtrail.amazonaws.com
+          region: us-east-1
+          cloud_provider: AWS
+          status: Success
       - id: error
-        template: '{{timestamp}} cloudtrail-firehose [ERROR] request failed unexpectedly'
+        template: '{{timestamp}} cloudtrail-firehose [ERROR] eventSource=firehose.amazonaws.com errorCode=ServiceUnavailableException requestID={{request_uid}}'
         weight: 0.05
         level: error
         is_error: true
+        class: api_activity
+        fields:
+          operation: PutRecordBatch
+          event_name: PutRecordBatch
+          service_name: firehose.amazonaws.com
+          request_uid: '{{request_uid}}'
+          region: us-east-1
+          cloud_provider: AWS
+          status: Failure
   - id: siem-collector-events
     name: siem-collector
-    description: Generic event log for siem-collector
+    description: SIEM ingestion API calls that absorb the firehose output. Mapped to OCSF API Activity (6003).
     default_port: 8080
-    default_rate: 5
+    default_rate: 14
     placeholders:
       timestamp:
         kind: iso_timestamp
-      level:
-        kind: level
-      message:
+      request_uid:
+        kind: uuid
+      siem_op:
         kind: enum
-        enum_values:
-          - siem-collector request received
-          - siem-collector processed event
-          - siem-collector returned response
+        enum_values: [PutLogEvents, CreateLogStream, DescribeLogGroups]
     templates:
       - id: info
-        template: '{{timestamp}} siem-collector [{{level}}] {{message}}'
+        template: '{{timestamp}} siem-collector [INFO] eventSource=logs.amazonaws.com eventName={{siem_op}} logGroup=/aws/cloudtrail requestID={{request_uid}}'
         weight: 0.95
         level: info
+        class: api_activity
+        fields:
+          operation: '{{siem_op}}'
+          event_name: '{{siem_op}}'
+          service_name: logs.amazonaws.com
+          request_uid: '{{request_uid}}'
+          user_type: AWSService
+          user_name: firehose.amazonaws.com
+          actor_user_type: AWSService
+          actor_user_name: firehose.amazonaws.com
+          region: us-east-1
+          cloud_provider: AWS
+          status: Success
       - id: error
-        template: '{{timestamp}} siem-collector [ERROR] request failed unexpectedly'
+        template: '{{timestamp}} siem-collector [ERROR] eventSource=logs.amazonaws.com errorCode=ThrottlingException requestID={{request_uid}}'
         weight: 0.05
         level: error
         is_error: true
+        class: api_activity
+        fields:
+          operation: PutLogEvents
+          event_name: PutLogEvents
+          service_name: logs.amazonaws.com
+          request_uid: '{{request_uid}}'
+          region: us-east-1
+          cloud_provider: AWS
+          status: Failure

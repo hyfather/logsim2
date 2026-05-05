@@ -36,6 +36,8 @@ const (
 	ClassDatastoreActivity    = "datastore_activity"
 	ClassApplicationLifecycle = "application_lifecycle"
 	ClassAPIActivity          = "api_activity"
+	ClassAuthentication       = "authentication"
+	ClassAccountChange        = "account_change"
 )
 
 // Encoder produces the byte representation of one LogEntry in a target schema.
