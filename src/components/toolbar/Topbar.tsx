@@ -1187,16 +1187,19 @@ export function Topbar() {
           )}
         </div>
 
-        {/* Export primary */}
+        {/* Export — same neutral chrome as the transport buttons so the
+            toolbar reads as one row of equal-weight actions, not a blue
+            CTA among greys. */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 px-3 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(15,23,42,0.08)] transition-colors hover:bg-blue-700"
+              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-[12px] font-medium text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition-colors hover:bg-slate-50"
               title="Export dataset"
             >
               <Download className="h-3.5 w-3.5" />
               <span className="hidden md:inline">Export</span>
+              <ChevronDown className="h-3 w-3 text-slate-500" />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
