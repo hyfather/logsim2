@@ -8,16 +8,38 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nikhilm/logsim2/pkg/encoders"
 	"github.com/nikhilm/logsim2/pkg/event"
 )
 
+// SendResult describes one HTTP attempt against a HEC endpoint. Observers
+// receive one SendResult per attempt; Attempt is 1-based and increments on
+// retry. Final is true on the terminal attempt for the batch — i.e. either
+// it succeeded or all retries were exhausted.
+type SendResult struct {
+	URL        string
+	BatchSize  int
+	Attempt    int
+	Final      bool
+	StatusCode int           // 0 when no HTTP response was received (transport error)
+	Duration   time.Duration // wall-clock time spent on this attempt
+	Err        error         // nil on success
+}
+
+// SendObserver is invoked once per HTTP attempt. The CLI uses it to print
+// forwarding status; tests use it to assert progress. Observers MUST be
+// goroutine-safe — they're invoked from the sink's caller goroutine plus the
+// background flusher.
+type SendObserver func(SendResult)
+
 // CriblSink posts log batches to a Cribl Stream (or any Splunk-compatible) HEC endpoint.
 // It buffers up to BatchSize events and flushes on size or FlushIntervalMs.
 type CriblSink struct {
 	url           string
+	name          string
 	token         string
 	batchSize     int
 	flushInterval time.Duration
@@ -29,6 +51,14 @@ type CriblSink struct {
 	buf     []event.LogEntry
 	stopCh  chan struct{}
 	stopped bool
+
+	observerMu sync.RWMutex
+	observer   SendObserver
+
+	// Stats counters. Atomics keep observers wait-free.
+	eventsSent    atomic.Int64
+	batchesSent   atomic.Int64 // batches that succeeded
+	batchesFailed atomic.Int64 // batches dropped after all retries
 }
 
 // NewCribl creates a CriblSink. If flushIntervalMs > 0 a background goroutine
@@ -119,6 +149,45 @@ func (s *CriblSink) Close() error {
 	return s.Flush()
 }
 
+// SetObserver installs (or clears) the per-attempt observer. Pass nil to
+// detach. Safe to call concurrently with Write.
+func (s *CriblSink) SetObserver(o SendObserver) {
+	s.observerMu.Lock()
+	s.observer = o
+	s.observerMu.Unlock()
+}
+
+// EventsSent returns the number of events successfully forwarded.
+func (s *CriblSink) EventsSent() int64 { return s.eventsSent.Load() }
+
+// BatchesSent returns the number of batches that were accepted by the HEC
+// endpoint (including those that needed one or more retries).
+func (s *CriblSink) BatchesSent() int64 { return s.batchesSent.Load() }
+
+// BatchesFailed returns the number of batches dropped after exhausting retries
+// or hitting a permanent (4xx) failure.
+func (s *CriblSink) BatchesFailed() int64 { return s.batchesFailed.Load() }
+
+// URL returns the configured HEC endpoint. Used by the CLI for status output.
+func (s *CriblSink) URL() string { return s.url }
+
+// Name returns the friendly destination name (e.g. "prod-cribl"), or "" if
+// the sink wasn't built from a named destination.
+func (s *CriblSink) Name() string { return s.name }
+
+// SetName attaches a friendly name. The registry calls this when the sink is
+// built from a named destination so the CLI can label status output.
+func (s *CriblSink) SetName(name string) { s.name = name }
+
+func (s *CriblSink) notify(r SendResult) {
+	s.observerMu.RLock()
+	o := s.observer
+	s.observerMu.RUnlock()
+	if o != nil {
+		o(r)
+	}
+}
+
 // send POSTs a batch to the HEC endpoint with 3-retry exponential backoff.
 func (s *CriblSink) send(batch []event.LogEntry) error {
 	body, err := encodeBatch(batch, s.format)
@@ -126,47 +195,66 @@ func (s *CriblSink) send(batch []event.LogEntry) error {
 		return fmt.Errorf("encode batch: %w", err)
 	}
 
+	const maxAttempts = 3
 	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
-		if attempt > 0 {
-			time.Sleep(time.Duration(1<<uint(attempt-1)) * time.Second)
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if attempt > 1 {
+			time.Sleep(time.Duration(1<<uint(attempt-2)) * time.Second)
 		}
-		lastErr = s.post(body)
-		if lastErr == nil {
+		started := time.Now()
+		status, postErr := s.post(body)
+		elapsed := time.Since(started)
+		lastErr = postErr
+
+		final := postErr == nil || isPermErr(postErr) || attempt == maxAttempts
+		s.notify(SendResult{
+			URL:        s.url,
+			BatchSize:  len(batch),
+			Attempt:    attempt,
+			Final:      final,
+			StatusCode: status,
+			Duration:   elapsed,
+			Err:        postErr,
+		})
+
+		if postErr == nil {
+			s.batchesSent.Add(1)
+			s.eventsSent.Add(int64(len(batch)))
 			return nil
 		}
-		// Only retry on 5xx / transport errors.
-		if isPermErr(lastErr) {
+		if isPermErr(postErr) {
 			break
 		}
 	}
+	s.batchesFailed.Add(1)
 	fmt.Fprintf(os.Stderr, "logsim: dropping batch of %d events: %v\n", len(batch), lastErr)
 	return nil // keep running on failure — don't propagate to engine
 }
 
-// post sends one HTTP request and returns an error for transient failures.
-func (s *CriblSink) post(body []byte) error {
+// post sends one HTTP request. It returns the HTTP status code (0 on transport
+// error) plus a transient/permanent error or nil on success.
+func (s *CriblSink) post(body []byte) (int, error) {
 	req, err := http.NewRequest(http.MethodPost, s.url, bytes.NewReader(body))
 	if err != nil {
-		return permErr(fmt.Sprintf("build request: %v", err))
+		return 0, permErr(fmt.Sprintf("build request: %v", err))
 	}
 	req.Header.Set("Authorization", "Splunk "+s.token)
 	req.Header.Set("Content-Type", "application/x-ndjson")
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return err // transient: network error
+		return 0, err // transient: network error
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
 
 	if resp.StatusCode >= 500 {
-		return fmt.Errorf("server error %d", resp.StatusCode) // transient: 5xx
+		return resp.StatusCode, fmt.Errorf("server error %d", resp.StatusCode) // transient: 5xx
 	}
 	if resp.StatusCode >= 400 {
-		return permErr(fmt.Sprintf("client error %d", resp.StatusCode)) // permanent: 4xx
+		return resp.StatusCode, permErr(fmt.Sprintf("client error %d", resp.StatusCode)) // permanent: 4xx
 	}
-	return nil
+	return resp.StatusCode, nil
 }
 
 // encodeBatch serialises entries as newline-delimited Splunk HEC JSON.

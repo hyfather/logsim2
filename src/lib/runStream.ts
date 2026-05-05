@@ -8,16 +8,14 @@ export interface RunStreamOpts {
   startTimeMs?: number
   seed?: number
   sourceFilter?: string
-  /** 1.0 = simulated wall-clock speed; 8.0 = 8× faster; 0 = as fast as possible. */
-  rate?: number
   cribl?: CriblPayload
   /** Wire schema applied per log entry. Defaults to "native" on the backend. */
   format?: LogFormat
   /** Resume playback at this tick index instead of starting at 0. */
   startTick?: number
   /** When > 0, delay each onTick by this many ms so the client paces playback
-   *  even if the server returned all frames at once. Lets us run the engine
-   *  at rate=0 (one short request) on platforms that buffer responses
+   *  even if the server returned all frames at once. The engine itself runs
+   *  unpaced (one short request) on platforms that buffer responses
    *  (e.g. Vercel Functions) while still showing a moving scrubber. */
   paceMs?: number
   signal?: AbortSignal
@@ -46,17 +44,28 @@ interface DoneFrame {
   total_logs: number
 }
 
+interface PartialFrame {
+  partial: true
+  /** Tick index the next chunk should start from (the server bailed before
+   *  emitting this tick). */
+  next_tick: number
+  total_logs?: number
+}
+
 interface ErrorFrame {
   error: string
 }
 
-type Frame = TickFrame | DoneFrame | ErrorFrame
+type Frame = TickFrame | DoneFrame | PartialFrame | ErrorFrame
 
-// Tick window per /api/run request. Vercel's Lambda runtime collects the full
-// response before posting it back and rejects payloads above ~6 MB with a 413.
-// 30 ticks of OCSF-formatted logs comfortably fits; smaller windows just mean
-// more (still cheap) requests.
-const CHUNK_TICKS = 30
+// Tick window per /api/run request. Vercel's Lambda runtime buffers the full
+// response and rejects bodies above ~4.5 MB with HTTP 413. The server now
+// short-circuits at 3 MB and emits a `partial` frame so any one chunk is
+// guaranteed to fit; this client cap is a secondary defense and just keeps
+// per-request work small even on dense scenarios (cache-failure-cascade
+// peaks at ~54 logs/tick — 15 ticks ≈ 800 entries per request, well under
+// the budget). Smaller windows mean more requests, all still cheap.
+const CHUNK_TICKS = 15
 // Pause fetching new chunks once the dispatch queue gets this far ahead of the
 // scrubber, so we don't pile up megabytes of buffered frames at slow paces.
 const QUEUE_HIGH_WATERMARK = CHUNK_TICKS * 4
@@ -114,9 +123,19 @@ export async function runStream(opts: RunStreamOpts): Promise<void> {
     }, paceMs)
   }
 
+  // resumeFrom is set by a partial frame from the server when it bails
+  // before reaching the requested chunkEnd (Vercel response-size guard).
+  // The main loop reads it after each fetchChunk to advance the cursor.
+  let resumeFrom: number | null = null
+
   const handleFrame = (frame: Frame) => {
     if ('error' in frame) {
       fail(new Error(frame.error))
+      return
+    }
+    if ('partial' in frame) {
+      resumeFrom = frame.next_tick
+      totalLogs += frame.total_logs ?? 0
       return
     }
     if ('done' in frame) {
@@ -137,9 +156,12 @@ export async function runStream(opts: RunStreamOpts): Promise<void> {
   const startTimeMs = opts.startTimeMs ?? Date.now()
   const seed = opts.seed ?? Math.floor(Math.random() * 1e9)
 
-  // Cribl forwarding only makes sense for the final chunk so we don't double-
-  // forward or fragment a batch — keep it on the request that closes the run.
-  const fetchChunk = async (chunkStart: number, chunkEnd: number, isLast: boolean) => {
+  // Cribl forwarding (when enabled) ships every chunk's events as it lands
+  // — the user picked "forward during run", and dropping all-but-the-last
+  // chunk would silently lose 95% of the episode. Each chunk owns its own
+  // collected slice on the server, so per-chunk forwarding is safe (no
+  // double-sends).
+  const fetchChunk = async (chunkStart: number, chunkEnd: number, _isLast: boolean) => {
     const res = await fetch('/api/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -150,8 +172,7 @@ export async function runStream(opts: RunStreamOpts): Promise<void> {
         start_time_ms: startTimeMs,
         seed,
         source_filter: opts.sourceFilter ?? '*',
-        rate: opts.rate ?? 0,
-        cribl: isLast ? opts.cribl : undefined,
+        cribl: opts.cribl,
         format: opts.format ?? 'native',
         start_tick: chunkStart,
       }),
@@ -197,8 +218,16 @@ export async function runStream(opts: RunStreamOpts): Promise<void> {
 
       const chunkEnd = Math.min(cursor + CHUNK_TICKS, totalDuration)
       const isLast = chunkEnd >= totalDuration
+      resumeFrom = null
       await fetchChunk(cursor, chunkEnd, isLast)
-      cursor = chunkEnd
+      // If the server bailed early to stay under the response cap, resume
+      // from the tick it pointed at; otherwise advance to the chunk's end.
+      // Guard against a no-progress loop (server returns next_tick <= cursor).
+      if (resumeFrom !== null && resumeFrom > cursor) {
+        cursor = resumeFrom
+      } else {
+        cursor = chunkEnd
+      }
     }
   } catch (err) {
     if ((err as Error).name === 'AbortError') return

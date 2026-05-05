@@ -11,6 +11,7 @@ import { fmtTime } from '@/lib/episodeBehavior'
 import type { LogEntry, LogFormat, LogLevel } from '@/types/logs'
 import { cn } from '@/lib/utils'
 import { MultiSelectMenu } from '@/components/panels/MultiSelectMenu'
+import { ForwardStatusPanel } from '@/components/episodes/ForwardStatusPanel'
 
 const DEBOUNCE_MS = 120
 const MAX_DISPLAY = 200
@@ -31,6 +32,10 @@ export function ScrubbedLogs() {
   const liveLogs = useSimulationStore(s => s.logBuffer)
   const outputFormat = useSimulationStore(s => s.outputFormat)
   const setOutputFormat = useSimulationStore(s => s.setOutputFormat)
+  // Forward-mode (Fast) replaces the per-log table with a status surface —
+  // the backend doesn't stream log frames in that mode, so a "logs" view
+  // would just be empty. The status persists past run end.
+  const forwardStatus = useSimulationStore(s => s.forwardStatus)
   const setLogPanelOpen = useUIStore(s => s.setLogPanelOpen)
   const setCanvasOpen = useUIStore(s => s.setCanvasOpen)
 
@@ -135,6 +140,14 @@ export function ScrubbedLogs() {
     () => allChannels.map(ch => ({ value: ch, label: ch, title: ch })),
     [allChannels],
   )
+
+  // Forward-mode runs replace the entire log panel with a status surface.
+  // Don't render the log filter chrome at all — there are no logs locally
+  // to filter, and the status panel owns the run lifecycle (header,
+  // progress bar, sticky errors, dismiss action).
+  if (forwardStatus) {
+    return <ForwardStatusPanel status={forwardStatus} />
+  }
 
   return (
     <div className="flex h-full flex-col bg-white">

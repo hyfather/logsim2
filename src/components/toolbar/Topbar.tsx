@@ -2,6 +2,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import {
+  Check,
   ChevronDown,
   Download,
   ExternalLink,
@@ -10,6 +11,7 @@ import {
   Pencil,
   Play,
   RotateCcw,
+  Send,
   Settings,
   StepForward,
   Terminal,
@@ -34,14 +36,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Switch } from '@/components/ui/switch'
 import { useScenarioStore } from '@/store/useScenarioStore'
 import { useUIStore } from '@/store/useUIStore'
 import { useEpisodeStore } from '@/store/useEpisodeStore'
 import { useSimulationStore } from '@/store/useSimulationStore'
 import { useDestinationsStore } from '@/store/useDestinationsStore'
 import { useScenarioLibraryStore, type SavedScenario } from '@/store/useScenarioLibraryStore'
-import { DESTINATION_TYPE_META } from '@/types/destinations'
 import { serializeScenario, deserializeScenario, downloadJson } from '@/lib/serialization'
 import type { Connection } from '@/types/connections'
 import { scenarioToFlow } from '@/lib/flow-data'
@@ -49,6 +49,7 @@ import { cn } from '@/lib/utils'
 import { pickCriblPayload } from '@/lib/backendClient'
 import { canvasToScenarioYaml } from '@/lib/canvasToScenarioYaml'
 import { runStream } from '@/lib/runStream'
+import { runForward, type ForwardSummary, type PostFrame } from '@/lib/runForward'
 import { logsAt } from '@/lib/logsAt'
 import { ExportPreviewModal, type ExportTab } from '@/components/toolbar/ExportPreviewModal'
 import { RunLocallyModal } from '@/components/toolbar/RunLocallyModal'
@@ -130,7 +131,10 @@ export function Topbar() {
   const setRunStatus = useEpisodeStore(s => s.setRunStatus)
   const {
     status,
-    speed,
+    forwardDuringRealtime,
+    setForwardDuringRealtime,
+    selectedDestinationId,
+    setSelectedDestinationId,
     tickCount,
     setStatus,
     setTickCount,
@@ -141,6 +145,12 @@ export function Topbar() {
     logBuffer,
     outputFormat,
     setRunError,
+    forwardStarted,
+    forwardProgress,
+    forwardErrorLine,
+    forwardFinished,
+    forwardFailed,
+    forwardStatus,
   } = useSimulationStore()
   const {
     destinations,
@@ -389,34 +399,37 @@ export function Topbar() {
     abortRef.current = null
   }, [])
 
-  const startPlayback = useCallback((nextSpeed: number) => {
-    if (status === 'running') return
-    // Right rail is shared between chat and logs. Run swaps it back to logs
-    // and forces the panel open so the user actually sees output stream in.
-    // On mobile, canvas + logs are mutually exclusive — collapse the canvas
-    // so the log panel gets full-width flex-1 instead of a fixed width that
-    // would overflow the viewport.
+  /** Common UI prep that both run paths share: open the log panel, collapse
+   *  the canvas on mobile, and clear stale state from the previous run. */
+  const prepRunChrome = useCallback(() => {
     setModifyPanelOpen(false)
     setLogPanelOpen(true)
     if (typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches) {
       setCanvasOpen(false)
     }
-    const enabledCribl = destinationsRef.current.find(d => d.enabled && d.type === 'cribl-hec')
-    const cribl = pickCriblPayload(destinationsRef.current)
-    const yaml = buildScenarioYaml()
-    const ep = useEpisodeStore.getState().episode
-    const simStart = Date.now()
-    simCursorRef.current = simStart
-    seedRef.current = Math.floor(Math.random() * 1e9)
-    // Play always plays the scenario from the beginning. Reset the scrubber
-    // and clear accumulated logs so the panel fills as ticks emit.
     clearLogs()
     setRunError(null)
     setTick(0)
     setTickCount(0)
     setStatus('running')
     setRunStatus('running')
-    if (enabledCribl) setDestStatus(enabledCribl.id, 'sending')
+  }, [clearLogs, setCanvasOpen, setLogPanelOpen, setModifyPanelOpen, setRunError, setRunStatus, setStatus, setTick, setTickCount])
+
+  /** Realtime playback: paces the scrubber 1 tick/sec wall-clock so an
+   *  N-tick scenario takes N seconds. Forwards to the configured destination
+   *  only when the user has toggled `forwardDuringRealtime` on. */
+  const startRealtime = useCallback(() => {
+    if (status === 'running') return
+    prepRunChrome()
+    const enabledCribl = destinationsRef.current.find(d => d.enabled && d.type === 'cribl-hec')
+    const cribl = forwardDuringRealtime ? pickCriblPayload(destinationsRef.current) : undefined
+
+    const yaml = buildScenarioYaml()
+    const ep = useEpisodeStore.getState().episode
+    const simStart = Date.now()
+    simCursorRef.current = simStart
+    seedRef.current = Math.floor(Math.random() * 1e9)
+    if (enabledCribl && forwardDuringRealtime) setDestStatus(enabledCribl.id, 'sending')
 
     const ctrl = new AbortController()
     abortRef.current = ctrl
@@ -428,12 +441,7 @@ export function Topbar() {
       startTimeMs: simStart,
       startTick: 0,
       seed: seedRef.current,
-      // Run the engine flat-out server-side and pace the scrubber on the
-      // client. Vercel Functions buffer the streaming response, so a paced
-      // server run would produce no visible motion until the function ends —
-      // and at rate=1 that's hundreds of seconds, well past maxDuration.
-      rate: 0,
-      paceMs: nextSpeed > 0 ? Math.max(16, Math.round(1000 / nextSpeed)) : 0,
+      paceMs: 1000,
       cribl,
       format: outputFormat,
       signal: ctrl.signal,
@@ -444,7 +452,7 @@ export function Topbar() {
         if (logs.length) addLogs(logs)
       },
       onDone: ({ totalLogs }) => {
-        if (enabledCribl) {
+        if (enabledCribl && forwardDuringRealtime) {
           if (totalLogs > 0) recordSent(enabledCribl.id, totalLogs)
           else setDestStatus(enabledCribl.id, 'idle')
         }
@@ -455,13 +463,89 @@ export function Topbar() {
       onError: (err) => {
         console.error('run stream error:', err)
         setRunError(err.message)
-        if (enabledCribl) setDestStatus(enabledCribl.id, 'error', err.message)
+        if (enabledCribl && forwardDuringRealtime) setDestStatus(enabledCribl.id, 'error', err.message)
         abortRef.current = null
         setStatus('idle')
         setRunStatus('idle')
       },
     })
-  }, [addLogs, buildScenarioYaml, clearLogs, outputFormat, recordSent, setCanvasOpen, setDestStatus, setLogPanelOpen, setModifyPanelOpen, setRunError, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, status])
+  }, [addLogs, buildScenarioYaml, forwardDuringRealtime, outputFormat, prepRunChrome, recordSent, setDestStatus, setRunError, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, status])
+
+  /** "Run and Forward": runs the scenario flat-out on the backend and ships
+   *  every event to the chosen destination. Resolves the destination from
+   *  `selectedDestinationId` when set, otherwise uses the first enabled. */
+  const startForward = useCallback(() => {
+    if (status === 'running') return
+    const enabledCribls = destinationsRef.current.filter(d => d.enabled && d.type === 'cribl-hec')
+    const target = enabledCribls.find(d => d.id === selectedDestinationId) ?? enabledCribls[0]
+    if (!target) {
+      // Button should be disabled in this case — defensive fallback only.
+      setRunError('Add and enable a Cribl HEC destination to forward events.')
+      return
+    }
+    const cribl = pickCriblPayload([target])
+    if (!cribl) return
+
+    prepRunChrome()
+    const yaml = buildScenarioYaml()
+    const ep = useEpisodeStore.getState().episode
+    const simStart = Date.now()
+    simCursorRef.current = simStart
+    seedRef.current = Math.floor(Math.random() * 1e9)
+    setDestStatus(target.id, 'sending')
+
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
+
+    forwardStarted({ destination: target.name || target.url, duration: ep.duration })
+    runForward({
+      scenarioYaml: yaml,
+      duration: ep.duration,
+      tickIntervalMs: 1000,
+      startTimeMs: simStart,
+      seed: seedRef.current,
+      cribl,
+      format: outputFormat,
+      signal: ctrl.signal,
+      onStart: () => { /* status already initialized via forwardStarted */ },
+      onPost: (post) => {
+        if (post.err || post.status >= 400) {
+          const suffix = !post.final ? ' — retrying'
+            : (post.status >= 400 && post.status < 500 ? ' — dropped' : ' — gave up')
+          const head = post.status > 0 ? `${post.status}` : 'ERR'
+          forwardErrorLine(`POST → ${head} ${post.err ?? ''} (${post.size} events, ${post.durationMs}ms)${suffix}`)
+        }
+      },
+      onProgress: ({ tick: t, eventsProduced, eventsSent }) => {
+        setTick(t)
+        setTickCount(eventsSent)
+        setSimulatedTime(new Date(simStart + t * 1000))
+        forwardProgress({ tick: t, eventsProduced, eventsSent })
+      },
+      onDone: (summary: ForwardSummary) => {
+        forwardFinished(summary)
+        if (summary.eventsSent > 0) recordSent(target.id, summary.eventsSent)
+        if (summary.batchesFailed > 0) {
+          setDestStatus(target.id, 'error', `${summary.batchesFailed} batch(es) failed`)
+        } else {
+          setDestStatus(target.id, 'idle')
+        }
+        setTickCount(summary.eventsSent)
+        abortRef.current = null
+        setStatus('idle')
+        setRunStatus('idle')
+      },
+      onError: (err) => {
+        console.error('run forward error:', err)
+        forwardFailed(err.message)
+        setRunError(err.message)
+        setDestStatus(target.id, 'error', err.message)
+        abortRef.current = null
+        setStatus('idle')
+        setRunStatus('idle')
+      },
+    })
+  }, [buildScenarioYaml, forwardErrorLine, forwardFailed, forwardFinished, forwardProgress, forwardStarted, outputFormat, prepRunChrome, recordSent, selectedDestinationId, setDestStatus, setRunError, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, status])
 
   const stopPlayback = useCallback(() => {
     stopBackend()
@@ -470,10 +554,15 @@ export function Topbar() {
     setRunStatus('stopped')
   }, [clearActiveConnections, setRunStatus, setStatus, stopBackend])
 
-  const handlePlayPause = useCallback(() => {
+  const handleRunToggle = useCallback(() => {
     if (status === 'running') stopPlayback()
-    else startPlayback(speed)
-  }, [speed, startPlayback, status, stopPlayback])
+    else startRealtime()
+  }, [startRealtime, status, stopPlayback])
+
+  const handleForwardToggle = useCallback(() => {
+    if (status === 'running') stopPlayback()
+    else startForward()
+  }, [startForward, status, stopPlayback])
 
   const handleStep = useCallback(async () => {
     if (status === 'running') return
@@ -558,21 +647,15 @@ export function Topbar() {
   // ── Derived ─────────────────────────────────────────────────────
   const isRunning = status === 'running'
   const enabledDests = destinations.filter(d => d.enabled)
-  const destOverall: 'none' | 'error' | 'sending' | 'ok' = (() => {
-    if (enabledDests.length === 0) return 'none'
-    if (enabledDests.some(d => destStatuses[d.id] === 'error')) return 'error'
-    if (enabledDests.some(d => destStatuses[d.id] === 'sending')) return 'sending'
-    return 'ok'
-  })()
-
+  // Cribl HEC subset specifically — these are the destinations the
+  // forward path can ship to. Other destination types (when added)
+  // won't show up here until they wire through `runForward`.
+  const allCriblDests = destinations.filter(d => d.type === 'cribl-hec')
+  const enabledCriblDests = allCriblDests.filter(d => d.enabled)
+  const forwardTargetDest =
+    enabledCriblDests.find(d => d.id === selectedDestinationId) ??
+    enabledCriblDests[0] ?? null
   // ── Render ──────────────────────────────────────────────────────
-  const destLabel =
-    enabledDests.length === 0
-      ? 'No destination'
-      : enabledDests.length === 1
-        ? enabledDests[0].name
-        : `${enabledDests.length} destinations`
-
   const scenarioNameEditor = editingTitle ? (
     <input
       ref={setTitleInputRef}
@@ -816,88 +899,8 @@ export function Topbar() {
         </div>
       </div>
 
-      {/* RIGHT: destinations + format + transport tray + export */}
+      {/* RIGHT: format + transport tray + export */}
       <div className="flex shrink-0 items-center gap-2">
-        {/* Destinations chip — refined pill, state-aware */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              className={cn(
-                'group/dest h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-[11.5px] font-medium transition-colors sm:inline-flex',
-                destinations.length === 0 ? 'hidden sm:inline-flex' : 'inline-flex',
-                destOverall === 'error'
-                  ? 'bg-red-50 text-red-700 hover:bg-red-100'
-                  : destOverall === 'sending'
-                    ? 'bg-blue-50 text-blue-700 hover:bg-blue-100'
-                    : destOverall === 'ok'
-                      ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-                      : 'text-slate-500 hover:bg-slate-100',
-              )}
-              title="Log forwarding destinations"
-            >
-              <span className={cn(
-                'h-1.5 w-1.5 rounded-full',
-                destOverall === 'none' ? 'bg-slate-300'
-                  : destOverall === 'error' ? 'bg-red-500'
-                    : destOverall === 'sending' ? 'bg-blue-500 animate-pulse'
-                      : 'bg-emerald-500',
-              )} />
-              <span className="max-w-[140px] truncate">{destLabel}</span>
-              <ChevronDown className="h-3 w-3 opacity-50 transition-opacity group-hover/dest:opacity-80" />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-72">
-            <DropdownMenuLabel className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
-              Log Destinations
-            </DropdownMenuLabel>
-            {destinations.length === 0 ? (
-              <div className="px-2 py-3 text-center text-xs text-slate-400">No destinations configured</div>
-            ) : (
-              destinations.map(dest => {
-                const s = destStatuses[dest.id]
-                const err = destErrors[dest.id]
-                const meta = DESTINATION_TYPE_META[dest.type]
-                const dotCls = dest.enabled
-                  ? s === 'error' ? 'bg-red-500'
-                  : s === 'sending' ? 'bg-blue-500 animate-pulse'
-                  : s === 'idle' ? 'bg-green-500'
-                  : 'bg-gray-300'
-                  : 'bg-gray-200'
-                return (
-                  <div key={dest.id} className="flex items-center gap-2 px-2 py-1.5 hover:bg-slate-50">
-                    <span className={cn('h-2 w-2 shrink-0 rounded-full', dotCls)} title={err || undefined} />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1">
-                        <span className="truncate text-xs font-medium text-slate-800">{dest.name}</span>
-                        <span className="shrink-0 text-[9px] text-slate-400">{meta.icon}</span>
-                      </div>
-                      {s === 'error' && err && <p className="truncate text-[10px] text-red-500">{err}</p>}
-                    </div>
-                    <Switch
-                      checked={dest.enabled}
-                      onCheckedChange={() => toggleDestination(dest.id)}
-                      aria-label={`Toggle ${dest.name}`}
-                      className="shrink-0 scale-75"
-                    />
-                    <Link
-                      href={`/settings?destination=${dest.id}`}
-                      className="shrink-0 rounded p-1 text-slate-300 transition-colors hover:bg-slate-100 hover:text-slate-600"
-                      title="Edit"
-                    >
-                      <Pencil className="h-3 w-3" />
-                    </Link>
-                  </div>
-                )
-              })
-            )}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem asChild className="cursor-pointer text-xs text-slate-600">
-              <Link href="/settings"><span className="mr-1.5">⚙️</span> Manage Destinations…</Link>
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
         {/* Transport tray — unified container with subtle dividers */}
         <div
           className={cn(
@@ -927,14 +930,20 @@ export function Topbar() {
           <span className="h-4 w-px bg-slate-200" aria-hidden />
           <button
             type="button"
-            onClick={handlePlayPause}
+            onClick={handleRunToggle}
             className={cn(
-              'inline-flex h-full items-center gap-1.5 px-3 text-[12px] font-medium transition-colors',
+              'inline-flex h-full items-center gap-1.5 pl-3 pr-2 text-[12px] font-medium transition-colors',
               isRunning
                 ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
                 : 'text-slate-700 hover:bg-slate-50',
             )}
-            title={isRunning ? 'Pause simulation' : 'Run simulation'}
+            title={
+              isRunning
+                ? 'Stop simulation'
+                : forwardDuringRealtime && enabledCriblDests.length > 0
+                  ? `Play in real time and forward each event to ${enabledCriblDests[0].name || 'the configured destination'}`
+                  : 'Play in real time — an N-tick scenario takes N seconds'
+            }
           >
             {isRunning ? (
               <>
@@ -952,18 +961,245 @@ export function Topbar() {
               </>
             )}
           </button>
+          {!isRunning && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className={cn(
+                    'inline-flex h-full w-6 items-center justify-center border-l border-slate-200 transition-colors hover:bg-slate-50 hover:text-slate-900',
+                    forwardDuringRealtime && enabledCriblDests.length > 0
+                      ? 'text-emerald-600'
+                      : 'text-slate-500',
+                  )}
+                  title={
+                    forwardDuringRealtime
+                      ? 'Forwarding is on — click to change'
+                      : 'Run options'
+                  }
+                >
+                  <ChevronDown className="h-3 w-3" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-72 text-xs">
+                <DropdownMenuLabel className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                  Run options
+                </DropdownMenuLabel>
+                <button
+                  type="button"
+                  disabled={enabledCriblDests.length === 0}
+                  onClick={() => setForwardDuringRealtime(!forwardDuringRealtime)}
+                  className={cn(
+                    'flex w-full items-start gap-2 px-2 py-2 text-left transition-colors hover:bg-slate-50',
+                    'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent',
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'mt-0.5 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border',
+                      forwardDuringRealtime && enabledCriblDests.length > 0
+                        ? 'border-emerald-500 bg-emerald-500 text-white'
+                        : 'border-slate-300 bg-white',
+                    )}
+                  >
+                    {forwardDuringRealtime && enabledCriblDests.length > 0 && (
+                      <Check className="h-2.5 w-2.5" />
+                    )}
+                  </span>
+                  <span className="flex flex-col gap-0.5">
+                    <span className="font-medium text-slate-900">
+                      Forward to destination during run
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      {enabledCriblDests.length === 0
+                        ? 'Add a Cribl HEC destination to enable.'
+                        : `Ships every event to ${enabledCriblDests[0].name || 'the destination'} as it plays.`}
+                    </span>
+                  </span>
+                </button>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
 
-        {/* Export primary */}
+        {/* Forward logs — backend ships events flat-out to the chosen
+            destination. The chevron is always present: with destinations
+            it's a picker, without any it's the path to settings. */}
+        <div
+          className={cn(
+            'inline-flex h-8 shrink-0 items-center overflow-hidden rounded-lg border bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition-colors',
+            isRunning && forwardStatus ? 'border-emerald-200' : 'border-slate-200',
+          )}
+        >
+          <button
+            type="button"
+            onClick={handleForwardToggle}
+            disabled={enabledCriblDests.length === 0 || (isRunning && !forwardStatus)}
+            className={cn(
+              'inline-flex h-full items-center gap-1.5 pl-3 pr-2 text-[12px] font-medium transition-colors',
+              'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent',
+              isRunning && forwardStatus
+                ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                : 'text-slate-700 hover:bg-slate-50',
+            )}
+            title={
+              enabledCriblDests.length === 0
+                ? 'Add a destination in Settings to enable forwarding'
+                : isRunning && forwardStatus
+                  ? 'Stop forwarding'
+                  : `Forward every event to ${forwardTargetDest?.name ?? 'destination'} as fast as possible`
+            }
+          >
+            {isRunning && forwardStatus ? (
+              <>
+                <Pause className="h-3.5 w-3.5 fill-current" />
+                <span className="hidden sm:inline">Stop</span>
+              </>
+            ) : (
+              <>
+                <Send className="h-3.5 w-3.5" />
+                <span className="hidden max-w-[180px] truncate sm:inline">
+                  {forwardTargetDest
+                    ? `Forward to ${forwardTargetDest.name}`
+                    : 'Forward logs'}
+                </span>
+              </>
+            )}
+          </button>
+          {!isRunning && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className={cn(
+                    'inline-flex h-full w-6 items-center justify-center border-l border-slate-200 transition-colors hover:bg-slate-50 hover:text-slate-900',
+                    enabledCriblDests.length === 0 ? 'text-amber-600' : 'text-slate-500',
+                  )}
+                  title={
+                    enabledCriblDests.length === 0
+                      ? 'No destination configured — open Settings'
+                      : 'Pick destination'
+                  }
+                >
+                  <ChevronDown className="h-3 w-3" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-80 text-xs">
+                <DropdownMenuLabel className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                  Forward to
+                </DropdownMenuLabel>
+
+                {allCriblDests.length === 0 ? (
+                  <div className="px-3 py-3 space-y-1">
+                    <p className="text-[12px] leading-snug text-slate-700">
+                      No destinations configured.
+                    </p>
+                    <p className="text-[11px] leading-snug text-slate-500">
+                      Add a Cribl HEC destination in Settings to enable
+                      forwarding.
+                    </p>
+                  </div>
+                ) : (
+                  allCriblDests.map(d => {
+                    const s = destStatuses[d.id]
+                    const err = destErrors[d.id]
+                    const isSelected = forwardTargetDest?.id === d.id
+                    const dotCls = !d.enabled
+                      ? 'bg-slate-300'
+                      : s === 'error' ? 'bg-red-500'
+                        : s === 'sending' ? 'bg-blue-500 animate-pulse'
+                          : s === 'idle' ? 'bg-emerald-500'
+                            : 'bg-slate-300'
+                    return (
+                      <div
+                        key={d.id}
+                        className={cn(
+                          'flex items-start gap-2 px-2 py-2',
+                          d.enabled && 'transition-colors hover:bg-slate-50',
+                        )}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => d.enabled && setSelectedDestinationId(d.id)}
+                          disabled={!d.enabled}
+                          className={cn(
+                            'mt-0.5 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border transition-colors',
+                            'disabled:cursor-not-allowed',
+                            isSelected
+                              ? 'border-emerald-500 bg-emerald-500'
+                              : 'border-slate-300 bg-white hover:border-slate-400',
+                          )}
+                          title={d.enabled ? 'Use as forward destination' : 'Enable to use'}
+                        >
+                          {isSelected && <span className="h-1.5 w-1.5 rounded-full bg-white" />}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => d.enabled && setSelectedDestinationId(d.id)}
+                          disabled={!d.enabled}
+                          className="flex min-w-0 flex-1 flex-col text-left disabled:cursor-not-allowed"
+                        >
+                          <span className="flex items-center gap-1.5">
+                            <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', dotCls)} title={err || undefined} />
+                            <span className={cn('truncate font-medium', d.enabled ? 'text-slate-900' : 'text-slate-400')}>
+                              {d.name}
+                            </span>
+                            {!d.enabled && (
+                              <span className="shrink-0 rounded bg-slate-100 px-1 py-px text-[9px] font-medium uppercase tracking-wide text-slate-500">
+                                disabled
+                              </span>
+                            )}
+                          </span>
+                          <span className={cn('truncate text-[11px]', d.enabled ? 'text-slate-500' : 'text-slate-400')} title={d.url}>
+                            {d.url}
+                          </span>
+                          {err && (
+                            <span className="truncate text-[11px] text-red-600">{err}</span>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleDestination(d.id)}
+                          className={cn(
+                            'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors',
+                            d.enabled
+                              ? 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'
+                              : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100',
+                          )}
+                          title={d.enabled ? 'Disable destination' : 'Enable destination'}
+                        >
+                          {d.enabled ? 'Disable' : 'Enable'}
+                        </button>
+                      </div>
+                    )
+                  })
+                )}
+
+                <DropdownMenuSeparator />
+                <DropdownMenuItem asChild className="cursor-pointer text-xs text-slate-600">
+                  <Link href="/settings">
+                    <Settings className="mr-2 h-3.5 w-3.5 text-slate-500" />
+                    {allCriblDests.length === 0 ? 'Configure a destination…' : 'Manage destinations…'}
+                  </Link>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
+
+        {/* Export — same neutral chrome as the transport buttons so the
+            toolbar reads as one row of equal-weight actions, not a blue
+            CTA among greys. */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 px-3 text-[12px] font-semibold text-white shadow-[0_1px_2px_rgba(15,23,42,0.08)] transition-colors hover:bg-blue-700"
+              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-[12px] font-medium text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition-colors hover:bg-slate-50"
               title="Export dataset"
             >
               <Download className="h-3.5 w-3.5" />
               <span className="hidden md:inline">Export</span>
+              <ChevronDown className="h-3 w-3 text-slate-500" />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">

@@ -2,12 +2,19 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nikhilm/logsim2/pkg/config"
+	"github.com/nikhilm/logsim2/pkg/event"
+	"github.com/nikhilm/logsim2/pkg/sinks"
 )
 
 func writeDotfile(t *testing.T, body string) string {
@@ -439,5 +446,180 @@ func TestSplitNames(t *testing.T) {
 	}
 	if got := splitNames("ALL", cfg); len(got) != 2 || got[0] != "a" || got[1] != "c" {
 		t.Errorf("all should select enabled only: %v", got)
+	}
+}
+
+// resolveTicks: the headline behavior change is that omitting --ticks now
+// runs the entire scenario rather than truncating at 100.
+func TestResolveTicks(t *testing.T) {
+	cases := []struct {
+		name             string
+		flag             int
+		flagSet          bool
+		scenarioDuration int
+		want             int
+	}{
+		{"flag wins over scenario", 50, true, 1080, 50},
+		{"flag set to 0 falls through", 0, true, 1080, 1080},
+		{"unset uses scenario duration", 0, false, 1080, 1080},
+		{"unset, no duration, falls back to 100", 0, false, 0, 100},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := resolveTicks(c.flag, c.flagSet, c.scenarioDuration); got != c.want {
+				t.Errorf("resolveTicks(%d, %v, %d) = %d, want %d",
+					c.flag, c.flagSet, c.scenarioDuration, got, c.want)
+			}
+		})
+	}
+}
+
+// resolveTickIntervalMs: prefers explicit flag, then scenario, then 1s.
+func TestResolveTickIntervalMs(t *testing.T) {
+	cases := []struct {
+		name       string
+		flagVal    string
+		flagSet    bool
+		scenarioMs int
+		want       int
+		wantErr    bool
+	}{
+		{"flag wins", "500ms", true, 1000, 500, false},
+		{"unset uses scenario", "", false, 1000, 1000, false},
+		{"unset, no scenario, defaults to 1s", "", false, 0, 1000, false},
+		{"invalid flag returns error", "garbage", true, 0, 0, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := resolveTickIntervalMs(c.flagVal, c.flagSet, c.scenarioMs)
+			if (err != nil) != c.wantErr {
+				t.Errorf("err = %v, wantErr %v", err, c.wantErr)
+			}
+			if !c.wantErr && got != c.want {
+				t.Errorf("got %d, want %d", got, c.want)
+			}
+		})
+	}
+}
+
+// formatAttempt produces single-line traces for stderr. The shape is part
+// of the CLI contract — scripts/operators read these, so lock them in.
+func TestFormatAttempt(t *testing.T) {
+	ok := sinks.SendResult{StatusCode: 200, BatchSize: 50, Duration: 142 * time.Millisecond, Attempt: 1, Final: true}
+	if got := formatAttempt(ok); !strings.Contains(got, "POST → 200") || !strings.Contains(got, "50 events") {
+		t.Errorf("ok line missing pieces: %q", got)
+	}
+
+	retrying := sinks.SendResult{StatusCode: 503, BatchSize: 50, Err: errors.New("server error 503"), Final: false}
+	if got := formatAttempt(retrying); !strings.Contains(got, "503") || !strings.Contains(got, "retrying") {
+		t.Errorf("retry line missing pieces: %q", got)
+	}
+
+	dropped := sinks.SendResult{StatusCode: 401, BatchSize: 50, Err: errors.New("client error 401"), Final: true}
+	if got := formatAttempt(dropped); !strings.Contains(got, "401") || !strings.Contains(got, "dropped") {
+		t.Errorf("drop line missing pieces: %q", got)
+	}
+
+	transport := sinks.SendResult{BatchSize: 50, Err: errors.New("dial tcp: refused"), Final: true}
+	if got := formatAttempt(transport); !strings.Contains(got, "ERR") || !strings.Contains(got, "gave up") {
+		t.Errorf("transport line missing pieces: %q", got)
+	}
+}
+
+// End-to-end: when --to is set against a working HEC server, the reporter
+// prints the per-batch trace and the closing summary; in quiet mode the
+// per-batch chatter is gone but the summary stays so scripts can grep it.
+func TestForwardingReporter_EndToEnd(t *testing.T) {
+	for _, quiet := range []bool{false, true} {
+		quiet := quiet
+		t.Run(map[bool]string{false: "verbose", true: "quiet"}[quiet], func(t *testing.T) {
+			var hits int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				atomic.AddInt32(&hits, 1)
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+
+			c := sinks.NewCribl(srv.URL, "tok", 5, 0)
+			c.SetName("demo")
+
+			var stderr bytes.Buffer
+			reporter := attachForwardingReporter([]sinks.Sink{c}, &stderr, quiet)
+
+			// 12 entries over batch size 5 → 2 full batches + 1 partial on close.
+			entries := make([]event.LogEntry, 12)
+			for i := range entries {
+				entries[i] = event.LogEntry{ID: "e", Sourcetype: "nodejs", Raw: "log"}
+			}
+			if err := c.Write(entries); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			if err := c.Close(); err != nil {
+				t.Fatalf("close: %v", err)
+			}
+			reporter.Summarize(&stderr)
+
+			out := stderr.String()
+			if !strings.Contains(out, "sent 12 events to demo in 3 batches") {
+				t.Errorf("missing summary: %q", out)
+			}
+			if quiet && strings.Contains(out, "POST → 200") {
+				t.Errorf("quiet mode should suppress per-attempt lines; got %q", out)
+			}
+			if !quiet {
+				if !strings.Contains(out, "POST → 200") {
+					t.Errorf("verbose mode should show per-attempt lines; got %q", out)
+				}
+				if !strings.Contains(out, "forwarding → demo") {
+					t.Errorf("verbose mode should show forwarding header; got %q", out)
+				}
+			}
+			if int(atomic.LoadInt32(&hits)) != 3 {
+				t.Errorf("expected 3 HTTP hits, got %d", hits)
+			}
+		})
+	}
+}
+
+// confirmYesNo: only "y"/"yes" (case-insensitive) advance.
+func TestConfirmYesNo(t *testing.T) {
+	cases := map[string]bool{
+		"y\n":   true,
+		"Y\n":   true,
+		"yes\n": true,
+		"YES\n": true,
+		"n\n":   false,
+		"\n":    false,
+		"":      false,
+		"foo\n": false,
+	}
+	for in, want := range cases {
+		var stderr bytes.Buffer
+		got := confirmYesNo(strings.NewReader(in), &stderr, "go? ")
+		if got != want {
+			t.Errorf("input %q: got %v, want %v", in, got, want)
+		}
+		if !strings.Contains(stderr.String(), "go? ") {
+			t.Errorf("input %q: prompt missing from stderr (%q)", in, stderr.String())
+		}
+	}
+}
+
+// shouldPrompt: quiet mode + non-tty stdin both suppress the prompt.
+func TestShouldPrompt(t *testing.T) {
+	if shouldPrompt(strings.NewReader(""), false) {
+		t.Errorf("non-tty Reader should never prompt")
+	}
+	if shouldPrompt(strings.NewReader(""), true) {
+		t.Errorf("quiet mode should never prompt")
+	}
+	// A regular file is not a char-device; same path as a pipe.
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("open devnull: %v", err)
+	}
+	defer f.Close()
+	if shouldPrompt(f, false) {
+		t.Errorf("regular file (not a tty) should not prompt")
 	}
 }

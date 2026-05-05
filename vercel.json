@@ -3,7 +3,7 @@
   "functions": {
     "api/**/*.go": {
       "memory": 512,
-      "maxDuration": 30
+      "maxDuration": 300
     }
   }
 }
