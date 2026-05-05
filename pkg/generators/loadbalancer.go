@@ -6,72 +6,61 @@ import (
 	"github.com/nikhilm/logsim2/pkg/event"
 )
 
-// LoadBalancerGenerator emits Nginx-combined-format access logs for each
-// inbound request the load balancer receives.
+// LoadBalancerGenerator emits Nginx-combined-format access logs as
+// projections of Requests passing through the load balancer. Stage 1 of
+// PHYSICS_PLAN.md: the LB's view of a request agrees with the backend's
+// view (same method/path/status/trace_id) because both project from the
+// same Request rather than rolling dice independently.
 //
 // Log format:
 //
 //	<client_ip> - - [<time>] "<method> <path> HTTP/1.1" <status> <bytes> "-" "<ua>"
-var httpStatusWeights = []int{200, 200, 200, 200, 201, 204, 301, 304, 400, 403, 404, 429, 500, 502, 503}
-
 type LoadBalancerGenerator struct{}
 
-func (g *LoadBalancerGenerator) Generate(target Target, inbound []event.Flow, ctx event.TickContext) []event.LogEntry {
+func (g *LoadBalancerGenerator) Generate(target Target, _ []event.Flow, ctx event.TickContext) []event.LogEntry {
 	if target.Node == nil {
 		return nil
 	}
-
-	totalReqs := 0
-	totalErrs := 0
-	var clientIP string
-	for _, f := range inbound {
-		totalReqs += f.RequestCount
-		totalErrs += f.ErrorCount
-		if clientIP == "" {
-			clientIP = f.SrcIP
+	type visit struct {
+		req *event.Request
+		hop *event.Hop
+	}
+	visits := make([]visit, 0, len(ctx.Requests))
+	for ri := range ctx.Requests {
+		r := &ctx.Requests[ri]
+		if h := r.HopAt(target.Node.Name); h != nil {
+			visits = append(visits, visit{req: r, hop: h})
 		}
 	}
-	if totalReqs == 0 {
+	visits = applyVolumeOverrideToVisits(visits, ctx)
+	if len(visits) == 0 {
 		return nil
 	}
 
-	timestamps := spreadTimestamps(ctx.Timestamp, totalReqs, ctx.TickIntervalMs, ctx.Rng)
-	entries := make([]event.LogEntry, 0, totalReqs)
-
-	for i := 0; i < totalReqs; i++ {
-		ts := ctx.Timestamp
-		if i < len(timestamps) {
-			ts = timestamps[i]
-		}
-		// Nginx time format: 15/Jan/2024:10:30:00 +0000
+	entries := make([]event.LogEntry, 0, len(visits))
+	for i, v := range visits {
+		ts := v.hop.EnteredAt
 		nginxTime := ts.UTC().Format("02/Jan/2006:15:04:05 -0700")
 		tsStr := ts.Format("2006-01-02T15:04:05.000Z07:00")
 
-		method := pickRandom(httpMethods, ctx.Rng)
-		path := pickRandom(commonPaths, ctx.Rng)
-		ua := pickRandom(userAgents, ctx.Rng)
-
-		isError := i < totalErrs || ctx.Rng.Float64() < 0.01
-		var status int
-		if isError {
-			status = pickRandom([]int{400, 403, 404, 500, 502, 503}, ctx.Rng)
-		} else {
-			status = pickRandom([]int{200, 200, 200, 201, 204, 301, 304}, ctx.Rng)
+		method := v.req.Method
+		path := v.req.Path
+		status := v.hop.Status
+		ua := v.req.UserAgent
+		if ua == "" {
+			ua = pickRandom(userAgents, ctx.Rng)
 		}
+		clientIP := v.hop.SrcIP
+		bodyBytes := v.hop.BytesOut
+		// nginx rt = wall-clock time the LB observed for this request:
+		// own service time plus everything downstream the LB waited on.
+		// That's how real nginx access logs report request_time.
+		latency := applyLatency(observedRequestTimeFrom(v.req, target.Node.Name), ctx)
+		level := levelForStatus(status)
 
-		latency := sampleLatency(20, ctx.Rng) // LB overhead is low
-		bodyBytes := 200 + ctx.Rng.Intn(8000)
-
-		level := "INFO"
-		if status >= 500 {
-			level = "ERROR"
-		} else if status >= 400 {
-			level = "WARN"
-		}
-
-		raw := fmt.Sprintf(`%s - - [%s] "%s %s HTTP/1.1" %d %d "-" "%s" rt=%.3f`,
+		raw := fmt.Sprintf(`%s - - [%s] "%s %s HTTP/1.1" %d %d "-" "%s" rt=%.3f trace=%s`,
 			clientIP, nginxTime, method, path, status, bodyBytes,
-			ua[:min(len(ua), 80)], float64(latency)/1000.0)
+			ua[:min(len(ua), 80)], float64(latency)/1000.0, v.req.TraceID)
 
 		entries = append(entries, event.LogEntry{
 			ID:         makeID(target, ctx.TickIndex, i),
@@ -80,6 +69,9 @@ func (g *LoadBalancerGenerator) Generate(target Target, inbound []event.Flow, ct
 			Level:      level,
 			Sourcetype: "nginx",
 			Class:      "http_activity",
+			TraceID:    v.req.TraceID,
+			SpanID:     v.hop.SpanID,
+			CauseIDs:   v.hop.CauseIDs,
 			Raw:        raw,
 			Fields: map[string]any{
 				"client_ip":   clientIP,
@@ -88,9 +80,10 @@ func (g *LoadBalancerGenerator) Generate(target Target, inbound []event.Flow, ct
 				"status_code": status,
 				"body_bytes":  bodyBytes,
 				"rt_ms":       latency,
+				"trace_id":    v.req.TraceID,
+				"span_id":     v.hop.SpanID,
 			},
 		})
 	}
-
 	return entries
 }

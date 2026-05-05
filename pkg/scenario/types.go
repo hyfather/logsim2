@@ -10,7 +10,72 @@ type Scenario struct {
 	Services       []Service    `yaml:"services"`
 	Connections    []Connection `yaml:"connections"`
 	CustomTypes    []CustomType `yaml:"custom_types,omitempty"`
-	Editor         *EditorMeta  `yaml:"editor,omitempty"`
+	// Causes are scripted interventions on the simulated world (PHYSICS_PLAN.md
+	// §6). Unlike Timeline overrides which prescribe symptoms (LatencyMul,
+	// ErrorRate), a Cause perturbs component state and lets the symptoms
+	// emerge from the simulation. Cause IDs are propagated onto every event
+	// in their causal closure for ground-truth labelling.
+	Causes []Cause     `yaml:"causes,omitempty"`
+	Editor *EditorMeta `yaml:"editor,omitempty"`
+}
+
+// Cause is one scripted intervention on the simulated world. Each Cause
+// has a tick window [From, To) during which its parameters are applied,
+// a Type that selects the perturbation logic in pkg/engine/causes.go,
+// and a Target naming the entity (or pattern) it acts on.
+//
+// Stage 3 of PHYSICS_PLAN.md ships three cause types — capacity_loss,
+// traffic_spike, network_latency_inject — that exercise the cause →
+// symptom flow end-to-end through the queueing model. More cause types
+// per the §6.2 taxonomy land in later stages.
+type Cause struct {
+	ID         string         `yaml:"id"`
+	Type       string         `yaml:"type"`
+	From       int            `yaml:"from"`
+	To         int            `yaml:"to"`
+	Target     string         `yaml:"target,omitempty"`     // entity name (e.g. "App Database") or "*"
+	Source     string         `yaml:"source,omitempty"`     // for connection-targeted causes (e.g. "Load Balancer")
+	Parameters map[string]any `yaml:"parameters,omitempty"` // type-specific params
+}
+
+// Active reports whether this cause is in effect at the given tick.
+func (c *Cause) Active(tick int) bool {
+	if c.To <= c.From {
+		return false
+	}
+	return tick >= c.From && tick < c.To
+}
+
+// FloatParam returns a float parameter with a default if missing/wrong-typed.
+func (c *Cause) FloatParam(name string, def float64) float64 {
+	if c.Parameters == nil {
+		return def
+	}
+	switch v := c.Parameters[name].(type) {
+	case float64:
+		return v
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	}
+	return def
+}
+
+// IntParam returns an integer parameter with a default if missing/wrong-typed.
+func (c *Cause) IntParam(name string, def int) int {
+	if c.Parameters == nil {
+		return def
+	}
+	switch v := c.Parameters[name].(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	}
+	return def
 }
 
 // NodeType classifies infrastructure components.

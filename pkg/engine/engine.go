@@ -26,6 +26,7 @@ type Engine struct {
 	scenario *scenario.Scenario
 	cfg      Config
 	traffic  *trafficSimulator
+	causes   *causeRegistry
 	channels SourceMap
 	rng      *rand.Rand
 
@@ -54,9 +55,11 @@ func New(s *scenario.Scenario, cfg Config) *Engine {
 		scenario: s,
 		cfg:      cfg,
 		traffic:  newTrafficSimulator(s),
+		causes:   newCauseRegistry(s.Causes),
 		channels: BuildSources(s),
 		rng:      rand.New(rand.NewSource(cfg.Seed)),
 	}
+	e.traffic.rs.causes = e.causes
 	e.buildTargets()
 	return e
 }
@@ -136,13 +139,17 @@ func (e *Engine) Run(ctx context.Context, totalTicks int, sinkList []sinks.Sink)
 		}
 
 		ts := e.cfg.StartTime.Add(time.Duration(tick) * tickInterval)
-		flows := e.traffic.Flows(e.scenario, tick, e.cfg.TickIntervalMs, e.rng, ts)
+		// Stage 1 of PHYSICS_PLAN.md: requests are the per-tick primitive,
+		// flows are derived. Both views are populated on TickContext so
+		// generators can consume whichever fits their model.
+		requests, flows := e.traffic.RequestsAndFlows(e.scenario, tick, e.cfg.TickIntervalMs, e.rng, ts)
 		baseCtx := event.TickContext{
 			TickIndex:      tick,
 			Timestamp:      ts,
 			TickIntervalMs: e.cfg.TickIntervalMs,
 			Rng:            e.rng,
 			AllFlows:       flows,
+			Requests:       requests,
 		}
 		entries := e.generateTick(flows, baseCtx)
 
