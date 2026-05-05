@@ -2,6 +2,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import {
+  Check,
   ChevronDown,
   Download,
   ExternalLink,
@@ -10,6 +11,7 @@ import {
   Pencil,
   Play,
   RotateCcw,
+  Send,
   Settings,
   StepForward,
   Terminal,
@@ -38,7 +40,7 @@ import { Switch } from '@/components/ui/switch'
 import { useScenarioStore } from '@/store/useScenarioStore'
 import { useUIStore } from '@/store/useUIStore'
 import { useEpisodeStore } from '@/store/useEpisodeStore'
-import { useSimulationStore, type PlaybackMode } from '@/store/useSimulationStore'
+import { useSimulationStore } from '@/store/useSimulationStore'
 import { useDestinationsStore } from '@/store/useDestinationsStore'
 import { useScenarioLibraryStore, type SavedScenario } from '@/store/useScenarioLibraryStore'
 import { DESTINATION_TYPE_META } from '@/types/destinations'
@@ -131,8 +133,10 @@ export function Topbar() {
   const setRunStatus = useEpisodeStore(s => s.setRunStatus)
   const {
     status,
-    playbackMode,
-    setPlaybackMode,
+    forwardDuringRealtime,
+    setForwardDuringRealtime,
+    selectedDestinationId,
+    setSelectedDestinationId,
     tickCount,
     setStatus,
     setTickCount,
@@ -148,6 +152,7 @@ export function Topbar() {
     forwardErrorLine,
     forwardFinished,
     forwardFailed,
+    forwardStatus,
   } = useSimulationStore()
   const {
     destinations,
@@ -396,105 +401,41 @@ export function Topbar() {
     abortRef.current = null
   }, [])
 
-  const startPlayback = useCallback((mode: PlaybackMode) => {
-    if (status === 'running') return
-    // Right rail is shared between chat and logs. Run swaps it back to logs
-    // and forces the panel open so the user actually sees output stream in.
-    // On mobile, canvas + logs are mutually exclusive — collapse the canvas
-    // so the log panel gets full-width flex-1 instead of a fixed width that
-    // would overflow the viewport.
+  /** Common UI prep that both run paths share: open the log panel, collapse
+   *  the canvas on mobile, and clear stale state from the previous run. */
+  const prepRunChrome = useCallback(() => {
     setModifyPanelOpen(false)
     setLogPanelOpen(true)
     if (typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches) {
       setCanvasOpen(false)
     }
-    const enabledCribl = destinationsRef.current.find(d => d.enabled && d.type === 'cribl-hec')
-    const cribl = pickCriblPayload(destinationsRef.current)
-
-    if (mode === 'fast' && (!enabledCribl || !cribl)) {
-      // Fast mode is just a frontend over `logsim run --to <dest>` — no
-      // destination means nowhere to send the events. Surface the
-      // requirement instead of silently falling back to realtime.
-      setRunError('Fast mode forwards to a destination — enable a Cribl HEC destination first.')
-      return
-    }
-
-    const yaml = buildScenarioYaml()
-    const ep = useEpisodeStore.getState().episode
-    const simStart = Date.now()
-    simCursorRef.current = simStart
-    seedRef.current = Math.floor(Math.random() * 1e9)
-    // Play always plays the scenario from the beginning. Reset the scrubber
-    // and clear accumulated logs so the panel fills as ticks emit.
     clearLogs()
     setRunError(null)
     setTick(0)
     setTickCount(0)
     setStatus('running')
     setRunStatus('running')
-    if (enabledCribl) setDestStatus(enabledCribl.id, 'sending')
+  }, [clearLogs, setCanvasOpen, setLogPanelOpen, setModifyPanelOpen, setRunError, setRunStatus, setStatus, setTick, setTickCount])
+
+  /** Realtime playback: paces the scrubber 1 tick/sec wall-clock so an
+   *  N-tick scenario takes N seconds. Forwards to the configured destination
+   *  only when the user has toggled `forwardDuringRealtime` on. */
+  const startRealtime = useCallback(() => {
+    if (status === 'running') return
+    prepRunChrome()
+    const enabledCribl = destinationsRef.current.find(d => d.enabled && d.type === 'cribl-hec')
+    const cribl = forwardDuringRealtime ? pickCriblPayload(destinationsRef.current) : undefined
+
+    const yaml = buildScenarioYaml()
+    const ep = useEpisodeStore.getState().episode
+    const simStart = Date.now()
+    simCursorRef.current = simStart
+    seedRef.current = Math.floor(Math.random() * 1e9)
+    if (enabledCribl && forwardDuringRealtime) setDestStatus(enabledCribl.id, 'sending')
 
     const ctrl = new AbortController()
     abortRef.current = ctrl
 
-    if (mode === 'fast' && cribl && enabledCribl) {
-      forwardStarted({ destination: enabledCribl.name || enabledCribl.url, duration: ep.duration })
-      runForward({
-        scenarioYaml: yaml,
-        duration: ep.duration,
-        tickIntervalMs: 1000,
-        startTimeMs: simStart,
-        seed: seedRef.current,
-        cribl,
-        format: outputFormat,
-        signal: ctrl.signal,
-        onStart: () => { /* status already initialized via forwardStarted */ },
-        onPost: (post) => {
-          // Surface non-success attempts as sticky error lines; successful
-          // POSTs are summarized via the running counters (eventsSent etc.).
-          if (post.err || post.status >= 400) {
-            const suffix = !post.final ? ' — retrying'
-              : (post.status >= 400 && post.status < 500 ? ' — dropped' : ' — gave up')
-            const head = post.status > 0 ? `${post.status}` : 'ERR'
-            forwardErrorLine(`POST → ${head} ${post.err ?? ''} (${post.size} events, ${post.durationMs}ms)${suffix}`)
-          }
-        },
-        onProgress: ({ tick: t, eventsProduced, eventsSent }) => {
-          setTick(t)
-          setTickCount(eventsSent)
-          setSimulatedTime(new Date(simStart + t * 1000))
-          forwardProgress({ tick: t, eventsProduced, eventsSent })
-        },
-        onDone: (summary: ForwardSummary) => {
-          forwardFinished(summary)
-          if (enabledCribl) {
-            if (summary.eventsSent > 0) recordSent(enabledCribl.id, summary.eventsSent)
-            if (summary.batchesFailed > 0) {
-              setDestStatus(enabledCribl.id, 'error', `${summary.batchesFailed} batch(es) failed`)
-            } else {
-              setDestStatus(enabledCribl.id, 'idle')
-            }
-          }
-          setTickCount(summary.eventsSent)
-          abortRef.current = null
-          setStatus('idle')
-          setRunStatus('idle')
-        },
-        onError: (err) => {
-          console.error('run forward error:', err)
-          forwardFailed(err.message)
-          setRunError(err.message)
-          if (enabledCribl) setDestStatus(enabledCribl.id, 'error', err.message)
-          abortRef.current = null
-          setStatus('idle')
-          setRunStatus('idle')
-        },
-      })
-      return
-    }
-
-    // realtime: pace the scrubber 1 tick/sec wall-clock — an 18-min scenario
-    // really takes 18 minutes.
     runStream({
       scenarioYaml: yaml,
       duration: ep.duration,
@@ -513,7 +454,7 @@ export function Topbar() {
         if (logs.length) addLogs(logs)
       },
       onDone: ({ totalLogs }) => {
-        if (enabledCribl) {
+        if (enabledCribl && forwardDuringRealtime) {
           if (totalLogs > 0) recordSent(enabledCribl.id, totalLogs)
           else setDestStatus(enabledCribl.id, 'idle')
         }
@@ -524,13 +465,89 @@ export function Topbar() {
       onError: (err) => {
         console.error('run stream error:', err)
         setRunError(err.message)
-        if (enabledCribl) setDestStatus(enabledCribl.id, 'error', err.message)
+        if (enabledCribl && forwardDuringRealtime) setDestStatus(enabledCribl.id, 'error', err.message)
         abortRef.current = null
         setStatus('idle')
         setRunStatus('idle')
       },
     })
-  }, [addLogs, buildScenarioYaml, clearLogs, forwardErrorLine, forwardFailed, forwardFinished, forwardProgress, forwardStarted, outputFormat, recordSent, setCanvasOpen, setDestStatus, setLogPanelOpen, setModifyPanelOpen, setRunError, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, status])
+  }, [addLogs, buildScenarioYaml, forwardDuringRealtime, outputFormat, prepRunChrome, recordSent, setDestStatus, setRunError, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, status])
+
+  /** "Run and Forward": runs the scenario flat-out on the backend and ships
+   *  every event to the chosen destination. Resolves the destination from
+   *  `selectedDestinationId` when set, otherwise uses the first enabled. */
+  const startForward = useCallback(() => {
+    if (status === 'running') return
+    const enabledCribls = destinationsRef.current.filter(d => d.enabled && d.type === 'cribl-hec')
+    const target = enabledCribls.find(d => d.id === selectedDestinationId) ?? enabledCribls[0]
+    if (!target) {
+      // Button should be disabled in this case — defensive fallback only.
+      setRunError('Add and enable a Cribl HEC destination to forward events.')
+      return
+    }
+    const cribl = pickCriblPayload([target])
+    if (!cribl) return
+
+    prepRunChrome()
+    const yaml = buildScenarioYaml()
+    const ep = useEpisodeStore.getState().episode
+    const simStart = Date.now()
+    simCursorRef.current = simStart
+    seedRef.current = Math.floor(Math.random() * 1e9)
+    setDestStatus(target.id, 'sending')
+
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
+
+    forwardStarted({ destination: target.name || target.url, duration: ep.duration })
+    runForward({
+      scenarioYaml: yaml,
+      duration: ep.duration,
+      tickIntervalMs: 1000,
+      startTimeMs: simStart,
+      seed: seedRef.current,
+      cribl,
+      format: outputFormat,
+      signal: ctrl.signal,
+      onStart: () => { /* status already initialized via forwardStarted */ },
+      onPost: (post) => {
+        if (post.err || post.status >= 400) {
+          const suffix = !post.final ? ' — retrying'
+            : (post.status >= 400 && post.status < 500 ? ' — dropped' : ' — gave up')
+          const head = post.status > 0 ? `${post.status}` : 'ERR'
+          forwardErrorLine(`POST → ${head} ${post.err ?? ''} (${post.size} events, ${post.durationMs}ms)${suffix}`)
+        }
+      },
+      onProgress: ({ tick: t, eventsProduced, eventsSent }) => {
+        setTick(t)
+        setTickCount(eventsSent)
+        setSimulatedTime(new Date(simStart + t * 1000))
+        forwardProgress({ tick: t, eventsProduced, eventsSent })
+      },
+      onDone: (summary: ForwardSummary) => {
+        forwardFinished(summary)
+        if (summary.eventsSent > 0) recordSent(target.id, summary.eventsSent)
+        if (summary.batchesFailed > 0) {
+          setDestStatus(target.id, 'error', `${summary.batchesFailed} batch(es) failed`)
+        } else {
+          setDestStatus(target.id, 'idle')
+        }
+        setTickCount(summary.eventsSent)
+        abortRef.current = null
+        setStatus('idle')
+        setRunStatus('idle')
+      },
+      onError: (err) => {
+        console.error('run forward error:', err)
+        forwardFailed(err.message)
+        setRunError(err.message)
+        setDestStatus(target.id, 'error', err.message)
+        abortRef.current = null
+        setStatus('idle')
+        setRunStatus('idle')
+      },
+    })
+  }, [buildScenarioYaml, forwardErrorLine, forwardFailed, forwardFinished, forwardProgress, forwardStarted, outputFormat, prepRunChrome, recordSent, selectedDestinationId, setDestStatus, setRunError, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, status])
 
   const stopPlayback = useCallback(() => {
     stopBackend()
@@ -539,10 +556,15 @@ export function Topbar() {
     setRunStatus('stopped')
   }, [clearActiveConnections, setRunStatus, setStatus, stopBackend])
 
-  const handlePlayPause = useCallback(() => {
+  const handleRunToggle = useCallback(() => {
     if (status === 'running') stopPlayback()
-    else startPlayback(playbackMode)
-  }, [playbackMode, startPlayback, status, stopPlayback])
+    else startRealtime()
+  }, [startRealtime, status, stopPlayback])
+
+  const handleForwardToggle = useCallback(() => {
+    if (status === 'running') stopPlayback()
+    else startForward()
+  }, [startForward, status, stopPlayback])
 
   const handleStep = useCallback(async () => {
     if (status === 'running') return
@@ -627,6 +649,13 @@ export function Topbar() {
   // ── Derived ─────────────────────────────────────────────────────
   const isRunning = status === 'running'
   const enabledDests = destinations.filter(d => d.enabled)
+  // Cribl HEC subset specifically — these are the destinations forward
+  // mode can ship to. Other destination types (when added) won't show up
+  // in the Run-and-Forward picker until they wire through `runForward`.
+  const enabledCriblDests = enabledDests.filter(d => d.type === 'cribl-hec')
+  const forwardTargetDest =
+    enabledCriblDests.find(d => d.id === selectedDestinationId) ??
+    enabledCriblDests[0] ?? null
   const destOverall: 'none' | 'error' | 'sending' | 'ok' = (() => {
     if (enabledDests.length === 0) return 'none'
     if (enabledDests.some(d => destStatuses[d.id] === 'error')) return 'error'
@@ -996,7 +1025,7 @@ export function Topbar() {
           <span className="h-4 w-px bg-slate-200" aria-hidden />
           <button
             type="button"
-            onClick={handlePlayPause}
+            onClick={handleRunToggle}
             className={cn(
               'inline-flex h-full items-center gap-1.5 pl-3 pr-2 text-[12px] font-medium transition-colors',
               isRunning
@@ -1005,10 +1034,10 @@ export function Topbar() {
             )}
             title={
               isRunning
-                ? 'Pause simulation'
-                : playbackMode === 'fast'
-                  ? 'Run as fast as possible — forwards all events to the destination at the end'
-                  : 'Run in real time — an N-tick scenario takes N seconds'
+                ? 'Stop simulation'
+                : forwardDuringRealtime && enabledCriblDests.length > 0
+                  ? `Play in real time and forward each event to ${enabledCriblDests[0].name || 'the configured destination'}`
+                  : 'Play in real time — an N-tick scenario takes N seconds'
             }
           >
             {isRunning ? (
@@ -1023,9 +1052,7 @@ export function Topbar() {
             ) : (
               <>
                 <Play className="h-3.5 w-3.5 fill-current" />
-                <span className="hidden sm:inline">
-                  {playbackMode === 'fast' ? 'Run fast' : 'Run'}
-                </span>
+                <span className="hidden sm:inline">Run</span>
               </>
             )}
           </button>
@@ -1034,44 +1061,141 @@ export function Topbar() {
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
+                  className={cn(
+                    'inline-flex h-full w-6 items-center justify-center border-l border-slate-200 transition-colors hover:bg-slate-50 hover:text-slate-900',
+                    forwardDuringRealtime && enabledCriblDests.length > 0
+                      ? 'text-emerald-600'
+                      : 'text-slate-500',
+                  )}
+                  title={
+                    forwardDuringRealtime
+                      ? 'Forwarding is on — click to change'
+                      : 'Run options'
+                  }
+                >
+                  <ChevronDown className="h-3 w-3" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-72 text-xs">
+                <DropdownMenuLabel className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                  Run options
+                </DropdownMenuLabel>
+                <button
+                  type="button"
+                  disabled={enabledCriblDests.length === 0}
+                  onClick={() => setForwardDuringRealtime(!forwardDuringRealtime)}
+                  className={cn(
+                    'flex w-full items-start gap-2 px-2 py-2 text-left transition-colors hover:bg-slate-50',
+                    'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent',
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'mt-0.5 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border',
+                      forwardDuringRealtime && enabledCriblDests.length > 0
+                        ? 'border-emerald-500 bg-emerald-500 text-white'
+                        : 'border-slate-300 bg-white',
+                    )}
+                  >
+                    {forwardDuringRealtime && enabledCriblDests.length > 0 && (
+                      <Check className="h-2.5 w-2.5" />
+                    )}
+                  </span>
+                  <span className="flex flex-col gap-0.5">
+                    <span className="font-medium text-slate-900">
+                      Forward to destination during run
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      {enabledCriblDests.length === 0
+                        ? 'Add a Cribl HEC destination to enable.'
+                        : `Ships every event to ${enabledCriblDests[0].name || 'the destination'} as it plays.`}
+                    </span>
+                  </span>
+                </button>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
+
+        {/* Run and Forward — separate action: backend ships events flat-out
+            to the chosen destination. Disabled when no enabled destinations. */}
+        <div
+          className={cn(
+            'inline-flex h-8 shrink-0 items-center overflow-hidden rounded-lg border bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition-colors',
+            isRunning ? 'border-emerald-200' : 'border-slate-200',
+          )}
+        >
+          <button
+            type="button"
+            onClick={handleForwardToggle}
+            disabled={enabledCriblDests.length === 0 || (isRunning && !forwardStatus)}
+            className={cn(
+              'inline-flex h-full items-center gap-1.5 pl-3 pr-2 text-[12px] font-medium transition-colors',
+              'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent',
+              isRunning && forwardStatus
+                ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                : 'text-slate-700 hover:bg-slate-50',
+            )}
+            title={
+              enabledCriblDests.length === 0
+                ? 'Add a Cribl HEC destination to enable forwarding'
+                : isRunning && forwardStatus
+                  ? 'Stop forwarding'
+                  : `Run as fast as possible and ship every event to ${forwardTargetDest?.name || 'destination'}`
+            }
+          >
+            {isRunning && forwardStatus ? (
+              <>
+                <Pause className="h-3.5 w-3.5 fill-current" />
+                <span className="hidden sm:inline">Stop</span>
+              </>
+            ) : (
+              <>
+                <Send className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Run and Forward</span>
+              </>
+            )}
+          </button>
+          {!isRunning && enabledCriblDests.length > 1 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
                   className="inline-flex h-full w-6 items-center justify-center border-l border-slate-200 text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-900"
-                  title="Choose playback mode"
+                  title="Pick destination"
                 >
                   <ChevronDown className="h-3 w-3" />
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-64 text-xs">
                 <DropdownMenuLabel className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                  Playback mode
+                  Forward to
                 </DropdownMenuLabel>
-                <DropdownMenuItem
-                  className="cursor-pointer flex-col items-start gap-0.5 py-2"
-                  onClick={() => setPlaybackMode('realtime')}
-                >
-                  <span className="flex w-full items-center gap-1.5">
-                    {playbackMode === 'realtime' && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />}
-                    <span className={cn('font-medium', playbackMode === 'realtime' ? 'text-slate-900' : 'text-slate-700')}>
-                      Real time
+                {enabledCriblDests.map(d => (
+                  <button
+                    key={d.id}
+                    type="button"
+                    onClick={() => setSelectedDestinationId(d.id)}
+                    className="flex w-full items-center gap-2 px-2 py-2 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <span
+                      className={cn(
+                        'inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border',
+                        (forwardTargetDest?.id === d.id)
+                          ? 'border-emerald-500 bg-emerald-500'
+                          : 'border-slate-300 bg-white',
+                      )}
+                    >
+                      {forwardTargetDest?.id === d.id && (
+                        <span className="h-1.5 w-1.5 rounded-full bg-white" />
+                      )}
                     </span>
-                  </span>
-                  <span className="pl-3 text-[11px] text-slate-500">
-                    Scrubber moves at 1 tick/sec — an 18-min scenario takes 18 minutes.
-                  </span>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  className="cursor-pointer flex-col items-start gap-0.5 py-2"
-                  onClick={() => setPlaybackMode('fast')}
-                >
-                  <span className="flex w-full items-center gap-1.5">
-                    {playbackMode === 'fast' && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />}
-                    <span className={cn('font-medium', playbackMode === 'fast' ? 'text-slate-900' : 'text-slate-700')}>
-                      Fast
+                    <span className="flex min-w-0 flex-col">
+                      <span className="truncate font-medium text-slate-900">{d.name}</span>
+                      <span className="truncate text-[11px] text-slate-500" title={d.url}>{d.url}</span>
                     </span>
-                  </span>
-                  <span className="pl-3 text-[11px] text-slate-500">
-                    Stream every frame as fast as possible; forwarded events ship at the end.
-                  </span>
-                </DropdownMenuItem>
+                  </button>
+                ))}
               </DropdownMenuContent>
             </DropdownMenu>
           )}

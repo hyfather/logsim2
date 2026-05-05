@@ -156,9 +156,12 @@ export async function runStream(opts: RunStreamOpts): Promise<void> {
   const startTimeMs = opts.startTimeMs ?? Date.now()
   const seed = opts.seed ?? Math.floor(Math.random() * 1e9)
 
-  // Cribl forwarding only makes sense for the final chunk so we don't double-
-  // forward or fragment a batch — keep it on the request that closes the run.
-  const fetchChunk = async (chunkStart: number, chunkEnd: number, isLast: boolean) => {
+  // Cribl forwarding (when enabled) ships every chunk's events as it lands
+  // — the user picked "forward during run", and dropping all-but-the-last
+  // chunk would silently lose 95% of the episode. Each chunk owns its own
+  // collected slice on the server, so per-chunk forwarding is safe (no
+  // double-sends).
+  const fetchChunk = async (chunkStart: number, chunkEnd: number, _isLast: boolean) => {
     const res = await fetch('/api/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -169,7 +172,7 @@ export async function runStream(opts: RunStreamOpts): Promise<void> {
         start_time_ms: startTimeMs,
         seed,
         source_filter: opts.sourceFilter ?? '*',
-        cribl: isLast ? opts.cribl : undefined,
+        cribl: opts.cribl,
         format: opts.format ?? 'native',
         start_tick: chunkStart,
       }),

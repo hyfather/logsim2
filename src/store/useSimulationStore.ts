@@ -4,12 +4,6 @@ import type { LogEntry, LogFilter, LogFormat } from '@/types/logs'
 import type { ConnectionActivity } from '@/types/connections'
 
 export type SimulationStatus = 'idle' | 'running'
-/** 'realtime' paces the scrubber 1 tick/sec wall-clock so an N-tick scenario
- *  takes N seconds — an 18-min episode plays out over 18 wall-clock minutes.
- *  'fast' streams every frame as quickly as the engine can produce it; useful
- *  when forwarding to a destination, since the run finishes in a few seconds
- *  and the cribl batch ships at the end. */
-export type PlaybackMode = 'realtime' | 'fast'
 
 /** Snapshot of the current (or just-finished) forward run.
  *  The store keeps this around after `state` flips to 'done' so the user
@@ -39,8 +33,15 @@ interface SimulationState {
   status: SimulationStatus
   tickCount: number
   speed: number // ticks per second
-  /** How `Run` paces the scrubber — see PlaybackMode. */
-  playbackMode: PlaybackMode
+  /** When true, the realtime Run also ships every event to the configured
+   *  destination as the simulation plays (each chunk forwards on its own
+   *  request). Off by default — Run is local visualization unless the
+   *  user opts in via the chevron toggle next to the Run button. */
+  forwardDuringRealtime: boolean
+  /** Destination id the "Run and Forward" action ships to. null means
+   *  "use the first enabled destination" — the default behavior when
+   *  there's only one. */
+  selectedDestinationId: string | null
   simulatedTime: Date
   logBuffer: LogEntry[]
   activeConnections: Record<string, ConnectionActivity>
@@ -62,7 +63,8 @@ interface SimulationState {
   // Actions
   setStatus: (status: SimulationStatus) => void
   setSpeed: (speed: number) => void
-  setPlaybackMode: (mode: PlaybackMode) => void
+  setForwardDuringRealtime: (on: boolean) => void
+  setSelectedDestinationId: (id: string | null) => void
   setTickCount: (count: number) => void
   setSimulatedTime: (time: Date) => void
   addLogs: (logs: LogEntry[]) => void
@@ -90,7 +92,8 @@ export const useSimulationStore = create<SimulationState>()((set) => ({
   status: 'idle',
   tickCount: 0,
   speed: 1,
-  playbackMode: 'realtime',
+  forwardDuringRealtime: false,
+  selectedDestinationId: null,
   simulatedTime: new Date(),
   logBuffer: [],
   activeConnections: {},
@@ -110,7 +113,8 @@ export const useSimulationStore = create<SimulationState>()((set) => ({
 
   setStatus: (status) => set({ status }),
   setSpeed: (speed) => set({ speed }),
-  setPlaybackMode: (playbackMode) => set({ playbackMode }),
+  setForwardDuringRealtime: (forwardDuringRealtime) => set({ forwardDuringRealtime }),
+  setSelectedDestinationId: (selectedDestinationId) => set({ selectedDestinationId }),
   setTickCount: (tickCount) => set({ tickCount }),
   setSimulatedTime: (simulatedTime) => set({ simulatedTime }),
 
