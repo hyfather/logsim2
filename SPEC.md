@@ -444,25 +444,30 @@ Channel filter, level filter, search, auto-scroll, copy-to-clipboard, and incide
 A `channel` is a hierarchical, dot-delimited identifier reflecting the position of an emitting node/service in the containment tree:
 
 ```
-<scenario>.<vpc-label>.<subnet-label>.<host-label>.<service-label>
+<vpc-label>.<subnet-label>.<host-label>.<service-label>
 ```
+
+The scenario name is deliberately *not* part of the channel: scenario titles
+often describe the root cause ("JVM Memory Leak Death Spiral", "Disk Full From
+Runaway Debug Logs"), and embedding them in every log line would give the
+investigation away.
 
 The Go engine computes channels by:
 1. Slugifying each `name` (lowercase, spaces → hyphens).
 2. For services: walking `service.host` → `virtual_server.subnet` → `subnet` (find VPC by CIDR containment).
 3. For nodes: walking the same chain based on `subnet:` references.
 
-Examples for the reference scenario (`scenarios/web-service.yaml`, scenario name = `Web Service`):
+Examples for the reference scenario (`scenarios/web-service.yaml`):
 
 | Source | Channel |
 |--------|---------|
-| User Directory Service | `web-service.web-service-vpc.web-service-subnet.app-server-1.user-directory-service` |
-| App Database | `web-service.web-service-vpc.web-service-subnet.database-server.app-database` |
-| Load Balancer | `web-service.web-service-vpc.web-service-subnet.load-balancer` |
-| VPC flow logs | `web-service.web-service-vpc.flow` |
-| User Clients (synthetic source) | `web-service.user-clients` |
+| User Directory Service | `web-service-vpc.web-service-subnet.app-server-1.user-directory-service` |
+| App Database | `web-service-vpc.web-service-subnet.database-server.app-database` |
+| Load Balancer | `web-service-vpc.web-service-subnet.load-balancer` |
+| VPC flow logs | `web-service-vpc.flow` |
+| User Clients (synthetic source) | `user-clients` |
 
-Glob filters (`*`, `web-service.web-service-vpc.*`, `*.app-database`) work as before, evaluated in the engine before logs cross the SSE boundary so we don't pay to serialize logs the UI is going to drop.
+Glob filters (`*`, `web-service-vpc.*`, `*.app-database`) work as before, evaluated in the engine before logs cross the SSE boundary so we don't pay to serialize logs the UI is going to drop.
 
 The editor's TS channel matcher exists for autocomplete / filter-as-you-type only. Authority lives in Go.
 
