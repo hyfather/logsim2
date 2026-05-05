@@ -156,6 +156,7 @@ export function Topbar() {
     destinations,
     statuses: destStatuses,
     errors: destErrors,
+    toggleDestination,
     setStatus: setDestStatus,
     recordSent,
   } = useDestinationsStore()
@@ -646,10 +647,11 @@ export function Topbar() {
   // ── Derived ─────────────────────────────────────────────────────
   const isRunning = status === 'running'
   const enabledDests = destinations.filter(d => d.enabled)
-  // Cribl HEC subset specifically — these are the destinations forward
-  // mode can ship to. Other destination types (when added) won't show up
-  // in the Run-and-Forward picker until they wire through `runForward`.
-  const enabledCriblDests = enabledDests.filter(d => d.type === 'cribl-hec')
+  // Cribl HEC subset specifically — these are the destinations the
+  // forward path can ship to. Other destination types (when added)
+  // won't show up here until they wire through `runForward`.
+  const allCriblDests = destinations.filter(d => d.type === 'cribl-hec')
+  const enabledCriblDests = allCriblDests.filter(d => d.enabled)
   const forwardTargetDest =
     enabledCriblDests.find(d => d.id === selectedDestinationId) ??
     enabledCriblDests[0] ?? null
@@ -1045,7 +1047,7 @@ export function Topbar() {
                 ? 'Add a destination in Settings to enable forwarding'
                 : isRunning && forwardStatus
                   ? 'Stop forwarding'
-                  : `Forward every event to ${forwardTargetDest?.name || 'destination'} as fast as possible`
+                  : `Forward every event to ${forwardTargetDest?.name ?? 'destination'} as fast as possible`
             }
           >
             {isRunning && forwardStatus ? (
@@ -1056,7 +1058,11 @@ export function Topbar() {
             ) : (
               <>
                 <Send className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">Forward logs</span>
+                <span className="hidden max-w-[180px] truncate sm:inline">
+                  {forwardTargetDest
+                    ? `Forward to ${forwardTargetDest.name}`
+                    : 'Forward logs'}
+                </span>
               </>
             )}
           </button>
@@ -1078,13 +1084,13 @@ export function Topbar() {
                   <ChevronDown className="h-3 w-3" />
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-72 text-xs">
+              <DropdownMenuContent align="end" className="w-80 text-xs">
                 <DropdownMenuLabel className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                   Forward to
                 </DropdownMenuLabel>
 
-                {enabledCriblDests.length === 0 ? (
-                  <div className="px-3 py-3 space-y-2">
+                {allCriblDests.length === 0 ? (
+                  <div className="px-3 py-3 space-y-1">
                     <p className="text-[12px] leading-snug text-slate-700">
                       No destinations configured.
                     </p>
@@ -1094,44 +1100,77 @@ export function Topbar() {
                     </p>
                   </div>
                 ) : (
-                  enabledCriblDests.map(d => {
+                  allCriblDests.map(d => {
                     const s = destStatuses[d.id]
                     const err = destErrors[d.id]
-                    const dotCls =
-                      s === 'error' ? 'bg-red-500'
+                    const isSelected = forwardTargetDest?.id === d.id
+                    const dotCls = !d.enabled
+                      ? 'bg-slate-300'
+                      : s === 'error' ? 'bg-red-500'
                         : s === 'sending' ? 'bg-blue-500 animate-pulse'
                           : s === 'idle' ? 'bg-emerald-500'
                             : 'bg-slate-300'
                     return (
-                      <button
+                      <div
                         key={d.id}
-                        type="button"
-                        onClick={() => setSelectedDestinationId(d.id)}
-                        className="flex w-full items-start gap-2 px-2 py-2 text-left transition-colors hover:bg-slate-50"
+                        className={cn(
+                          'flex items-start gap-2 px-2 py-2',
+                          d.enabled && 'transition-colors hover:bg-slate-50',
+                        )}
                       >
-                        <span
+                        <button
+                          type="button"
+                          onClick={() => d.enabled && setSelectedDestinationId(d.id)}
+                          disabled={!d.enabled}
                           className={cn(
-                            'mt-0.5 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border',
-                            forwardTargetDest?.id === d.id
+                            'mt-0.5 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border transition-colors',
+                            'disabled:cursor-not-allowed',
+                            isSelected
                               ? 'border-emerald-500 bg-emerald-500'
-                              : 'border-slate-300 bg-white',
+                              : 'border-slate-300 bg-white hover:border-slate-400',
                           )}
+                          title={d.enabled ? 'Use as forward destination' : 'Enable to use'}
                         >
-                          {forwardTargetDest?.id === d.id && (
-                            <span className="h-1.5 w-1.5 rounded-full bg-white" />
-                          )}
-                        </span>
-                        <span className="flex min-w-0 flex-1 flex-col">
+                          {isSelected && <span className="h-1.5 w-1.5 rounded-full bg-white" />}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => d.enabled && setSelectedDestinationId(d.id)}
+                          disabled={!d.enabled}
+                          className="flex min-w-0 flex-1 flex-col text-left disabled:cursor-not-allowed"
+                        >
                           <span className="flex items-center gap-1.5">
                             <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', dotCls)} title={err || undefined} />
-                            <span className="truncate font-medium text-slate-900">{d.name}</span>
+                            <span className={cn('truncate font-medium', d.enabled ? 'text-slate-900' : 'text-slate-400')}>
+                              {d.name}
+                            </span>
+                            {!d.enabled && (
+                              <span className="shrink-0 rounded bg-slate-100 px-1 py-px text-[9px] font-medium uppercase tracking-wide text-slate-500">
+                                disabled
+                              </span>
+                            )}
                           </span>
-                          <span className="truncate text-[11px] text-slate-500" title={d.url}>{d.url}</span>
+                          <span className={cn('truncate text-[11px]', d.enabled ? 'text-slate-500' : 'text-slate-400')} title={d.url}>
+                            {d.url}
+                          </span>
                           {err && (
                             <span className="truncate text-[11px] text-red-600">{err}</span>
                           )}
-                        </span>
-                      </button>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleDestination(d.id)}
+                          className={cn(
+                            'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors',
+                            d.enabled
+                              ? 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'
+                              : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100',
+                          )}
+                          title={d.enabled ? 'Disable destination' : 'Enable destination'}
+                        >
+                          {d.enabled ? 'Disable' : 'Enable'}
+                        </button>
+                      </div>
                     )
                   })
                 )}
@@ -1140,7 +1179,7 @@ export function Topbar() {
                 <DropdownMenuItem asChild className="cursor-pointer text-xs text-slate-600">
                   <Link href="/settings">
                     <Settings className="mr-2 h-3.5 w-3.5 text-slate-500" />
-                    {enabledCriblDests.length === 0 ? 'Configure a destination…' : 'Manage destinations…'}
+                    {allCriblDests.length === 0 ? 'Configure a destination…' : 'Manage destinations…'}
                   </Link>
                 </DropdownMenuItem>
               </DropdownMenuContent>
