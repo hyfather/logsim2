@@ -117,16 +117,10 @@ func promptDestination(cfg *config.DestinationsConfig) (config.Destination, erro
 					return nil
 				}),
 			huh.NewInput().
-				Title("HEC token").
-				Description("The HEC token. Stored in plain text in the dotfile (chmod 0600).").
+				Title("HEC token (optional)").
+				Description("Leave blank to forward without an Authorization header. Stored in plain text in the dotfile (chmod 0600).").
 				EchoMode(huh.EchoModePassword).
-				Value(&token).
-				Validate(func(s string) error {
-					if strings.TrimSpace(s) == "" {
-						return errors.New("token is required")
-					}
-					return nil
-				}),
+				Value(&token),
 			huh.NewSelect[string]().
 				Title("Wire format").
 				Description("Schema applied before forwarding.").
@@ -319,7 +313,9 @@ func probeHEC(ctx context.Context, d config.Destination) error {
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Splunk "+d.Token)
+	if d.Token != "" {
+		req.Header.Set("Authorization", "Splunk "+d.Token)
+	}
 	req.Header.Set("Content-Type", "application/x-ndjson")
 
 	client := &http.Client{Timeout: 10 * time.Second}

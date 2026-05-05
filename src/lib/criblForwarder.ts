@@ -61,7 +61,7 @@ async function postViaProxy(batch: string, dest: CriblHecDestination): Promise<v
  * Throws on network or upstream error.
  */
 export async function forwardToHec(logs: LogEntry[], dest: CriblHecDestination): Promise<void> {
-  if (!dest.enabled || !dest.url || !dest.token || logs.length === 0) return
+  if (!dest.enabled || !dest.url || logs.length === 0) return
 
   const batchSize = Math.max(1, dest.batchSize || 100)
 

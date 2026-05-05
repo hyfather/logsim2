@@ -206,7 +206,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 
-	if req.Cribl != nil && req.Cribl.Enabled && req.Cribl.URL != "" && req.Cribl.Token != "" && len(stream.collected) > 0 {
+	if req.Cribl != nil && req.Cribl.Enabled && req.Cribl.URL != "" && len(stream.collected) > 0 {
 		_ = forwardToCribl(req.Cribl, stream.collected)
 	}
 }
@@ -298,7 +298,7 @@ func forwardToCribl(c *apihelp.CriblConfig, entries []event.LogEntry) error {
 // upper bound on runtime — the response body itself stays tiny because no
 // log frames are streamed back.
 func handleForward(w http.ResponseWriter, r *http.Request, req *Request, sc *scenario.Scenario) {
-	if req.Cribl == nil || !req.Cribl.Enabled || req.Cribl.URL == "" || req.Cribl.Token == "" {
+	if req.Cribl == nil || !req.Cribl.Enabled || req.Cribl.URL == "" {
 		apihelp.WriteErr(w, http.StatusBadRequest, "forward mode requires a configured cribl destination")
 		return
 	}

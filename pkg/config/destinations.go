@@ -88,9 +88,8 @@ func validate(cfg *DestinationsConfig) error {
 			if d.URL == "" {
 				return fmt.Errorf("destination %q: url is required for type %q", d.Name, d.Type)
 			}
-			if d.Token == "" {
-				return fmt.Errorf("destination %q: token is required for type %q", d.Name, d.Type)
-			}
+			// Token is optional. When empty, the sink omits the
+			// Authorization header so unauthenticated HEC endpoints work.
 		case "":
 			return fmt.Errorf("destination %q: type is required", d.Name)
 		default:

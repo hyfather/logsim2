@@ -107,7 +107,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	resp := GenerateResponse{Logs: collector.entries, Ticks: req.Ticks}
 
-	if req.Cribl != nil && req.Cribl.Enabled && req.Cribl.URL != "" && req.Cribl.Token != "" && len(collector.entries) > 0 {
+	if req.Cribl != nil && req.Cribl.Enabled && req.Cribl.URL != "" && len(collector.entries) > 0 {
 		if err := forwardToCribl(req.Cribl, collector.entries); err != nil {
 			resp.ForwardError = err.Error()
 		} else {

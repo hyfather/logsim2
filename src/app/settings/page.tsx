@@ -211,7 +211,7 @@ function CriblHecForm({ initial, isEdit, destId, onSave, onDelete, onCancel }: C
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [destId, isEdit])
 
-  const isValid = name.trim().length > 0 && url.trim().length > 0 && token.trim().length > 0
+  const isValid = name.trim().length > 0 && url.trim().length > 0
 
   const buildDest = (): Omit<CriblHecDestination, 'id' | 'type'> => ({
     name: name.trim(),
@@ -289,12 +289,12 @@ function CriblHecForm({ initial, isEdit, destId, onSave, onDelete, onCancel }: C
           />
         </FieldRow>
 
-        <FieldRow label="HEC token" required>
+        <FieldRow label="HEC token" hint="Leave blank to forward without an Authorization header.">
           <Input
             value={token}
             onChange={e => setToken(e.target.value)}
             type="password"
-            placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+            placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (optional)"
             className="h-8 text-xs font-mono"
             autoComplete="off"
           />
