@@ -214,7 +214,7 @@ func TestEngine_SourceFilter(t *testing.T) {
 		Seed:           1,
 		StartTime:      time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		TickIntervalMs: 1000,
-		SourceFilter:  "web-service.web-service-vpc.*",
+		SourceFilter:  "web-service-vpc.*",
 	}
 
 	var buf strings.Builder
@@ -223,7 +223,7 @@ func TestEngine_SourceFilter(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 	if strings.TrimSpace(buf.String()) == "" {
-		t.Error("channel filter 'web-service.web-service-vpc.*' should pass UDS logs")
+		t.Error("channel filter 'web-service-vpc.*' should pass UDS logs")
 	}
 }
 

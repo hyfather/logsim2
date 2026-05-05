@@ -22,16 +22,20 @@ type SourceMap map[string]string
 
 // BuildSources computes source paths for all nodes and services in the scenario.
 //
+// Source paths deliberately exclude the scenario name: in a troubleshooting
+// scenario, the scenario title often telegraphs the root cause (e.g.
+// "JVM Memory Leak Death Spiral"), and embedding it as a source-path prefix
+// would leak that into every log line and hostname-derived field.
+//
 // Naming convention:
 //
-//	VPC:            <scenario>.<vpc>
-//	Subnet:         <scenario>.<vpc>.<subnet>           (VPC inferred by CIDR)
-//	VirtualServer:  <scenario>.<vpc>.<subnet>.<server>  (via server.Subnet field)
-//	LoadBalancer:   <scenario>.<vpc>.<subnet>.<lb>      (via lb.Subnet field)
-//	UserClients:    <scenario>.<node-name>
-//	Service:        <scenario>.<vpc>.<subnet>.<host>.<service>
+//	VPC:            <vpc>
+//	Subnet:         <vpc>.<subnet>           (VPC inferred by CIDR)
+//	VirtualServer:  <vpc>.<subnet>.<server>  (via server.Subnet field)
+//	LoadBalancer:   <vpc>.<subnet>.<lb>      (via lb.Subnet field)
+//	UserClients:    <node-name>
+//	Service:        <vpc>.<subnet>.<host>.<service>
 func BuildSources(s *scenario.Scenario) SourceMap {
-	prefix := slugify(s.Name)
 	m := make(SourceMap, len(s.Nodes)+len(s.Services)+1)
 
 	// Index nodes by name and type for lookups.
@@ -44,7 +48,7 @@ func BuildSources(s *scenario.Scenario) SourceMap {
 	vpcChannel := make(map[string]string)
 	for _, n := range s.Nodes {
 		if n.Type == scenario.NodeTypeVPC {
-			ch := prefix + "." + slugify(n.Name)
+			ch := slugify(n.Name)
 			vpcChannel[n.Name] = ch
 			m[n.Name] = ch
 		}
@@ -96,8 +100,8 @@ func BuildSources(s *scenario.Scenario) SourceMap {
 			subnetChannel[n.Name] = ch
 			m[n.Name] = ch
 		} else {
-			// No VPC found — just prefix.
-			ch := prefix + "." + slugify(n.Name)
+			// No VPC found — root the subnet at its own name.
+			ch := slugify(n.Name)
 			subnetChannel[n.Name] = ch
 			m[n.Name] = ch
 		}
@@ -115,13 +119,13 @@ func BuildSources(s *scenario.Scenario) SourceMap {
 				}
 			}
 			if ch == "" {
-				ch = prefix + "." + slugify(n.Name)
+				ch = slugify(n.Name)
 			}
 			hostChannel[n.Name] = ch
 			m[n.Name] = ch
 
 		case scenario.NodeTypeUserClients:
-			m[n.Name] = prefix + "." + slugify(n.Name)
+			m[n.Name] = slugify(n.Name)
 		}
 	}
 
@@ -136,7 +140,7 @@ func BuildSources(s *scenario.Scenario) SourceMap {
 	for _, svc := range s.Services {
 		host := hostChannel[svc.Host]
 		if host == "" {
-			host = prefix + "." + slugify(svc.Host)
+			host = slugify(svc.Host)
 		}
 		m[svc.Name] = host + "." + slugify(svc.Name)
 	}

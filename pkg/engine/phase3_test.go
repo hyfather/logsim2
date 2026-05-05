@@ -235,7 +235,7 @@ func TestPhase3_SourceFilter_VpcOnly(t *testing.T) {
 		Seed:           3,
 		StartTime:      time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		TickIntervalMs: 1000,
-		SourceFilter:  "full-stack.main-vpc.flow",
+		SourceFilter:  "main-vpc.flow",
 	}
 	eng := New(s, cfg)
 	_ = eng.Run(context.Background(), 3, []sinks.Sink{sinks.NewWriter(&buf, sinks.FormatJSONL)})

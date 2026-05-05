@@ -12,7 +12,7 @@ import (
 type LogEntry struct {
 	ID         string         `json:"id"`
 	TS         string         `json:"ts"`         // RFC3339Nano
-	Source     string         `json:"source"`     // e.g. "web-service.vpc.subnet.host.svc"
+	Source     string         `json:"source"`     // e.g. "vpc.subnet.host.svc"
 	Level      string         `json:"level"`      // DEBUG | INFO | WARN | ERROR | FATAL
 	Sourcetype string         `json:"sourcetype"` // "nodejs" | "mysql" | "vpc-flow" | ...
 	// Class is a generator-supplied hint that classifies the event for
