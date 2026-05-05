@@ -320,13 +320,99 @@ func ocsfAccountChange(e *event.LogEntry) map[string]any {
 	return out
 }
 
-// ocsfGeneric is the fallback when Class is empty/unknown. It still produces
-// valid OCSF base attributes plus the original message — that's better than
-// silently dropping the line.
+// ocsfGeneric is the fallback when Class is empty/unknown. Rather than emit a
+// flat 6001/0 ("Application Activity / Unknown") for every unclassified line,
+// it inspects the source path and the message body for well-known service /
+// event-name markers (cloudtrail, iam, okta, ad-dc, signin, ConsoleLogin,
+// CreateUser, ...) and dispatches to the matching class builder. That way a
+// scenario whose templates only carry free text — but whose service is named
+// "aws-iam-host" or "ad-dc-01" — still gets a truthful class_uid and
+// activity_id, instead of every event collapsing to Unknown. When nothing
+// matches we keep the original 6001/0 shape so a truly opaque line stays
+// honest about being opaque.
 func ocsfGeneric(e *event.LogEntry) map[string]any {
+	if cls := inferClassFromContext(e); cls != "" {
+		switch cls {
+		case ClassAuthentication:
+			return ocsfAuthentication(e)
+		case ClassAccountChange:
+			return ocsfAccountChange(e)
+		case ClassAPIActivity:
+			return ocsfAPIActivity(e)
+		}
+	}
 	return ocsfBase(e, ocsfCategoryApplication, "Application Activity",
 		6001, "Application Activity",
 		0, "Unknown")
+}
+
+// inferClassFromContext is a heuristic, source-pattern-driven classifier for
+// custom-template events that didn't declare their own Class. It matches
+// against the source path (joined dotpath like "vpc.subnet.host.svc"), the
+// sourcetype, and the raw message — in that priority order — and returns the
+// Class constant the encoder should dispatch to. Returns "" when no marker
+// looks safe, so the caller stays on the strict Application Activity / Unknown
+// fallback for truly opaque events.
+//
+// Markers are intentionally narrow: a service named "aws-iam" or "okta-auth"
+// is reliably an identity/api signal; ambiguous tokens (just "user" or "log")
+// don't trigger a guess.
+func inferClassFromContext(e *event.LogEntry) string {
+	hay := strings.ToLower(e.Source + " " + e.Sourcetype + " " + e.Raw)
+
+	// Authentication is the highest-confidence inference: directory controllers,
+	// signin endpoints, SSO/identity provider login surfaces, and CloudTrail
+	// ConsoleLogin events all map there.
+	authMarkers := []string{
+		"signin", "console-login", "consolelogin", "ad-dc", "ldap",
+		"kerberos", "okta-auth", "auth0", "sso", "oauth", "saml",
+		"entra-id", "external-idp", "vendor-vpn", "jump-rdp", "rdp-",
+	}
+	for _, m := range authMarkers {
+		if strings.Contains(hay, m) {
+			return ClassAuthentication
+		}
+	}
+
+	// Account / entity-management surfaces — IAM mutations, AAD account ops,
+	// and the AWS Lambda / EC2 control plane events that show up alongside.
+	// Match only when the message verb agrees, since the same service can
+	// emit both account-change events and plain reads.
+	if hasAccountChangeMarker(hay) {
+		return ClassAccountChange
+	}
+
+	// Anything else with a service-path-shaped source (`vpc.subnet.host.svc`)
+	// classifies as API Activity. Operational service logs from CloudTrail
+	// pipes, IAM consoles, Graph/Okta tenancy, k8s API servers, search
+	// clusters, message brokers, file/object stores, and SaaS APIs are all
+	// API-call traces in OCSF terms — better to call them that than collapse
+	// every unclassified line to "Unknown". Truly raw lines with no source
+	// (Source == "") keep the strict 6001/0 fallback.
+	if e.Source != "" && strings.Contains(e.Source, ".") {
+		return ClassAPIActivity
+	}
+	return ""
+}
+
+// hasAccountChangeMarker looks for IAM/account-mutation event names in the
+// haystack so a free-text log that mentions CreateUser / DeleteAccessKey /
+// PasswordReset still classifies as Account Change instead of falling
+// through to API Activity.
+func hasAccountChangeMarker(hay string) bool {
+	markers := []string{
+		"createuser", "deleteuser", "createaccesskey", "deleteaccesskey",
+		"updateloginprofile", "passwordreset", "resetpassword", "changepassword",
+		"attachuserpolicy", "detachuserpolicy", "attachrolepolicy", "detachrolepolicy",
+		"createrole", "deleterole", "addusertogroup", "removeuserfromgroup",
+		"enablemfa", "deactivatemfadevice", "deletemfadevice",
+	}
+	for _, m := range markers {
+		if strings.Contains(hay, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // --- shared base -----------------------------------------------------------
@@ -625,7 +711,10 @@ func accountChangeActivityName(id int) string {
 // apiActivity picks an OCSF API Activity activity_id. Operation names take
 // priority because CRUD intent is more semantic than the HTTP verb — a POST
 // can be a Read (e.g. AWS APIs encode reads as POSTs). The HTTP method is the
-// fallback when no operation is supplied.
+// next fallback. With neither, the default is Read (2) since operational API
+// chatter from control-plane services skews heavily toward Get/Describe/List;
+// callers that genuinely don't know can pass activity_id=0 in fields to
+// override.
 func apiActivity(op, method string) (int, string) {
 	o := strings.ToLower(strings.TrimSpace(op))
 	switch {
@@ -650,7 +739,7 @@ func apiActivity(op, method string) (int, string) {
 	case "DELETE":
 		return 4, "Delete"
 	default:
-		return 0, "Unknown"
+		return 2, "Read"
 	}
 }
 

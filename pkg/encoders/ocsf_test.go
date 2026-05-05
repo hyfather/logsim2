@@ -335,6 +335,94 @@ func TestOCSFAPIActivityFailureStatus(t *testing.T) {
 	}
 }
 
+// TestOCSFGenericFallbackInfersFromSource covers the broad case where a
+// custom-template event arrives with no Class hint but does carry a
+// service-path-shaped Source. The encoder should infer API Activity (6003)
+// instead of collapsing every such event to Application Activity / Unknown.
+func TestOCSFGenericFallbackInfersFromSource(t *testing.T) {
+	e := &event.LogEntry{
+		Source:     "control-plane.audit.host.cloudtrail-firehose",
+		Sourcetype: "custom:cloudtrail-firehose-events",
+		Level:      "INFO",
+		TS:         "2026-04-28T10:00:00.000Z",
+		Raw:        "cloudtrail-firehose returned response",
+	}
+	b, err := For(FormatOCSF).Encode(e)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+	if got["class_uid"].(float64) != 6003 {
+		t.Errorf("class_uid = %v, want 6003 (API Activity)", got["class_uid"])
+	}
+	if got["activity_id"].(float64) != 2 {
+		t.Errorf("activity_id = %v, want 2 (Read)", got["activity_id"])
+	}
+}
+
+// TestOCSFGenericFallbackInfersAuthentication covers identity-shaped sources
+// (AD DCs, signin endpoints, IdPs) routing to Authentication (3002) Logon.
+func TestOCSFGenericFallbackInfersAuthentication(t *testing.T) {
+	e := &event.LogEntry{
+		Source:     "corp.identity.host.ad-dc-01",
+		Sourcetype: "custom:ad-dc-01-events",
+		Level:      "INFO",
+		TS:         "2026-04-28T10:00:00.000Z",
+		Raw:        "ad-dc-01 returned response",
+	}
+	b, _ := For(FormatOCSF).Encode(e)
+	var got map[string]any
+	_ = json.Unmarshal(b, &got)
+	if got["class_uid"].(float64) != 3002 {
+		t.Errorf("class_uid = %v, want 3002 (Authentication)", got["class_uid"])
+	}
+	if got["activity_id"].(float64) != 1 {
+		t.Errorf("activity_id = %v, want 1 (Logon)", got["activity_id"])
+	}
+}
+
+// TestOCSFGenericFallbackInfersAccountChange covers free-text logs that
+// mention IAM mutation event names without setting Class explicitly.
+func TestOCSFGenericFallbackInfersAccountChange(t *testing.T) {
+	e := &event.LogEntry{
+		Source:     "control-plane.iam.host.aws-iam",
+		Sourcetype: "custom:aws-iam-events",
+		Level:      "INFO",
+		TS:         "2026-04-28T10:00:00.000Z",
+		Raw:        "principal=alice eventName=DeleteAccessKey",
+	}
+	b, _ := For(FormatOCSF).Encode(e)
+	var got map[string]any
+	_ = json.Unmarshal(b, &got)
+	if got["class_uid"].(float64) != 3001 {
+		t.Errorf("class_uid = %v, want 3001 (Account Change)", got["class_uid"])
+	}
+}
+
+// TestOCSFGenericFallbackKeepsUnknownForRawSource verifies a truly opaque
+// event (no source path, no markers) still emits 6001/0 — the heuristic
+// should never lie about classifying something it can't.
+func TestOCSFGenericFallbackKeepsUnknownForRawSource(t *testing.T) {
+	e := &event.LogEntry{
+		Sourcetype: "custom",
+		Level:      "INFO",
+		TS:         "2026-04-28T10:00:00.000Z",
+		Raw:        "hello",
+	}
+	b, _ := For(FormatOCSF).Encode(e)
+	var got map[string]any
+	_ = json.Unmarshal(b, &got)
+	if got["class_uid"].(float64) != 6001 {
+		t.Errorf("class_uid = %v, want 6001", got["class_uid"])
+	}
+	if got["activity_id"].(float64) != 0 {
+		t.Errorf("activity_id = %v, want 0", got["activity_id"])
+	}
+}
+
 func TestParseFormat(t *testing.T) {
 	tests := []struct {
 		in   string
