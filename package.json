@@ -26,6 +26,7 @@
     "@radix-ui/react-switch": "^1.2.6",
     "@tanstack/react-virtual": "^3.13.24",
     "@types/js-yaml": "^4.0.9",
+    "@vercel/analytics": "^2.0.1",
     "@xyflow/react": "^12.10.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
