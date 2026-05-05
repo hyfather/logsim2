@@ -15,7 +15,7 @@ export interface BaseDestination {
 export interface CriblHecDestination extends BaseDestination {
   type: 'cribl-hec'
   url: string
-  token: string
+  token: string       // optional; empty string → forward without an Authorization header
   source: string      // empty string → use log channel per event
   sourcetype: string  // empty string → auto-map per generator (mysql → mysql:query, …)
   batchSize: number   // events per HTTP request, 1–500

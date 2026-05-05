@@ -8,11 +8,15 @@ import { NextResponse } from 'next/server'
  * the destination URL and token, then forwards the request from the server
  * so the browser never hits the Cribl endpoint directly (avoids CORS).
  *
- * Body: { batch: string, url: string, token: string }
+ * Body: { batch: string, url: string, token?: string }
  * Returns: { ok: true } on success, or { ok: false, status: number, body: string } on upstream error.
+ *
+ * The token is optional — when omitted, no Authorization header is sent. This
+ * lets the destination accept anonymous traffic (e.g. a Cribl Source with auth
+ * disabled, or a downstream collector that handles auth itself).
  */
 export async function POST(request: Request) {
-  let body: { batch: string; url: string; token: string }
+  let body: { batch: string; url: string; token?: string }
 
   try {
     body = await request.json()
@@ -22,21 +26,23 @@ export async function POST(request: Request) {
 
   const { batch, url, token } = body
 
-  if (!url || !token || !batch) {
+  if (!url || !batch) {
     return NextResponse.json(
-      { ok: false, error: 'Missing required fields: url, token, batch' },
+      { ok: false, error: 'Missing required fields: url, batch' },
       { status: 400 },
     )
+  }
+
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (token) {
+    headers['Authorization'] = `Splunk ${token}`
   }
 
   let upstream: Response
   try {
     upstream = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Authorization': `Splunk ${token}`,
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: batch,
     })
   } catch (err) {

@@ -102,16 +102,19 @@ destinations:
 	}
 }
 
-func TestDestinations_RejectMissingToken(t *testing.T) {
+func TestDestinations_AllowMissingToken(t *testing.T) {
 	yaml := `
 destinations:
   - name: d1
     type: cribl_hec
     url: https://example.com
 `
-	_, err := Parse(strings.NewReader(yaml))
-	if err == nil {
-		t.Error("expected error for missing token")
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("token should be optional, got error: %v", err)
+	}
+	if got := cfg.Destinations[0].Token; got != "" {
+		t.Errorf("token should default to empty string, got %q", got)
 	}
 }
 

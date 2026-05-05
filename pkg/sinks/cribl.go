@@ -238,7 +238,9 @@ func (s *CriblSink) post(body []byte) (int, error) {
 	if err != nil {
 		return 0, permErr(fmt.Sprintf("build request: %v", err))
 	}
-	req.Header.Set("Authorization", "Splunk "+s.token)
+	if s.token != "" {
+		req.Header.Set("Authorization", "Splunk "+s.token)
+	}
 	req.Header.Set("Content-Type", "application/x-ndjson")
 
 	resp, err := s.client.Do(req)

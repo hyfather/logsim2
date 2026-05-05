@@ -235,7 +235,7 @@ The same scenario YAML and the same `LogEntry` shape flow through every surface.
 - **`POST /api/generate`** — one short window. Body: `{ scenario_yaml, ticks (≤30), tick_interval_ms, start_time_ms, seed, source_filter, cribl? }`. Response: `{ logs: LogEntry[], ticks, forwarded, forward_error? }`. Used by the legacy single-tick frontend path.
 - **`POST /api/run`** — full episode, NDJSON stream. Body adds `duration`, `start_tick`, `format` (`native|ocsf|otel`), `mode` (`""` | `"forward"`). Frame shapes:
   - Default (log frames): `{"tick":N,"ts":<ms>,"logs":[…]}` per tick, then `{"done":true,"total_logs":M}` (or `{"partial":true,"next_tick":N,"total_logs":M}` if the response would exceed the ~3 MiB body cap, or `{"error":"…"}`).
-  - Forward mode (`mode:"forward"`): `start` → `post` (one per HTTP attempt against Cribl) → `progress` (every ~10 ticks) → `done` (or `error`). No log frames are streamed back; the body stays tiny. Requires `cribl.{enabled,url,token}` in the request body.
+  - Forward mode (`mode:"forward"`): `start` → `post` (one per HTTP attempt against Cribl) → `progress` (every ~10 ticks) → `done` (or `error`). No log frames are streamed back; the body stays tiny. Requires `cribl.{enabled,url}` in the request body; `cribl.token` is optional (when omitted, no `Authorization` header is sent).
 - **`POST /api/logs_at`** — random-access scrub. Body: `{ scenario_yaml, from, to, seed, … }`. Re-runs the engine deterministically from tick 0 up to `to`, returns logs in `[from, to)`. Same scenario+seed → same output, so timeline scrubs show stable previews.
 
 The Vercel function timeout is the only upper bound on runtime. To stay under the response-body cap, `/api/run` chunks long episodes — the frontend resumes by sending the `next_tick` from the `partial` frame as `start_tick` on the follow-up request.
@@ -423,7 +423,7 @@ The dotfile lives at `$LOGSIM_CONFIG`, else `$XDG_CONFIG_HOME/logsim/destination
 
 ## Destinations Config
 
-A YAML file describing forwarding targets. Tokens live in the file (no env interpolation in V1).
+A YAML file describing forwarding targets. Tokens live in the file (no env interpolation in V1). `token` is optional — omit it (or leave it empty) to forward without an `Authorization` header.
 
 ```yaml
 # ~/.config/logsim/destinations.yaml
@@ -615,7 +615,7 @@ The CLI's `--format` (and `--ocsf` / `--otel` shortcuts) selects which encoder r
   ```json
   { "time": 1745059800.123, "host": "…", "source": "<source-path>", "sourcetype": "logsim:json", "event": <Raw or schema-encoded JSON> }
   ```
-  Newline-delimited per HEC convention. Auth header: `Authorization: Splunk <token>`. 3-retry exponential backoff (1s, 2s, 4s) on 5xx and transport errors; 4xx are permanent. Drops batch with stderr warning after retries (engine keeps running). Exposes a `SendObserver` callback that fires per HTTP attempt — the CLI's `forwardingReporter` and the `/api/run` forward-mode handler both use this to render live HEC status.
+  Newline-delimited per HEC convention. Auth header: `Authorization: Splunk <token>` when a token is configured; if the destination has no token, the header is omitted. 3-retry exponential backoff (1s, 2s, 4s) on 5xx and transport errors; 4xx are permanent. Drops batch with stderr warning after retries (engine keeps running). Exposes a `SendObserver` callback that fires per HTTP attempt — the CLI's `forwardingReporter` and the `/api/run` forward-mode handler both use this to render live HEC status.
 
 ### Editor log panel
 
