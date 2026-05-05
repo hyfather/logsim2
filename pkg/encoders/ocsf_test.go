@@ -126,6 +126,215 @@ func TestOCSFGenericFallback(t *testing.T) {
 	}
 }
 
+func TestOCSFAuthenticationLogon(t *testing.T) {
+	e := &event.LogEntry{
+		Class:      ClassAuthentication,
+		TS:         "2026-04-28T10:00:00.000Z",
+		Sourcetype: "custom:aws-iam-events",
+		Level:      "INFO",
+		Raw:        "ConsoleLogin from rootUser",
+		Fields: map[string]any{
+			"event_name":         "ConsoleLogin",
+			"user_type":          "Root",
+			"user_name":          "root",
+			"user_account_uid":   "111122223333",
+			"actor_user_type":    "Root",
+			"actor_user_name":    "root",
+			"actor_user_uid":     "arn:aws:iam::111122223333:root",
+			"src_ip":             "5.34.180.42",
+			"src_country":        "TR",
+			"is_mfa":             false,
+			"auth_protocol":      "AWS Console Sign-In",
+			"logon_type":         "Interactive",
+			"dst_svc_name":       "signin.amazonaws.com",
+			"region":             "us-east-1",
+			"status":             "Success",
+		},
+	}
+	b, err := For(FormatOCSF).Encode(e)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+	if got["class_uid"].(float64) != 3002 {
+		t.Errorf("class_uid = %v, want 3002", got["class_uid"])
+	}
+	if got["category_uid"].(float64) != 3 {
+		t.Errorf("category_uid = %v, want 3", got["category_uid"])
+	}
+	if got["activity_id"].(float64) != 1 {
+		t.Errorf("activity_id = %v, want 1 (Logon)", got["activity_id"])
+	}
+	if got["activity_name"] != "Logon" {
+		t.Errorf("activity_name = %v, want Logon", got["activity_name"])
+	}
+	if got["type_uid"].(float64) != 300201 {
+		t.Errorf("type_uid = %v, want 300201", got["type_uid"])
+	}
+	if got["type_name"] != "Authentication: Logon" {
+		t.Errorf("type_name = %v, want Authentication: Logon", got["type_name"])
+	}
+	if got["is_mfa"] != false {
+		t.Errorf("is_mfa = %v, want false", got["is_mfa"])
+	}
+	user := got["user"].(map[string]any)
+	if user["name"] != "root" || user["type"] != "Root" {
+		t.Errorf("user = %v, want root/Root", user)
+	}
+	src := got["src_endpoint"].(map[string]any)
+	if src["ip"] != "5.34.180.42" {
+		t.Errorf("src ip = %v", src["ip"])
+	}
+	loc := src["location"].(map[string]any)
+	if loc["country"] != "TR" {
+		t.Errorf("country = %v", loc["country"])
+	}
+	meta := got["metadata"].(map[string]any)
+	if meta["version"] != "1.5.0" {
+		t.Errorf("metadata.version = %v, want 1.5.0", meta["version"])
+	}
+}
+
+func TestOCSFAccountChangeCreateAccessKey(t *testing.T) {
+	e := &event.LogEntry{
+		Class: ClassAccountChange,
+		TS:    "2026-04-28T10:00:00.000Z",
+		Level: "WARN",
+		Fields: map[string]any{
+			"event_name":      "CreateAccessKey",
+			"service_name":    "iam.amazonaws.com",
+			"user_type":       "Root",
+			"user_name":       "root",
+			"actor_user_type": "Root",
+			"actor_user_name": "root",
+			"status":          "Success",
+		},
+	}
+	b, _ := For(FormatOCSF).Encode(e)
+	var got map[string]any
+	_ = json.Unmarshal(b, &got)
+	if got["class_uid"].(float64) != 3001 {
+		t.Errorf("class_uid = %v, want 3001", got["class_uid"])
+	}
+	if got["activity_id"].(float64) != 1 {
+		t.Errorf("activity_id = %v, want 1 (Create)", got["activity_id"])
+	}
+	if got["activity_name"] != "Create" {
+		t.Errorf("activity_name = %v, want Create", got["activity_name"])
+	}
+	api := got["api"].(map[string]any)
+	if api["operation"] != "CreateAccessKey" {
+		t.Errorf("api.operation = %v", api["operation"])
+	}
+}
+
+func TestOCSFAccountChangeDeleteAccessKey(t *testing.T) {
+	e := &event.LogEntry{
+		Class: ClassAccountChange,
+		TS:    "2026-04-28T10:00:00.000Z",
+		Level: "INFO",
+		Fields: map[string]any{
+			"event_name": "DeleteAccessKey",
+			"user_name":  "root",
+			"status":     "Success",
+		},
+	}
+	b, _ := For(FormatOCSF).Encode(e)
+	var got map[string]any
+	_ = json.Unmarshal(b, &got)
+	if got["activity_id"].(float64) != 6 {
+		t.Errorf("activity_id = %v, want 6 (Delete)", got["activity_id"])
+	}
+	if got["activity_name"] != "Delete" {
+		t.Errorf("activity_name = %v, want Delete", got["activity_name"])
+	}
+}
+
+func TestOCSFAccountChangeExplicitActivityID(t *testing.T) {
+	// UpdateLoginProfile with passwordResetRequired=true is a Password Reset (4)
+	// even though the verb starts with "Update". The template declares the
+	// activity_id explicitly to override the verb-prefix heuristic.
+	e := &event.LogEntry{
+		Class: ClassAccountChange,
+		TS:    "2026-04-28T10:00:00.000Z",
+		Level: "INFO",
+		Fields: map[string]any{
+			"event_name":  "UpdateLoginProfile",
+			"activity_id": 4,
+			"user_name":   "root",
+		},
+	}
+	b, _ := For(FormatOCSF).Encode(e)
+	var got map[string]any
+	_ = json.Unmarshal(b, &got)
+	if got["activity_id"].(float64) != 4 {
+		t.Errorf("activity_id = %v, want 4 (Password Reset)", got["activity_id"])
+	}
+	if got["activity_name"] != "Password Reset" {
+		t.Errorf("activity_name = %v, want Password Reset", got["activity_name"])
+	}
+	if got["type_uid"].(float64) != 300104 {
+		t.Errorf("type_uid = %v, want 300104", got["type_uid"])
+	}
+}
+
+func TestOCSFAPIActivityFromOperation(t *testing.T) {
+	// Operation prefix wins over the HTTP verb because AWS describes reads as
+	// POSTs — the OCSF activity_id should still be Read.
+	e := &event.LogEntry{
+		Class: ClassAPIActivity,
+		TS:    "2026-04-28T10:00:00.000Z",
+		Level: "INFO",
+		Fields: map[string]any{
+			"operation":    "GetCostAndUsage",
+			"service_name": "ce.amazonaws.com",
+			"method":       "POST",
+			"status":       "Success",
+		},
+	}
+	b, _ := For(FormatOCSF).Encode(e)
+	var got map[string]any
+	_ = json.Unmarshal(b, &got)
+	if got["activity_id"].(float64) != 2 {
+		t.Errorf("activity_id = %v, want 2 (Read)", got["activity_id"])
+	}
+	if got["activity_name"] != "Read" {
+		t.Errorf("activity_name = %v, want Read", got["activity_name"])
+	}
+	api := got["api"].(map[string]any)
+	if api["operation"] != "GetCostAndUsage" {
+		t.Errorf("api.operation = %v", api["operation"])
+	}
+	svc := api["service"].(map[string]any)
+	if svc["name"] != "ce.amazonaws.com" {
+		t.Errorf("api.service.name = %v", svc["name"])
+	}
+}
+
+func TestOCSFAPIActivityFailureStatus(t *testing.T) {
+	e := &event.LogEntry{
+		Class: ClassAPIActivity,
+		TS:    "2026-04-28T10:00:00.000Z",
+		Level: "ERROR",
+		Fields: map[string]any{
+			"operation": "GetCostAndUsage",
+			"status":    "Failure",
+		},
+	}
+	b, _ := For(FormatOCSF).Encode(e)
+	var got map[string]any
+	_ = json.Unmarshal(b, &got)
+	if got["status"] != "Failure" {
+		t.Errorf("status = %v, want Failure", got["status"])
+	}
+	if got["status_id"].(float64) != 2 {
+		t.Errorf("status_id = %v, want 2", got["status_id"])
+	}
+}
+
 func TestParseFormat(t *testing.T) {
 	tests := []struct {
 		in   string

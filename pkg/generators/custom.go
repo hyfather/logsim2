@@ -85,15 +85,24 @@ func (g *CustomGenerator) Generate(target Target, inbound []event.Flow, ctx even
 		if len(ctx.Override.Placeholders) > 0 {
 			placeholders = mergePlaceholders(g.customType.Placeholders, ctx.Override.Placeholders)
 		}
-		raw := renderTemplate(tpl.Template, placeholders, ts, isError, tpl.Level, ctx.Rng)
+		// One bindings map per event so {{name}} resolves to the same value
+		// in the rendered message AND in any structured Fields the template
+		// declares. Without this, a template like
+		//   eventName={{op}} ... fields: { operation: '{{op}}' }
+		// would emit a message and an OCSF api.operation that disagree.
+		bindings := map[string]string{}
+		raw := renderTemplateWith(tpl.Template, placeholders, bindings, ts, isError, tpl.Level, ctx.Rng)
 		level := normalizeLevel(tpl.Level, isError)
+		fields := renderFieldsWith(tpl.Fields, placeholders, bindings, ts, isError, tpl.Level, ctx.Rng)
 		out = append(out, event.LogEntry{
 			ID:         makeID(target, ctx.TickIndex, i),
 			TS:         ts.Format(time.RFC3339Nano),
 			Source:     target.Source,
 			Level:      level,
 			Sourcetype: "custom:" + g.customType.ID,
+			Class:      tpl.Class,
 			Raw:        raw,
+			Fields:     fields,
 		})
 	}
 	return out
@@ -155,6 +164,75 @@ func pickWeightedTemplate(
 	return pool[len(pool)-1]
 }
 
+// renderFieldsWith walks a template's structured Fields map and renders any
+// string values through the same {{placeholder}} engine that Template uses,
+// so per-event fields can carry dynamic IPs, user names, request ids, etc.
+// Non-string scalars and nested maps/slices pass through; nil input returns
+// nil so the LogEntry stays unchanged when a template declares no Fields.
+//
+// bindings is shared with the matching renderTemplateWith call so a name
+// referenced in both message and fields resolves to the same value.
+func renderFieldsWith(
+	in map[string]any,
+	placeholders map[string]scenario.Placeholder,
+	bindings map[string]string,
+	ts time.Time,
+	isError bool,
+	level string,
+	rng interface {
+		Float64() float64
+		Intn(int) int
+	},
+) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = renderFieldValueWith(v, placeholders, bindings, ts, isError, level, rng)
+	}
+	return out
+}
+
+func renderFieldValueWith(
+	v any,
+	placeholders map[string]scenario.Placeholder,
+	bindings map[string]string,
+	ts time.Time,
+	isError bool,
+	level string,
+	rng interface {
+		Float64() float64
+		Intn(int) int
+	},
+) any {
+	switch val := v.(type) {
+	case string:
+		if !strings.Contains(val, "{{") {
+			return val
+		}
+		return renderTemplateWith(val, placeholders, bindings, ts, isError, level, rng)
+	case map[string]any:
+		return renderFieldsWith(val, placeholders, bindings, ts, isError, level, rng)
+	case map[any]any:
+		// YAML decoded nested maps may surface with any keys; coerce to the
+		// shape we hand to encoders.
+		coerced := make(map[string]any, len(val))
+		for k, sub := range val {
+			coerced[fmt.Sprint(k)] = renderFieldValueWith(sub, placeholders, bindings, ts, isError, level, rng)
+		}
+		return coerced
+	case []any:
+		out := make([]any, len(val))
+		for i, sub := range val {
+			out[i] = renderFieldValueWith(sub, placeholders, bindings, ts, isError, level, rng)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
 // mergePlaceholders returns a new map with base layered under override.
 // Override entries replace base entries with the same key.
 func mergePlaceholders(base, override map[string]scenario.Placeholder) map[string]scenario.Placeholder {
@@ -168,12 +246,18 @@ func mergePlaceholders(base, override map[string]scenario.Placeholder) map[strin
 	return out
 }
 
-// renderTemplate replaces every `{{name}}` marker by filling the matching
+// renderTemplateWith replaces every `{{name}}` marker by filling the matching
 // Placeholder definition. Unknown markers expand to `<name>` so missing
 // placeholder defs surface visibly rather than silently emitting blanks.
-func renderTemplate(
+//
+// bindings memoizes the first value picked for each placeholder name so the
+// same `{{name}}` produces the same value when referenced multiple times in
+// a template, or across a template and its sibling Fields. Pass an empty
+// (non-nil) map to opt in; nil disables memoization.
+func renderTemplateWith(
 	template string,
 	placeholders map[string]scenario.Placeholder,
+	bindings map[string]string,
 	ts time.Time,
 	isError bool,
 	level string,
@@ -197,6 +281,20 @@ func renderTemplate(
 			if !isIdent(name) {
 				// Not a valid placeholder; emit the raw `{{...}}` chunk.
 				b.WriteString(template[i : i+2+end+2])
+			} else if bindings != nil {
+				if v, ok := bindings[name]; ok {
+					b.WriteString(v)
+				} else {
+					spec, ok := placeholders[name]
+					var filled string
+					if !ok {
+						filled = "<" + name + ">"
+					} else {
+						filled = fillPlaceholder(name, &spec, ts, isError, level, rng)
+					}
+					bindings[name] = filled
+					b.WriteString(filled)
+				}
 			} else {
 				spec, ok := placeholders[name]
 				if !ok {
@@ -214,6 +312,23 @@ func renderTemplate(
 		i++
 	}
 	return b.String()
+}
+
+// renderTemplate is the legacy entry point. It opts out of binding memoization
+// so existing callers (and tests) preserve the old "every {{name}} re-rolls"
+// behavior.
+func renderTemplate(
+	template string,
+	placeholders map[string]scenario.Placeholder,
+	ts time.Time,
+	isError bool,
+	level string,
+	rng interface {
+		Float64() float64
+		Intn(int) int
+	},
+) string {
+	return renderTemplateWith(template, placeholders, nil, ts, isError, level, rng)
 }
 
 func isIdent(s string) bool {

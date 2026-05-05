@@ -150,12 +150,20 @@ type Placeholder struct {
 // LogTemplate is one weighted output line within a CustomType.
 // ID is stable across positions so timeline blocks can target templates by
 // name; if absent at parse time, parser auto-assigns "tpl_<index>".
+//
+// Class and Fields are OCSF/UDM/ASIM hints. Class names a schema class (e.g.
+// "authentication", "account_change") so encoders pick the right builder
+// instead of the generic Application Activity fallback. Fields carries
+// per-event structured values; string entries support {{placeholder}} markers
+// rendered with the same engine as Template.
 type LogTemplate struct {
-	ID       string  `yaml:"id,omitempty"`
-	Template string  `yaml:"template"`
-	Weight   float64 `yaml:"weight,omitempty"`
-	Level    string  `yaml:"level,omitempty"`
-	IsError  bool    `yaml:"is_error,omitempty"`
+	ID       string         `yaml:"id,omitempty"`
+	Template string         `yaml:"template"`
+	Weight   float64        `yaml:"weight,omitempty"`
+	Level    string         `yaml:"level,omitempty"`
+	IsError  bool           `yaml:"is_error,omitempty"`
+	Class    string         `yaml:"class,omitempty"`
+	Fields   map[string]any `yaml:"fields,omitempty"`
 }
 
 // Endpoint defines one HTTP route on a service.

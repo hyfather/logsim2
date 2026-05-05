@@ -11,14 +11,22 @@ import (
 // OCSF v1.x class identifiers. Kept as named constants so additions to the
 // schema map to one obvious place rather than scattered magic numbers.
 const (
+	ocsfCategoryIAM         = 3
 	ocsfCategoryNetwork     = 4
 	ocsfCategoryApplication = 6
 
+	ocsfClassAccountChange        = 3001
+	ocsfClassAuthentication       = 3002
 	ocsfClassNetworkActivity      = 4001
 	ocsfClassHTTPActivity         = 4002
 	ocsfClassAPIActivity          = 6003
 	ocsfClassApplicationLifecycle = 6002
 	ocsfClassDatastoreActivity    = 6005
+
+	// ocsfSchemaVersion tracks the published OCSF schema this encoder targets.
+	// Bumping this is the signal that builders have been reviewed against the
+	// new spec — don't change the string in isolation.
+	ocsfSchemaVersion = "1.5.0"
 )
 
 // ocsfEncoder maps a LogEntry to an OCSF event JSON object.
@@ -46,6 +54,10 @@ func buildOCSF(e *event.LogEntry) map[string]any {
 		return ocsfApplicationLifecycle(e)
 	case ClassAPIActivity:
 		return ocsfAPIActivity(e)
+	case ClassAuthentication:
+		return ocsfAuthentication(e)
+	case ClassAccountChange:
+		return ocsfAccountChange(e)
 	default:
 		return ocsfGeneric(e)
 	}
@@ -181,10 +193,131 @@ func ocsfApplicationLifecycle(e *event.LogEntry) map[string]any {
 	return out
 }
 
+// ocsfAPIActivity → class_uid 6003. activity_id is derived from the operation
+// name (e.g. "DescribeBilling" → Read, "CreateAccessKey" → Create) so per-API
+// CRUD intent is reflected without analytics having to pattern-match strings.
+// Falls back to the http method when no operation is supplied.
 func ocsfAPIActivity(e *event.LogEntry) map[string]any {
-	return ocsfBase(e, ocsfCategoryApplication, "Application Activity",
+	op := firstNonEmpty(strField(e.Fields, "operation"), strField(e.Fields, "event_name"))
+	method := strField(e.Fields, "method")
+
+	activityID, activityName := apiActivity(op, method)
+	if v := intField(e.Fields, "activity_id"); v != 0 {
+		activityID = v
+		activityName = apiActivityName(activityID)
+	}
+
+	out := ocsfBase(e, ocsfCategoryApplication, "Application Activity",
 		ocsfClassAPIActivity, "API Activity",
-		0, "Unknown")
+		activityID, activityName)
+
+	if op != "" {
+		api := map[string]any{"operation": op}
+		if svc := strField(e.Fields, "service_name"); svc != "" {
+			api["service"] = map[string]any{"name": svc}
+		}
+		if reqUID := strField(e.Fields, "request_uid"); reqUID != "" {
+			api["request"] = map[string]any{"uid": reqUID}
+		}
+		out["api"] = api
+	}
+	if actor := actorFromFields(e.Fields); actor != nil {
+		out["actor"] = actor
+	}
+	if src := srcEndpointFromFields(e.Fields); src != nil {
+		out["src_endpoint"] = src
+	}
+	if region := strField(e.Fields, "region"); region != "" {
+		out["cloud"] = map[string]any{"region": region, "provider": firstNonEmpty(strField(e.Fields, "cloud_provider"), "AWS")}
+	}
+	if status := strField(e.Fields, "status"); status != "" {
+		applyStatus(out, status)
+	}
+	return out
+}
+
+// ocsfAuthentication → class_uid 3002. activity_id 1 (Logon) is the default
+// since that's the dominant CloudTrail console-signin signal; an explicit
+// "logoff" event_name flips it. Fields the spec calls out specifically —
+// is_mfa, logon_type, auth_protocol — are passed through when set so analytics
+// can tell an MFA console login apart from a non-MFA root one.
+func ocsfAuthentication(e *event.LogEntry) map[string]any {
+	op := firstNonEmpty(strField(e.Fields, "operation"), strField(e.Fields, "event_name"))
+	activityID, activityName := authActivity(op)
+	if v := intField(e.Fields, "activity_id"); v != 0 {
+		activityID = v
+		activityName = authActivityName(activityID)
+	}
+
+	out := ocsfBase(e, ocsfCategoryIAM, "Identity & Access Management",
+		ocsfClassAuthentication, "Authentication",
+		activityID, activityName)
+
+	if u := userFromFields(e.Fields); u != nil {
+		out["user"] = u
+	}
+	if actor := actorFromFields(e.Fields); actor != nil {
+		out["actor"] = actor
+	}
+	if src := srcEndpointFromFields(e.Fields); src != nil {
+		out["src_endpoint"] = src
+	}
+	if dst := strField(e.Fields, "dst_svc_name"); dst != "" {
+		out["dst_endpoint"] = map[string]any{"svc_name": dst}
+	}
+	if proto := strField(e.Fields, "auth_protocol"); proto != "" {
+		out["auth_protocol"] = proto
+	}
+	if logon := strField(e.Fields, "logon_type"); logon != "" {
+		out["logon_type"] = logon
+	}
+	if v, ok := boolField(e.Fields, "is_mfa"); ok {
+		out["is_mfa"] = v
+	}
+	if v, ok := boolField(e.Fields, "is_remote"); ok {
+		out["is_remote"] = v
+	}
+	if status := strField(e.Fields, "status"); status != "" {
+		applyStatus(out, status)
+	}
+	return out
+}
+
+// ocsfAccountChange → class_uid 3001. activity_id is derived from the IAM
+// operation verb when present (CreateAccessKey → Create, DeleteUser → Delete,
+// AttachUserPolicy → Attach Policy, etc.) so the CRUD shape is truthful.
+func ocsfAccountChange(e *event.LogEntry) map[string]any {
+	op := firstNonEmpty(strField(e.Fields, "operation"), strField(e.Fields, "event_name"))
+	activityID, activityName := accountChangeActivity(op)
+	if v := intField(e.Fields, "activity_id"); v != 0 {
+		activityID = v
+		activityName = accountChangeActivityName(activityID)
+	}
+
+	out := ocsfBase(e, ocsfCategoryIAM, "Identity & Access Management",
+		ocsfClassAccountChange, "Account Change",
+		activityID, activityName)
+
+	if u := userFromFields(e.Fields); u != nil {
+		out["user"] = u
+	}
+	if actor := actorFromFields(e.Fields); actor != nil {
+		out["actor"] = actor
+	}
+	if src := srcEndpointFromFields(e.Fields); src != nil {
+		out["src_endpoint"] = src
+	}
+	if op != "" {
+		api := map[string]any{"operation": op}
+		if svc := strField(e.Fields, "service_name"); svc != "" {
+			api["service"] = map[string]any{"name": svc}
+		}
+		out["api"] = api
+	}
+	if status := strField(e.Fields, "status"); status != "" {
+		applyStatus(out, status)
+	}
+	return out
 }
 
 // ocsfGeneric is the fallback when Class is empty/unknown. It still produces
@@ -204,30 +337,160 @@ func ocsfBase(e *event.LogEntry, categoryUID int, categoryName string,
 ) map[string]any {
 	sevID, sevName := severityFromLevel(e.Level)
 	t := parseTime(e.TS)
+	typeUID := classUID*100 + activityID
 
 	return map[string]any{
-		"category_uid":   categoryUID,
-		"category_name":  categoryName,
-		"class_uid":      classUID,
-		"class_name":     className,
-		"activity_id":    activityID,
-		"activity_name":  activityName,
-		"type_uid":       classUID*100 + activityID,
-		"severity_id":    sevID,
-		"severity":       sevName,
-		"time":           t.UnixMilli(),
-		"time_dt":        t.UTC().Format(time.RFC3339Nano),
-		"message":        e.Raw,
-		"status_id":      1, // Success by default; HTTP overrides on >=400
-		"status":         "Success",
-		"observables":    nil, // omit; encoders set up specifics if needed
+		"category_uid":  categoryUID,
+		"category_name": categoryName,
+		"class_uid":     classUID,
+		"class_name":    className,
+		"activity_id":   activityID,
+		"activity_name": activityName,
+		"type_uid":      typeUID,
+		"type_name":     className + ": " + activityName,
+		"severity_id":   sevID,
+		"severity":      sevName,
+		"time":          t.UnixMilli(),
+		"time_dt":       t.UTC().Format(time.RFC3339Nano),
+		"message":       e.Raw,
+		"status_id":     1, // Success by default; class builders override on failure
+		"status":        "Success",
+		"observables":   nil, // omit; encoders set up specifics if needed
 		"metadata": map[string]any{
-			"version":       "1.4.0",
+			"version":       ocsfSchemaVersion,
 			"log_name":      e.Source,
 			"original_time": e.TS,
 			"uid":           e.ID,
 		},
 	}
+}
+
+// applyStatus normalizes a free-form status string ("Success", "Failure",
+// "FAILED", "error") to the OCSF status_id/status pair so builders that pull
+// status off Fields don't each reinvent the mapping.
+func applyStatus(out map[string]any, status string) {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "success", "succeeded", "ok":
+		out["status_id"] = 1
+		out["status"] = "Success"
+	case "failure", "failed", "fail", "error", "denied":
+		out["status_id"] = 2
+		out["status"] = "Failure"
+	default:
+		out["status_id"] = 0
+		out["status"] = "Unknown"
+	}
+}
+
+// userFromFields builds an OCSF User object from flat user_* fields. Returns
+// nil if the fields carry no user identity at all so callers can decide
+// whether to attach a `user` key.
+func userFromFields(f map[string]any) map[string]any {
+	name := firstNonEmpty(strField(f, "user_name"), strField(f, "user.name"))
+	uid := firstNonEmpty(strField(f, "user_uid"), strField(f, "user.uid"))
+	utype := firstNonEmpty(strField(f, "user_type"), strField(f, "user.type"))
+	uidAlt := strField(f, "user_uid_alt")
+	if name == "" && uid == "" && utype == "" && uidAlt == "" {
+		return nil
+	}
+	out := map[string]any{}
+	if name != "" {
+		out["name"] = name
+	}
+	if uid != "" {
+		out["uid"] = uid
+	}
+	if utype != "" {
+		out["type"] = utype
+	}
+	if uidAlt != "" {
+		out["uid_alt"] = uidAlt
+	}
+	if account := strField(f, "user_account_uid"); account != "" {
+		out["account"] = map[string]any{"uid": account, "type": "AWS Account"}
+	}
+	return out
+}
+
+// actorFromFields builds an OCSF Actor.user object from actor_* fields. The
+// actor is the principal performing the action — for CloudTrail that's the
+// userIdentity. Falls back to userFromFields when no actor_* fields exist
+// so callers can still get an actor for events where the user IS the actor.
+func actorFromFields(f map[string]any) map[string]any {
+	name := strField(f, "actor_user_name")
+	uid := strField(f, "actor_user_uid")
+	utype := strField(f, "actor_user_type")
+	if name == "" && uid == "" && utype == "" {
+		if u := userFromFields(f); u != nil {
+			return map[string]any{"user": u}
+		}
+		return nil
+	}
+	user := map[string]any{}
+	if name != "" {
+		user["name"] = name
+	}
+	if uid != "" {
+		user["uid"] = uid
+	}
+	if utype != "" {
+		user["type"] = utype
+	}
+	if account := strField(f, "actor_account_uid"); account != "" {
+		user["account"] = map[string]any{"uid": account, "type": "AWS Account"}
+	}
+	return map[string]any{"user": user}
+}
+
+// srcEndpointFromFields gathers caller-side network identity (ip, hostname,
+// user_agent) into one OCSF NetworkEndpoint. Returns nil when nothing's set.
+func srcEndpointFromFields(f map[string]any) map[string]any {
+	ip := firstNonEmpty(strField(f, "src_ip"), strField(f, "client_ip"), strField(f, "remote_addr"))
+	hostname := strField(f, "src_hostname")
+	ua := strField(f, "user_agent")
+	country := strField(f, "src_country")
+	if ip == "" && hostname == "" && ua == "" && country == "" {
+		return nil
+	}
+	out := map[string]any{}
+	if ip != "" {
+		out["ip"] = ip
+	}
+	if hostname != "" {
+		out["hostname"] = hostname
+	}
+	if ua != "" {
+		out["agent_list"] = []any{map[string]any{"name": ua, "type": "User Agent"}}
+	}
+	if country != "" {
+		out["location"] = map[string]any{"country": country}
+	}
+	return out
+}
+
+// boolField reads a bool out of Fields tolerating the JSON/YAML quirk where
+// "true"/"false" sometimes arrive as strings. Returns ok=false when the key
+// isn't present so callers don't conflate "absent" with "false".
+func boolField(m map[string]any, k string) (bool, bool) {
+	if m == nil {
+		return false, false
+	}
+	v, ok := m[k]
+	if !ok {
+		return false, false
+	}
+	switch t := v.(type) {
+	case bool:
+		return t, true
+	case string:
+		switch strings.ToLower(t) {
+		case "true", "yes", "1":
+			return true, true
+		case "false", "no", "0":
+			return false, true
+		}
+	}
+	return false, false
 }
 
 // --- helpers ---------------------------------------------------------------
@@ -265,6 +528,144 @@ func httpActivity(method string) (int, string) {
 		return 8, "PATCH"
 	default:
 		return 0, "Unknown"
+	}
+}
+
+// authActivity maps a CloudTrail-style operation/event name to OCSF
+// Authentication activity_id. Anything we can't classify lands as Logon (1)
+// since console-signin is the dominant signal — better a sane default than
+// Unknown for the common case.
+func authActivity(op string) (int, string) {
+	switch strings.ToLower(strings.TrimSpace(op)) {
+	case "logoff", "consolelogout":
+		return 2, "Logoff"
+	case "preauth":
+		return 6, "Preauth"
+	case "":
+		return 1, "Logon"
+	default:
+		return 1, "Logon"
+	}
+}
+
+func authActivityName(id int) string {
+	switch id {
+	case 1:
+		return "Logon"
+	case 2:
+		return "Logoff"
+	case 3:
+		return "Authentication Ticket"
+	case 4:
+		return "Service Ticket Request"
+	case 5:
+		return "Service Ticket Renew"
+	case 6:
+		return "Preauth"
+	default:
+		return "Unknown"
+	}
+}
+
+// accountChangeActivity matches an IAM-style operation prefix to an OCSF
+// Account Change activity_id. The prefixes follow AWS IAM API conventions
+// (Create*, Delete*, Attach*Policy, etc.) so the mapping holds for the events
+// CloudTrail actually emits.
+func accountChangeActivity(op string) (int, string) {
+	o := strings.ToLower(strings.TrimSpace(op))
+	switch {
+	case strings.HasPrefix(o, "create"):
+		return 1, "Create"
+	case strings.HasPrefix(o, "enable"):
+		return 2, "Enable"
+	case strings.Contains(o, "passwordchange"), o == "changepassword":
+		return 3, "Password Change"
+	case strings.Contains(o, "passwordreset"), o == "resetpassword":
+		return 4, "Password Reset"
+	case strings.HasPrefix(o, "disable"), strings.HasPrefix(o, "deactivate"):
+		return 5, "Disable"
+	case strings.HasPrefix(o, "delete"), strings.HasPrefix(o, "remove"):
+		return 6, "Delete"
+	case strings.HasPrefix(o, "attach") && strings.Contains(o, "policy"):
+		return 7, "Attach Policy"
+	case strings.HasPrefix(o, "detach") && strings.Contains(o, "policy"):
+		return 8, "Detach Policy"
+	case strings.Contains(o, "lockout"):
+		return 9, "Lockout"
+	default:
+		return 0, "Unknown"
+	}
+}
+
+func accountChangeActivityName(id int) string {
+	switch id {
+	case 1:
+		return "Create"
+	case 2:
+		return "Enable"
+	case 3:
+		return "Password Change"
+	case 4:
+		return "Password Reset"
+	case 5:
+		return "Disable"
+	case 6:
+		return "Delete"
+	case 7:
+		return "Attach Policy"
+	case 8:
+		return "Detach Policy"
+	case 9:
+		return "Lockout"
+	default:
+		return "Unknown"
+	}
+}
+
+// apiActivity picks an OCSF API Activity activity_id. Operation names take
+// priority because CRUD intent is more semantic than the HTTP verb — a POST
+// can be a Read (e.g. AWS APIs encode reads as POSTs). The HTTP method is the
+// fallback when no operation is supplied.
+func apiActivity(op, method string) (int, string) {
+	o := strings.ToLower(strings.TrimSpace(op))
+	switch {
+	case o == "":
+		// fall through to method-based mapping below
+	case strings.HasPrefix(o, "create"), strings.HasPrefix(o, "put"), strings.HasPrefix(o, "add"):
+		return 1, "Create"
+	case strings.HasPrefix(o, "get"), strings.HasPrefix(o, "describe"), strings.HasPrefix(o, "list"), strings.HasPrefix(o, "read"), strings.HasPrefix(o, "lookup"), strings.HasPrefix(o, "search"):
+		return 2, "Read"
+	case strings.HasPrefix(o, "update"), strings.HasPrefix(o, "modify"), strings.HasPrefix(o, "patch"), strings.HasPrefix(o, "set"):
+		return 3, "Update"
+	case strings.HasPrefix(o, "delete"), strings.HasPrefix(o, "remove"), strings.HasPrefix(o, "terminate"):
+		return 4, "Delete"
+	}
+	switch strings.ToUpper(strings.TrimSpace(method)) {
+	case "POST":
+		return 1, "Create"
+	case "GET", "HEAD":
+		return 2, "Read"
+	case "PUT", "PATCH":
+		return 3, "Update"
+	case "DELETE":
+		return 4, "Delete"
+	default:
+		return 0, "Unknown"
+	}
+}
+
+func apiActivityName(id int) string {
+	switch id {
+	case 1:
+		return "Create"
+	case 2:
+		return "Read"
+	case 3:
+		return "Update"
+	case 4:
+		return "Delete"
+	default:
+		return "Unknown"
 	}
 }
 
