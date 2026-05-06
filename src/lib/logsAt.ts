@@ -21,6 +21,11 @@ export interface LogsAtOpts {
    *  so we can convert tick indices back into the timestamps stored in the
    *  daemon. Defaults to startTimeMs. */
   dbStartTimeMs?: number
+  /** When set on the engine-rerun path (dbCode unset), tells /api/logs_at
+   *  to tee the events it produces into /api/search/dbs/<searchDBCode>.
+   *  Used by Step so the daemon accumulates events without a separate
+   *  client-side ingest. */
+  searchDBCode?: string | null
 }
 
 interface BackendLogEntry {
@@ -70,6 +75,7 @@ export async function logsAt(opts: LogsAtOpts): Promise<LogEntry[]> {
       seed: opts.seed ?? 0,
       source_filter: opts.sourceFilter ?? '*',
       format: opts.format ?? 'native',
+      search_db_code: opts.searchDBCode ?? undefined,
     }),
     signal: opts.signal,
   })

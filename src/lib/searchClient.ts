@@ -93,6 +93,20 @@ async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
 
 // --- db lifecycle ----------------------------------------------------
 
+const CODE_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789'
+
+/** Generate a fresh 6-char code matching the daemon's `[a-z0-9]{6}` shape.
+ *  Used by the editor to mint codes client-side: the search daemon's HEC
+ *  endpoint auto-creates dbs on first ingest, so we save a round-trip by
+ *  picking the code locally and embedding it in the /api/run request. */
+export function newSearchDbCode(): string {
+  let out = ''
+  for (let i = 0; i < 6; i++) {
+    out += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)]
+  }
+  return out
+}
+
 /** Create a new db. When code is omitted the server picks one. */
 export async function createDb(code?: string, signal?: AbortSignal): Promise<{ code: string; created_at: string }> {
   return postJSON('/dbs', code ? { code } : undefined, signal)

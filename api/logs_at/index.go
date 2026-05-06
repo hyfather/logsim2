@@ -37,6 +37,10 @@ type Request struct {
 	// replaces it with an OCSF JSON event; "otel" emits an OpenTelemetry
 	// OTLP/JSON LogRecord envelope.
 	Format string `json:"format,omitempty"`
+	// SearchDBCode tees emitted events to /api/search/dbs/<code> while
+	// re-running the engine. Same semantics as /api/run's identically
+	// named field. Best-effort; ingest failures don't fail the response.
+	SearchDBCode string `json:"search_db_code,omitempty"`
 }
 
 type Response struct {
@@ -115,7 +119,13 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	})
 
 	collector := &windowSink{from: req.From}
-	if err := eng.Run(r.Context(), req.To, []sinks.Sink{collector}); err != nil {
+	sinkList := []sinks.Sink{collector}
+	searchTee := buildSearchTee(r, req.SearchDBCode)
+	if searchTee != nil {
+		sinkList = append(sinkList, searchTee)
+		defer searchTee.Close()
+	}
+	if err := eng.Run(r.Context(), req.To, sinkList); err != nil {
 		apihelp.WriteErr(w, http.StatusInternalServerError, "engine: "+err.Error())
 		return
 	}

@@ -51,7 +51,7 @@ import { canvasToScenarioYaml } from '@/lib/canvasToScenarioYaml'
 import { runStream } from '@/lib/runStream'
 import { runForward, type ForwardSummary, type PostFrame } from '@/lib/runForward'
 import { logsAt } from '@/lib/logsAt'
-import { createDb, deleteDb, ingestLogs } from '@/lib/searchClient'
+import { deleteDb, newSearchDbCode } from '@/lib/searchClient'
 import { ExportPreviewModal, type ExportTab } from '@/components/toolbar/ExportPreviewModal'
 import { RunLocallyModal } from '@/components/toolbar/RunLocallyModal'
 
@@ -451,19 +451,12 @@ export function Topbar() {
     const ctrl = new AbortController()
     abortRef.current = ctrl
 
-    // Create a search db before the run starts. Best-effort: if the daemon
-    // is unreachable (e.g. user disabled the route, cold start failed),
-    // log and proceed without write-through — the in-memory logBuffer
-    // still drives the live view.
-    let runDbCode: string | null = null
-    void createDb(undefined, ctrl.signal)
-      .then(({ code }) => {
-        runDbCode = code
-        setDbCode(code)
-      })
-      .catch(err => {
-        console.warn('search: createDb failed, continuing without write-through:', err)
-      })
+    // Mint a search-daemon db code locally — the daemon's ingest endpoint
+    // auto-creates the db on first event, so we don't need a round-trip
+    // to POST /dbs first. Picking the code client-side also means /api/run
+    // has it ready in the very first chunk request.
+    const runDbCode = newSearchDbCode()
+    setDbCode(runDbCode)
 
     runStream({
       scenarioYaml: yaml,
@@ -475,23 +468,15 @@ export function Topbar() {
       paceMs: 1000,
       cribl,
       format: outputFormat,
+      searchDBCode: runDbCode,
       signal: ctrl.signal,
       onTick: ({ tick: t, logs }) => {
         setTick(t + 1)
         setTickCount(t + 1)
         setSimulatedTime(new Date(simStart + (t + 1) * 1000))
-        if (logs.length) {
-          addLogs(logs)
-          // Write-through to the search daemon. Fire-and-forget; ingest
-          // failures shouldn't block playback. The local logBuffer is the
-          // immediate render path; the daemon is the source of truth for
-          // any panel that wants to query historical events.
-          if (runDbCode) {
-            void ingestLogs(runDbCode, logs).catch(err => {
-              console.warn('search: ingestLogs failed:', err)
-            })
-          }
-        }
+        // Server-side tee handles persistence to /api/search; the live
+        // view still pulls from the in-memory logBuffer for snappy render.
+        if (logs.length) addLogs(logs)
       },
       onDone: ({ totalLogs }) => {
         if (enabledCribl && forwardDuringRealtime) {
@@ -539,6 +524,11 @@ export function Topbar() {
     const ctrl = new AbortController()
     abortRef.current = ctrl
 
+    // Forward mode also populates a search db so the editor can scrub
+    // through the events that were just shipped to the destination.
+    const runDbCode = newSearchDbCode()
+    setDbCode(runDbCode)
+
     forwardStarted({ destination: target.name || target.url, duration: ep.duration })
     runForward({
       scenarioYaml: yaml,
@@ -548,6 +538,7 @@ export function Topbar() {
       seed: seedRef.current,
       cribl,
       format: outputFormat,
+      searchDBCode: runDbCode,
       signal: ctrl.signal,
       onStart: () => { /* status already initialized via forwardStarted */ },
       onPost: (post) => {
@@ -587,7 +578,7 @@ export function Topbar() {
         setRunStatus('idle')
       },
     })
-  }, [buildScenarioYaml, forwardErrorLine, forwardFailed, forwardFinished, forwardProgress, forwardStarted, outputFormat, prepRunChrome, recordSent, selectedDestinationId, setDestStatus, setRunError, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, status])
+  }, [buildScenarioYaml, forwardErrorLine, forwardFailed, forwardFinished, forwardProgress, forwardStarted, outputFormat, prepRunChrome, recordSent, selectedDestinationId, setDbCode, setDestStatus, setRunError, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, status])
 
   const stopPlayback = useCallback(() => {
     stopBackend()
@@ -614,6 +605,14 @@ export function Topbar() {
       const tickIdx = useEpisodeStore.getState().tick
       const from = Math.max(0, Math.floor(tickIdx))
       const to = from + 1
+      // Step lazy-creates a search db on first use so subsequent ticks
+      // accumulate in the same code. Server-side tee in /api/logs_at does
+      // the actual ingest.
+      let code = dbCode
+      if (!code) {
+        code = newSearchDbCode()
+        setDbCode(code)
+      }
       const result = await logsAt({
         scenarioYaml: yaml,
         from,
@@ -622,31 +621,13 @@ export function Topbar() {
         startTimeMs: startMs,
         seed: (seedRef.current ||= Math.floor(Math.random() * 1e9)) + 1,
         format: outputFormat,
+        searchDBCode: code,
         // Step always re-runs the engine (different seed per step). The
         // daemon db is the *destination* for these logs, not a source.
         dbCode: null,
       })
       simCursorRef.current = startMs + 1000
-      if (result.length) {
-        addLogs(result)
-        // Step also writes through to the daemon so the same db backs both
-        // continuous playback and step-by-step exploration. Lazy-create the
-        // db on first step.
-        let code = dbCode
-        if (!code) {
-          try {
-            code = (await createDb()).code
-            setDbCode(code)
-          } catch (err) {
-            console.warn('search: createDb failed during step:', err)
-          }
-        }
-        if (code) {
-          void ingestLogs(code, result).catch(err => {
-            console.warn('search: ingestLogs failed during step:', err)
-          })
-        }
-      }
+      if (result.length) addLogs(result)
       setTick(to)
       setTickCount(to)
       setSimulatedTime(new Date(startMs + 1000))

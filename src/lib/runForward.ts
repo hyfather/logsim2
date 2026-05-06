@@ -11,6 +11,10 @@ export interface RunForwardOpts {
   /** Required — forward mode 400s without a configured destination. */
   cribl: CriblPayload
   format?: LogFormat
+  /** When set, the backend tees each batch to /api/search/dbs/<code> while
+   *  forwarding to Cribl, so the editor can scrub through the events that
+   *  were just shipped. */
+  searchDBCode?: string | null
   signal?: AbortSignal
   onStart: (info: { duration: number; destination: string; tickIntervalMs: number }) => void
   onPost: (post: PostFrame) => void
@@ -204,6 +208,7 @@ async function fetchForwardChunk(
       format: opts.format ?? 'native',
       mode: 'forward',
       start_tick: startTick,
+      search_db_code: opts.searchDBCode ?? undefined,
     }),
     signal: opts.signal,
   })
