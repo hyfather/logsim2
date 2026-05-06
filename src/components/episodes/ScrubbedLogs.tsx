@@ -32,6 +32,9 @@ export function ScrubbedLogs() {
   const liveLogs = useSimulationStore(s => s.logBuffer)
   const outputFormat = useSimulationStore(s => s.outputFormat)
   const setOutputFormat = useSimulationStore(s => s.setOutputFormat)
+  // dbCode is set after a play; when present, scrubbing reads the actual
+  // events that were generated rather than re-running the engine.
+  const dbCode = useSimulationStore(s => s.dbCode)
   // Forward-mode (Fast) replaces the per-log table with a status surface —
   // the backend doesn't stream log frames in that mode, so a "logs" view
   // would just be empty. The status persists past run end.
@@ -74,6 +77,7 @@ export function ScrubbedLogs() {
           seed: 0,
           format: outputFormat,
           signal: ctrl.signal,
+          dbCode,
         })
         setScrubLogs(logs)
       } catch (err) {
@@ -85,7 +89,7 @@ export function ScrubbedLogs() {
       clearTimeout(handle)
       ctrl.abort()
     }
-  }, [tick, episode, nodes, edges, metadata, isRunning, outputFormat])
+  }, [tick, episode, nodes, edges, metadata, isRunning, outputFormat, dbCode])
 
   const logs = isRunning ? liveLogs.slice(-MAX_DISPLAY) : scrubLogs.slice(-MAX_DISPLAY)
 

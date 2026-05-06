@@ -51,6 +51,7 @@ import { canvasToScenarioYaml } from '@/lib/canvasToScenarioYaml'
 import { runStream } from '@/lib/runStream'
 import { runForward, type ForwardSummary, type PostFrame } from '@/lib/runForward'
 import { logsAt } from '@/lib/logsAt'
+import { createDb, deleteDb, ingestLogs } from '@/lib/searchClient'
 import { ExportPreviewModal, type ExportTab } from '@/components/toolbar/ExportPreviewModal'
 import { RunLocallyModal } from '@/components/toolbar/RunLocallyModal'
 
@@ -151,6 +152,8 @@ export function Topbar() {
     forwardFinished,
     forwardFailed,
     forwardStatus,
+    dbCode,
+    setDbCode,
   } = useSimulationStore()
   const {
     destinations,
@@ -400,7 +403,9 @@ export function Topbar() {
   }, [])
 
   /** Common UI prep that both run paths share: open the log panel, collapse
-   *  the canvas on mobile, and clear stale state from the previous run. */
+   *  the canvas on mobile, and clear stale state from the previous run.
+   *  Also fire-and-forget deletes any prior search db — the next play
+   *  creates a fresh one. */
   const prepRunChrome = useCallback(() => {
     setModifyPanelOpen(false)
     setLogPanelOpen(true)
@@ -408,16 +413,28 @@ export function Topbar() {
       setCanvasOpen(false)
     }
     clearLogs()
+    if (dbCode) {
+      // Fire-and-forget — no need to block UI on cleanup. If the daemon's
+      // gone (cold function instance), 404s are silently ignored by the
+      // searchClient.
+      void deleteDb(dbCode).catch(() => {})
+      setDbCode(null)
+    }
     setRunError(null)
     setTick(0)
     setTickCount(0)
     setStatus('running')
     setRunStatus('running')
-  }, [clearLogs, setCanvasOpen, setLogPanelOpen, setModifyPanelOpen, setRunError, setRunStatus, setStatus, setTick, setTickCount])
+  }, [clearLogs, dbCode, setCanvasOpen, setDbCode, setLogPanelOpen, setModifyPanelOpen, setRunError, setRunStatus, setStatus, setTick, setTickCount])
 
   /** Realtime playback: paces the scrubber 1 tick/sec wall-clock so an
    *  N-tick scenario takes N seconds. Forwards to the configured destination
-   *  only when the user has toggled `forwardDuringRealtime` on. */
+   *  only when the user has toggled `forwardDuringRealtime` on.
+   *
+   *  Also creates a fresh search-daemon db at play start and ingests every
+   *  tick's logs into it (fire-and-forget HEC POST). The db code lives in
+   *  the simulation store so other components can query the daemon for
+   *  historical events without going through `logBuffer`. */
   const startRealtime = useCallback(() => {
     if (status === 'running') return
     prepRunChrome()
@@ -434,6 +451,20 @@ export function Topbar() {
     const ctrl = new AbortController()
     abortRef.current = ctrl
 
+    // Create a search db before the run starts. Best-effort: if the daemon
+    // is unreachable (e.g. user disabled the route, cold start failed),
+    // log and proceed without write-through — the in-memory logBuffer
+    // still drives the live view.
+    let runDbCode: string | null = null
+    void createDb(undefined, ctrl.signal)
+      .then(({ code }) => {
+        runDbCode = code
+        setDbCode(code)
+      })
+      .catch(err => {
+        console.warn('search: createDb failed, continuing without write-through:', err)
+      })
+
     runStream({
       scenarioYaml: yaml,
       duration: ep.duration,
@@ -449,7 +480,18 @@ export function Topbar() {
         setTick(t + 1)
         setTickCount(t + 1)
         setSimulatedTime(new Date(simStart + (t + 1) * 1000))
-        if (logs.length) addLogs(logs)
+        if (logs.length) {
+          addLogs(logs)
+          // Write-through to the search daemon. Fire-and-forget; ingest
+          // failures shouldn't block playback. The local logBuffer is the
+          // immediate render path; the daemon is the source of truth for
+          // any panel that wants to query historical events.
+          if (runDbCode) {
+            void ingestLogs(runDbCode, logs).catch(err => {
+              console.warn('search: ingestLogs failed:', err)
+            })
+          }
+        }
       },
       onDone: ({ totalLogs }) => {
         if (enabledCribl && forwardDuringRealtime) {
@@ -469,7 +511,7 @@ export function Topbar() {
         setRunStatus('idle')
       },
     })
-  }, [addLogs, buildScenarioYaml, forwardDuringRealtime, outputFormat, prepRunChrome, recordSent, setDestStatus, setRunError, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, status])
+  }, [addLogs, buildScenarioYaml, forwardDuringRealtime, outputFormat, prepRunChrome, recordSent, setDbCode, setDestStatus, setRunError, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, status])
 
   /** "Run and Forward": runs the scenario flat-out on the backend and ships
    *  every event to the chosen destination. Resolves the destination from
@@ -580,28 +622,54 @@ export function Topbar() {
         startTimeMs: startMs,
         seed: (seedRef.current ||= Math.floor(Math.random() * 1e9)) + 1,
         format: outputFormat,
+        // Step always re-runs the engine (different seed per step). The
+        // daemon db is the *destination* for these logs, not a source.
+        dbCode: null,
       })
       simCursorRef.current = startMs + 1000
-      if (result.length) addLogs(result)
+      if (result.length) {
+        addLogs(result)
+        // Step also writes through to the daemon so the same db backs both
+        // continuous playback and step-by-step exploration. Lazy-create the
+        // db on first step.
+        let code = dbCode
+        if (!code) {
+          try {
+            code = (await createDb()).code
+            setDbCode(code)
+          } catch (err) {
+            console.warn('search: createDb failed during step:', err)
+          }
+        }
+        if (code) {
+          void ingestLogs(code, result).catch(err => {
+            console.warn('search: ingestLogs failed during step:', err)
+          })
+        }
+      }
       setTick(to)
       setTickCount(to)
       setSimulatedTime(new Date(startMs + 1000))
     } catch (err) {
       console.error('step failed:', err)
     }
-  }, [addLogs, buildScenarioYaml, outputFormat, setSimulatedTime, setTick, setTickCount, status])
+  }, [addLogs, buildScenarioYaml, dbCode, outputFormat, setDbCode, setSimulatedTime, setTick, setTickCount, status])
 
   const handleReset = useCallback(() => {
     stopBackend()
     clearActiveConnections()
     clearLogs()
+    if (dbCode) {
+      void deleteDb(dbCode).catch(() => {})
+      setDbCode(null)
+    }
     setTickCount(0)
     setTick(0)
     simCursorRef.current = Date.now()
     setSimulatedTime(new Date())
     setStatus('idle')
     setRunStatus('idle')
-  }, [clearActiveConnections, clearLogs, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, stopBackend])
+  }, [clearActiveConnections, clearLogs, dbCode, setDbCode, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, stopBackend])
 
   useEffect(() => () => stopBackend(), [stopBackend])
 
