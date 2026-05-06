@@ -32,6 +32,15 @@ const MAX_FORWARD_ERRORS = 50
 interface SimulationState {
   status: SimulationStatus
   tickCount: number
+  /** Code of the search-daemon db that backs the current (or just-finished)
+   *  play. Set when the user hits Run / Forward; cleared on reset. Components
+   *  that need historical events query /api/search/dbs/<dbCode>/... — the
+   *  in-memory `logBuffer` is now just a fast tail cache for the live view. */
+  dbCode: string | null
+  /** Wall-clock ms of when the current db's run started. Needed to convert
+   *  tick indices (the timeline scrubber unit) into the absolute timestamps
+   *  the daemon stores. null until the first play sets it. */
+  dbStartTimeMs: number | null
   speed: number // ticks per second
   /** When true, the realtime Run also ships every event to the configured
    *  destination as the simulation plays (each chunk forwards on its own
@@ -62,6 +71,8 @@ interface SimulationState {
   forwardStatus: ForwardStatus | null
   // Actions
   setStatus: (status: SimulationStatus) => void
+  setDbCode: (code: string | null) => void
+  setDbStartTimeMs: (ms: number | null) => void
   setSpeed: (speed: number) => void
   setForwardDuringRealtime: (on: boolean) => void
   setSelectedDestinationId: (id: string | null) => void
@@ -91,6 +102,8 @@ interface SimulationState {
 export const useSimulationStore = create<SimulationState>()((set) => ({
   status: 'idle',
   tickCount: 0,
+  dbCode: null,
+  dbStartTimeMs: null,
   speed: 1,
   forwardDuringRealtime: false,
   selectedDestinationId: null,
@@ -112,6 +125,8 @@ export const useSimulationStore = create<SimulationState>()((set) => ({
   forwardStatus: null,
 
   setStatus: (status) => set({ status }),
+  setDbCode: (dbCode) => set({ dbCode }),
+  setDbStartTimeMs: (dbStartTimeMs) => set({ dbStartTimeMs }),
   setSpeed: (speed) => set({ speed }),
   setForwardDuringRealtime: (forwardDuringRealtime) => set({ forwardDuringRealtime }),
   setSelectedDestinationId: (selectedDestinationId) => set({ selectedDestinationId }),
@@ -238,6 +253,8 @@ export const useSimulationStore = create<SimulationState>()((set) => ({
   reset: () => set({
     status: 'idle',
     tickCount: 0,
+    dbCode: null,
+    dbStartTimeMs: null,
     simulatedTime: new Date(),
     logBuffer: [],
     activeConnections: {},

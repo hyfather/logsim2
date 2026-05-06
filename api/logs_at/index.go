@@ -37,6 +37,10 @@ type Request struct {
 	// replaces it with an OCSF JSON event; "otel" emits an OpenTelemetry
 	// OTLP/JSON LogRecord envelope.
 	Format string `json:"format,omitempty"`
+	// SearchDBCode tees emitted events to /api/search/dbs/<code> while
+	// re-running the engine. Same semantics as /api/run's identically
+	// named field. Best-effort; ingest failures don't fail the response.
+	SearchDBCode string `json:"search_db_code,omitempty"`
 }
 
 type Response struct {
@@ -115,6 +119,11 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	})
 
 	collector := &windowSink{from: req.From}
+	// /api/logs_at does NOT tee to /api/search server-side. The response
+	// already includes every event in the window; the browser does the
+	// ingest after the fetch (see Topbar.handleStep). Same reason as
+	// /api/run streaming: avoids cross-function HTTP under deployment
+	// protection.
 	if err := eng.Run(r.Context(), req.To, []sinks.Sink{collector}); err != nil {
 		apihelp.WriteErr(w, http.StatusInternalServerError, "engine: "+err.Error())
 		return

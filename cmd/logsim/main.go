@@ -24,6 +24,7 @@ func main() {
 		newRunCmd(),
 		newListCmd(),
 		newServeCmd(),
+		newSearchCmd(),
 		newDestinationsCmd(),
 		newUpgradeCmd(),
 	)

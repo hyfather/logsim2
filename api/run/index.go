@@ -67,6 +67,15 @@ type Request struct {
 	//                 frames). Mirrors `logsim run --to <dest>`. Cribl
 	//                 must be configured.
 	Mode string `json:"mode,omitempty"`
+	// SearchDBCode is the code of an existing /api/search db. When set,
+	// every batch of events the engine emits is tee'd to
+	// /api/search/dbs/<code>/services/collector/event in addition to the
+	// normal response shape (log frames in default mode, Cribl HEC in
+	// forward mode). Failures to ingest are logged but don't abort the
+	// run — the search db is best-effort persistence, not the source of
+	// truth for the response. The daemon auto-creates the db on first
+	// ingest, so the client doesn't strictly need to call POST /dbs first.
+	SearchDBCode string `json:"search_db_code,omitempty"`
 }
 
 // Handler streams NDJSON: one frame per tick plus a final summary frame.
@@ -186,6 +195,12 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		format:  encoders.Parse(req.Format),
 	}
 
+	// Streaming mode does NOT tee to /api/search server-side — the browser
+	// already sees every log frame in the response and ingests them itself
+	// (see src/components/toolbar/Topbar.tsx onTick). Forward mode is the
+	// only path that needs a server-side tee, since the browser never sees
+	// events there. Going through cross-function HTTP only when we have to
+	// dodges the deployment-protection 401s on Vercel preview URLs.
 	runErr := eng.Run(r.Context(), duration, []sinks.Sink{stream})
 	switch {
 	case errors.Is(runErr, errBudgetExceeded):
@@ -409,7 +424,16 @@ func handleForward(w http.ResponseWriter, r *http.Request, req *Request, sc *sce
 		TickIntervalMs: tickInterval,
 		SourceFilter:   req.SourceFilter,
 	})
-	runErr := eng.Run(r.Context(), duration, []sinks.Sink{forward})
+	// Forward mode tees to the search daemon too, so both Cribl and the
+	// in-memory db get the same events even though the client never sees
+	// log frames in this mode.
+	sinkList := []sinks.Sink{forward}
+	searchTee := apihelp.SearchTeeSink(r, req.SearchDBCode)
+	if searchTee != nil {
+		sinkList = append(sinkList, searchTee)
+		defer searchTee.Close()
+	}
+	runErr := eng.Run(r.Context(), duration, sinkList)
 	// Flush the trailing partial batch — the observer fires once more for it
 	// before Close returns, so the client sees every POST in order.
 	_ = cribl.Close()

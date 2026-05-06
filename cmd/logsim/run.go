@@ -21,6 +21,7 @@ import (
 	"github.com/nikhilm/logsim2/pkg/engine"
 	"github.com/nikhilm/logsim2/pkg/event"
 	"github.com/nikhilm/logsim2/pkg/scenario"
+	"github.com/nikhilm/logsim2/pkg/search"
 	"github.com/nikhilm/logsim2/pkg/sinks"
 )
 
@@ -211,6 +212,7 @@ Examples:
 				Quiet:          quiet,
 				Stderr:         cmd.ErrOrStderr(),
 				Stdin:          cmd.InOrStdin(),
+				ScenarioName:   s.Name,
 			})
 			if err != nil {
 				return err
@@ -290,6 +292,9 @@ type buildSinksOpts struct {
 	Quiet          bool
 	Stderr         io.Writer
 	Stdin          io.Reader
+	// ScenarioName lets `--to local` derive a default db code from the
+	// running scenario's slug.
+	ScenarioName string
 }
 
 // buildSinks resolves CLI flags into a concrete sink list. Resolution order:
@@ -391,6 +396,18 @@ func buildSinks(opts buildSinksOpts) ([]sinks.Sink, error) {
 				return nil, errors.New("--to resolved to zero destinations")
 			}
 			for _, n := range names {
+				if isLocalSpec(n) {
+					ls, err := buildLocalSink(n, opts.ScenarioName, fmtType)
+					if err != nil {
+						closeSinks(closer)
+						return nil, err
+					}
+					if !opts.Quiet {
+						fmt.Fprintf(stderr, "logsim: forwarding → %s (db=%s)\n", ls.URL(), ls.Name())
+					}
+					addAndTrack(ls)
+					continue
+				}
 				s, err := sinkForName(dotCfg, n, dotPath)
 				if err != nil {
 					closeSinks(closer)
@@ -481,6 +498,50 @@ func loadDotOrConfig(explicit string) (*config.DestinationsConfig, bool, error) 
 	}
 	cfg, _, ok, err := config.LoadDefault()
 	return cfg, ok, err
+}
+
+// isLocalSpec returns true for `--to local` and `--to local:<anything>`.
+// `local` is a builtin pseudo-destination that targets the daemon started
+// by `logsim search`. It does not require an entry in the dotfile.
+func isLocalSpec(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	return n == "local" || strings.HasPrefix(n, "local:")
+}
+
+// buildLocalSink constructs a HEC sink pointed at the in-process search
+// daemon (127.0.0.1:3700). The db code comes from the colon suffix
+// (`local:abc123`) or, when only `local` is given, is derived from the
+// scenario name. Suffixes longer or shorter than 6 chars are slugified
+// through search.CodeFromSlug so users can write `local:my-cache-test`.
+func buildLocalSink(spec, scenarioName string, fmtType sinks.Format) (*sinks.CriblSink, error) {
+	suffix := ""
+	if i := strings.Index(spec, ":"); i >= 0 {
+		suffix = strings.TrimSpace(spec[i+1:])
+	}
+
+	var code string
+	switch {
+	case suffix == "":
+		if scenarioName == "" {
+			return nil, errors.New("--to local needs a scenario name to derive a db code; pass --to local:<code>")
+		}
+		code = search.CodeFromSlug(scenarioName)
+	default:
+		// Try as a literal 6-char code first (lets `local:abc123` round-trip
+		// without slugification corrupting numerals); fall back to slug
+		// derivation for longer/shorter inputs like `local:my-cache-test`.
+		if c, err := search.NormalizeCode(suffix); err == nil {
+			code = c
+		} else {
+			code = search.CodeFromSlug(suffix)
+		}
+	}
+
+	url := fmt.Sprintf("http://127.0.0.1:%d/dbs/%s/services/collector/event",
+		search.DefaultPort, code)
+	s := sinks.NewCriblWithFormat(url, "", 100, 500, fmtType)
+	s.SetName("local:" + code)
+	return s, nil
 }
 
 func sinkForName(cfg *config.DestinationsConfig, name, sourcePath string) (sinks.Sink, error) {

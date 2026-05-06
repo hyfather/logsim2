@@ -18,6 +18,10 @@ export interface RunStreamOpts {
    *  unpaced (one short request) on platforms that buffer responses
    *  (e.g. Vercel Functions) while still showing a moving scrubber. */
   paceMs?: number
+  /** When set, the server tees every event to /api/search/dbs/<code> as the
+   *  engine produces it, so the editor can query the daemon for historical
+   *  events without the browser doing per-tick ingest. */
+  searchDBCode?: string | null
   signal?: AbortSignal
   onTick: (frame: { tick: number; ts: number; logs: LogEntry[] }) => void
   onDone: (summary: { totalLogs: number }) => void
@@ -175,6 +179,7 @@ export async function runStream(opts: RunStreamOpts): Promise<void> {
         cribl: opts.cribl,
         format: opts.format ?? 'native',
         start_tick: chunkStart,
+        search_db_code: opts.searchDBCode ?? undefined,
       }),
       signal: opts.signal,
     })

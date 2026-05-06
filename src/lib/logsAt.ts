@@ -1,4 +1,5 @@
 import type { LogEntry, LogFormat } from '@/types/logs'
+import { getRaw, searchEventToLogEntry } from '@/lib/searchClient'
 
 export interface LogsAtOpts {
   scenarioYaml: string
@@ -11,6 +12,20 @@ export interface LogsAtOpts {
   /** Wire schema applied per log entry. Defaults to "native" on the backend. */
   format?: LogFormat
   signal?: AbortSignal
+  /** When set, logsAt queries the search daemon (/api/search/dbs/<dbCode>)
+   *  instead of re-running the engine via /api/logs_at. The daemon returns
+   *  the events recorded during the most recent play, which is what the
+   *  user expects when scrubbing a timeline they just generated. */
+  dbCode?: string | null
+  /** When dbCode is set, this is the wall-clock start of the original run,
+   *  so we can convert tick indices back into the timestamps stored in the
+   *  daemon. Defaults to startTimeMs. */
+  dbStartTimeMs?: number
+  /** When set on the engine-rerun path (dbCode unset), tells /api/logs_at
+   *  to tee the events it produces into /api/search/dbs/<searchDBCode>.
+   *  Used by Step so the daemon accumulates events without a separate
+   *  client-side ingest. */
+  searchDBCode?: string | null
 }
 
 interface BackendLogEntry {
@@ -31,12 +46,23 @@ interface LogsAtResponse {
 
 /**
  * Fetches logs that would be emitted in a [from, to) tick window for a given
- * scenario+seed. The backend re-runs deterministically from tick 0, so the
- * same seed always returns the same logs — perfect for a scrub preview.
+ * scenario+seed.
  *
- * Note: cost is O(to) since the engine's RNG is global. Keep `to` modest.
+ * When `dbCode` is set, logsAt queries the in-process search daemon at
+ * /api/search — the same db the editor populates when you click Play. Tick
+ * indices are converted to absolute timestamps using `dbStartTimeMs` (or
+ * `startTimeMs`) and `tickIntervalMs`, then fetched via /get_raw. This is
+ * the path used during normal editor scrubbing.
+ *
+ * When `dbCode` is null/undefined, logsAt falls back to /api/logs_at, which
+ * re-runs the engine deterministically from tick 0 to `to`. That's used
+ * before any play has happened (or when the daemon is unreachable). Cost
+ * is O(to) since the engine's RNG is global — keep `to` modest.
  */
 export async function logsAt(opts: LogsAtOpts): Promise<LogEntry[]> {
+  if (opts.dbCode) {
+    return logsFromDaemon(opts, opts.dbCode)
+  }
   const res = await fetch('/api/logs_at', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -49,6 +75,7 @@ export async function logsAt(opts: LogsAtOpts): Promise<LogEntry[]> {
       seed: opts.seed ?? 0,
       source_filter: opts.sourceFilter ?? '*',
       format: opts.format ?? 'native',
+      search_db_code: opts.searchDBCode ?? undefined,
     }),
     signal: opts.signal,
   })
@@ -58,6 +85,39 @@ export async function logsAt(opts: LogsAtOpts): Promise<LogEntry[]> {
   }
   const json = (await res.json()) as LogsAtResponse
   return (json.logs ?? []).map(mapLog)
+}
+
+async function logsFromDaemon(opts: LogsAtOpts, dbCode: string): Promise<LogEntry[]> {
+  const intervalMs = opts.tickIntervalMs ?? 1000
+  const baseMs = opts.dbStartTimeMs ?? opts.startTimeMs
+  // The daemon stores events at wall-clock timestamps, not tick indices.
+  // When we have a base anchor, translate [from, to) ticks → [fromMs, toMs).
+  // Add one tick of slack to the upper bound so events that landed slightly
+  // past their tick boundary (engine sub-tick jitter — observed up to ~80 ms
+  // for 10 ticks worth of traffic) are still included. Without the slack,
+  // the trailing tick on a paused scrub looks empty.
+  //
+  // Without an anchor (e.g. no play has happened yet, or a cold daemon
+  // forgot dbStartTimeMs), fall back to fetching everything in the db —
+  // it's per-session, so "all events" === "everything generated this run".
+  const query = baseMs == null
+    ? {}
+    : {
+        from: new Date(baseMs + opts.from * intervalMs).toISOString(),
+        to: new Date(baseMs + (opts.to + 1) * intervalMs).toISOString(),
+      }
+  const res = await getRaw(
+    dbCode,
+    {
+      ...query,
+      // get_raw caps at 100 by default; for a single-tick scrub on a busy
+      // scenario (cache-failure-cascade peaks ~54 logs/tick), 1000 is the
+      // safe ceiling that still keeps responses small.
+      limit: 1000,
+    },
+    opts.signal,
+  )
+  return (res.events ?? []).map(searchEventToLogEntry)
 }
 
 function mapLog(e: BackendLogEntry): LogEntry {
