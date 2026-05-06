@@ -120,7 +120,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	collector := &windowSink{from: req.From}
 	sinkList := []sinks.Sink{collector}
-	searchTee := buildSearchTee(r, req.SearchDBCode)
+	searchTee := apihelp.SearchTeeSink(r, req.SearchDBCode)
 	if searchTee != nil {
 		sinkList = append(sinkList, searchTee)
 		defer searchTee.Close()

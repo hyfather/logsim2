@@ -199,7 +199,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	// here means realtime / step / forward all populate the same db without
 	// the client having to ingest separately. nil when no code was passed.
 	sinkList := []sinks.Sink{stream}
-	searchTee := buildSearchTee(r, req.SearchDBCode)
+	searchTee := apihelp.SearchTeeSink(r, req.SearchDBCode)
 	if searchTee != nil {
 		sinkList = append(sinkList, searchTee)
 		defer searchTee.Close()
@@ -432,7 +432,7 @@ func handleForward(w http.ResponseWriter, r *http.Request, req *Request, sc *sce
 	// in-memory db get the same events even though the client never sees
 	// log frames in this mode.
 	sinkList := []sinks.Sink{forward}
-	searchTee := buildSearchTee(r, req.SearchDBCode)
+	searchTee := apihelp.SearchTeeSink(r, req.SearchDBCode)
 	if searchTee != nil {
 		sinkList = append(sinkList, searchTee)
 		defer searchTee.Close()
