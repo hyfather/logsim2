@@ -95,7 +95,17 @@ export function ScrubbedLogs() {
     }
   }, [tick, episode, nodes, edges, metadata, isRunning, outputFormat, dbCode, dbStartTimeMs])
 
-  const logs = isRunning ? liveLogs.slice(-MAX_DISPLAY) : scrubLogs.slice(-MAX_DISPLAY)
+  // While running, the in-memory logBuffer is the source of truth. While
+  // paused, prefer scrubLogs (the daemon's view, which can show events
+  // older than the trailing-MAX_DISPLAY tail), but fall back to liveLogs
+  // when scrubLogs is empty — that covers two cases: (1) the 120ms
+  // debounce window where the fetch hasn't returned yet so the panel
+  // doesn't briefly go blank on pause, and (2) the daemon never received
+  // the events (auth-walled deploy, network failure) so we still surface
+  // whatever logBuffer captured locally.
+  const logs = isRunning
+    ? liveLogs.slice(-MAX_DISPLAY)
+    : (scrubLogs.length > 0 ? scrubLogs.slice(-MAX_DISPLAY) : liveLogs.slice(-MAX_DISPLAY))
 
   const allChannels = useMemo(() => {
     const set = new Set<string>()
