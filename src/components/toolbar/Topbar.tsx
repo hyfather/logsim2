@@ -154,6 +154,7 @@ export function Topbar() {
     forwardStatus,
     dbCode,
     setDbCode,
+    setDbStartTimeMs,
   } = useSimulationStore()
   const {
     destinations,
@@ -419,13 +420,14 @@ export function Topbar() {
       // searchClient.
       void deleteDb(dbCode).catch(() => {})
       setDbCode(null)
+      setDbStartTimeMs(null)
     }
     setRunError(null)
     setTick(0)
     setTickCount(0)
     setStatus('running')
     setRunStatus('running')
-  }, [clearLogs, dbCode, setCanvasOpen, setDbCode, setLogPanelOpen, setModifyPanelOpen, setRunError, setRunStatus, setStatus, setTick, setTickCount])
+  }, [clearLogs, dbCode, setCanvasOpen, setDbCode, setDbStartTimeMs, setLogPanelOpen, setModifyPanelOpen, setRunError, setRunStatus, setStatus, setTick, setTickCount])
 
   /** Realtime playback: paces the scrubber 1 tick/sec wall-clock so an
    *  N-tick scenario takes N seconds. Forwards to the configured destination
@@ -454,9 +456,11 @@ export function Topbar() {
     // Mint a search-daemon db code locally — the daemon's ingest endpoint
     // auto-creates the db on first event, so we don't need a round-trip
     // to POST /dbs first. Picking the code client-side also means /api/run
-    // has it ready in the very first chunk request.
+    // has it ready in the very first chunk request. Stash simStart so the
+    // scrubber can convert tick indices back to wall-clock for /get_raw.
     const runDbCode = newSearchDbCode()
     setDbCode(runDbCode)
+    setDbStartTimeMs(simStart)
 
     runStream({
       scenarioYaml: yaml,
@@ -528,6 +532,7 @@ export function Topbar() {
     // through the events that were just shipped to the destination.
     const runDbCode = newSearchDbCode()
     setDbCode(runDbCode)
+    setDbStartTimeMs(simStart)
 
     forwardStarted({ destination: target.name || target.url, duration: ep.duration })
     runForward({
@@ -612,6 +617,7 @@ export function Topbar() {
       if (!code) {
         code = newSearchDbCode()
         setDbCode(code)
+        setDbStartTimeMs(startMs)
       }
       const result = await logsAt({
         scenarioYaml: yaml,
@@ -634,7 +640,7 @@ export function Topbar() {
     } catch (err) {
       console.error('step failed:', err)
     }
-  }, [addLogs, buildScenarioYaml, dbCode, outputFormat, setDbCode, setSimulatedTime, setTick, setTickCount, status])
+  }, [addLogs, buildScenarioYaml, dbCode, outputFormat, setDbCode, setDbStartTimeMs, setSimulatedTime, setTick, setTickCount, status])
 
   const handleReset = useCallback(() => {
     stopBackend()
@@ -643,6 +649,7 @@ export function Topbar() {
     if (dbCode) {
       void deleteDb(dbCode).catch(() => {})
       setDbCode(null)
+      setDbStartTimeMs(null)
     }
     setTickCount(0)
     setTick(0)
@@ -650,7 +657,7 @@ export function Topbar() {
     setSimulatedTime(new Date())
     setStatus('idle')
     setRunStatus('idle')
-  }, [clearActiveConnections, clearLogs, dbCode, setDbCode, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, stopBackend])
+  }, [clearActiveConnections, clearLogs, dbCode, setDbCode, setDbStartTimeMs, setRunStatus, setSimulatedTime, setStatus, setTick, setTickCount, stopBackend])
 
   useEffect(() => () => stopBackend(), [stopBackend])
 

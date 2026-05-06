@@ -89,16 +89,27 @@ export async function logsAt(opts: LogsAtOpts): Promise<LogEntry[]> {
 
 async function logsFromDaemon(opts: LogsAtOpts, dbCode: string): Promise<LogEntry[]> {
   const intervalMs = opts.tickIntervalMs ?? 1000
-  const baseMs = opts.dbStartTimeMs ?? opts.startTimeMs ?? 0
-  // The daemon stores events at their wall-clock timestamps, not tick
-  // indices. Convert [from, to) ticks → [fromMs, toMs).
-  const fromMs = baseMs + opts.from * intervalMs
-  const toMs = baseMs + opts.to * intervalMs
+  const baseMs = opts.dbStartTimeMs ?? opts.startTimeMs
+  // The daemon stores events at wall-clock timestamps, not tick indices.
+  // When we have a base anchor, translate [from, to) ticks → [fromMs, toMs).
+  // Add one tick of slack to the upper bound so events that landed slightly
+  // past their tick boundary (engine sub-tick jitter — observed up to ~80 ms
+  // for 10 ticks worth of traffic) are still included. Without the slack,
+  // the trailing tick on a paused scrub looks empty.
+  //
+  // Without an anchor (e.g. no play has happened yet, or a cold daemon
+  // forgot dbStartTimeMs), fall back to fetching everything in the db —
+  // it's per-session, so "all events" === "everything generated this run".
+  const query = baseMs == null
+    ? {}
+    : {
+        from: new Date(baseMs + opts.from * intervalMs).toISOString(),
+        to: new Date(baseMs + (opts.to + 1) * intervalMs).toISOString(),
+      }
   const res = await getRaw(
     dbCode,
     {
-      from: new Date(fromMs).toISOString(),
-      to: new Date(toMs).toISOString(),
+      ...query,
       // get_raw caps at 100 by default; for a single-tick scrub on a busy
       // scenario (cache-failure-cascade peaks ~54 logs/tick), 1000 is the
       // safe ceiling that still keeps responses small.

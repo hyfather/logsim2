@@ -33,8 +33,11 @@ export function ScrubbedLogs() {
   const outputFormat = useSimulationStore(s => s.outputFormat)
   const setOutputFormat = useSimulationStore(s => s.setOutputFormat)
   // dbCode is set after a play; when present, scrubbing reads the actual
-  // events that were generated rather than re-running the engine.
+  // events that were generated rather than re-running the engine. The
+  // matching wall-clock anchor (dbStartTimeMs) is used to translate tick
+  // indices into the absolute timestamps the daemon stores.
   const dbCode = useSimulationStore(s => s.dbCode)
+  const dbStartTimeMs = useSimulationStore(s => s.dbStartTimeMs)
   // Forward-mode (Fast) replaces the per-log table with a status surface —
   // the backend doesn't stream log frames in that mode, so a "logs" view
   // would just be empty. The status persists past run end.
@@ -78,6 +81,7 @@ export function ScrubbedLogs() {
           format: outputFormat,
           signal: ctrl.signal,
           dbCode,
+          dbStartTimeMs: dbStartTimeMs ?? undefined,
         })
         setScrubLogs(logs)
       } catch (err) {
@@ -89,7 +93,7 @@ export function ScrubbedLogs() {
       clearTimeout(handle)
       ctrl.abort()
     }
-  }, [tick, episode, nodes, edges, metadata, isRunning, outputFormat, dbCode])
+  }, [tick, episode, nodes, edges, metadata, isRunning, outputFormat, dbCode, dbStartTimeMs])
 
   const logs = isRunning ? liveLogs.slice(-MAX_DISPLAY) : scrubLogs.slice(-MAX_DISPLAY)
 
