@@ -119,13 +119,12 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	})
 
 	collector := &windowSink{from: req.From}
-	sinkList := []sinks.Sink{collector}
-	searchTee := apihelp.SearchTeeSink(r, req.SearchDBCode)
-	if searchTee != nil {
-		sinkList = append(sinkList, searchTee)
-		defer searchTee.Close()
-	}
-	if err := eng.Run(r.Context(), req.To, sinkList); err != nil {
+	// /api/logs_at does NOT tee to /api/search server-side. The response
+	// already includes every event in the window; the browser does the
+	// ingest after the fetch (see Topbar.handleStep). Same reason as
+	// /api/run streaming: avoids cross-function HTTP under deployment
+	// protection.
+	if err := eng.Run(r.Context(), req.To, []sinks.Sink{collector}); err != nil {
 		apihelp.WriteErr(w, http.StatusInternalServerError, "engine: "+err.Error())
 		return
 	}

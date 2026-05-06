@@ -51,7 +51,7 @@ import { canvasToScenarioYaml } from '@/lib/canvasToScenarioYaml'
 import { runStream } from '@/lib/runStream'
 import { runForward, type ForwardSummary, type PostFrame } from '@/lib/runForward'
 import { logsAt } from '@/lib/logsAt'
-import { deleteDb, newSearchDbCode } from '@/lib/searchClient'
+import { deleteDb, ingestLogs, newSearchDbCode } from '@/lib/searchClient'
 import { ExportPreviewModal, type ExportTab } from '@/components/toolbar/ExportPreviewModal'
 import { RunLocallyModal } from '@/components/toolbar/RunLocallyModal'
 
@@ -472,15 +472,23 @@ export function Topbar() {
       paceMs: 1000,
       cribl,
       format: outputFormat,
-      searchDBCode: runDbCode,
+      // Streaming mode does NOT pass searchDBCode — the server-side tee
+      // would 401 cross-function on auth-protected Vercel previews. The
+      // browser is logged in, so we ingest below from onTick instead.
       signal: ctrl.signal,
       onTick: ({ tick: t, logs }) => {
         setTick(t + 1)
         setTickCount(t + 1)
         setSimulatedTime(new Date(simStart + (t + 1) * 1000))
-        // Server-side tee handles persistence to /api/search; the live
-        // view still pulls from the in-memory logBuffer for snappy render.
-        if (logs.length) addLogs(logs)
+        if (logs.length) {
+          addLogs(logs)
+          // Fire-and-forget HEC ingest — failures don't block playback;
+          // logBuffer drives the live view, this writes through so the
+          // post-pause scrub can read /api/search/dbs/<code>/get_raw.
+          void ingestLogs(runDbCode, logs).catch(err => {
+            console.warn('search: ingestLogs failed:', err)
+          })
+        }
       },
       onDone: ({ totalLogs }) => {
         if (enabledCribl && forwardDuringRealtime) {
@@ -627,13 +635,19 @@ export function Topbar() {
         startTimeMs: startMs,
         seed: (seedRef.current ||= Math.floor(Math.random() * 1e9)) + 1,
         format: outputFormat,
-        searchDBCode: code,
         // Step always re-runs the engine (different seed per step). The
         // daemon db is the *destination* for these logs, not a source.
         dbCode: null,
       })
       simCursorRef.current = startMs + 1000
-      if (result.length) addLogs(result)
+      if (result.length) {
+        addLogs(result)
+        // Browser-side ingest matches startRealtime — same reason
+        // (cross-function HTTP gets 401'd on auth-protected previews).
+        void ingestLogs(code, result).catch(err => {
+          console.warn('search: ingestLogs failed during step:', err)
+        })
+      }
       setTick(to)
       setTickCount(to)
       setSimulatedTime(new Date(startMs + 1000))

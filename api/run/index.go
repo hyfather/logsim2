@@ -195,17 +195,13 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		format:  encoders.Parse(req.Format),
 	}
 
-	// Server-side tee to the in-process search daemon. Building the sink
-	// here means realtime / step / forward all populate the same db without
-	// the client having to ingest separately. nil when no code was passed.
-	sinkList := []sinks.Sink{stream}
-	searchTee := apihelp.SearchTeeSink(r, req.SearchDBCode)
-	if searchTee != nil {
-		sinkList = append(sinkList, searchTee)
-		defer searchTee.Close()
-	}
-
-	runErr := eng.Run(r.Context(), duration, sinkList)
+	// Streaming mode does NOT tee to /api/search server-side — the browser
+	// already sees every log frame in the response and ingests them itself
+	// (see src/components/toolbar/Topbar.tsx onTick). Forward mode is the
+	// only path that needs a server-side tee, since the browser never sees
+	// events there. Going through cross-function HTTP only when we have to
+	// dodges the deployment-protection 401s on Vercel preview URLs.
+	runErr := eng.Run(r.Context(), duration, []sinks.Sink{stream})
 	switch {
 	case errors.Is(runErr, errBudgetExceeded):
 		// Stopped early to stay under Vercel's response cap. Tell the
