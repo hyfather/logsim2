@@ -184,7 +184,7 @@ func (b *DuckDBBackend) GetRaw(ctx context.Context, q RawQuery) (RawResult, erro
 	}
 	defer rows.Close()
 
-	out := RawResult{Total: total}
+	out := RawResult{Total: total, Events: []Event{}}
 	for rows.Next() {
 		var e Event
 		var t time.Time
@@ -297,7 +297,7 @@ func (b *DuckDBBackend) GetSummary(ctx context.Context, q SummaryQuery) (Summary
 	}
 	defer rows.Close()
 
-	var out SummaryResult
+	out := SummaryResult{Rows: []SummaryRow{}}
 	for rows.Next() {
 		var grp sql.NullString
 		var val sql.NullFloat64
@@ -340,7 +340,7 @@ func (b *DuckDBBackend) GetDistribution(ctx context.Context, q DistributionQuery
 	}
 	defer rows.Close()
 
-	var out DistributionResult
+	out := DistributionResult{Buckets: []DistributionBucket{}}
 	for rows.Next() {
 		var bucket time.Time
 		var grp sql.NullString
@@ -380,7 +380,7 @@ func (b *DuckDBBackend) GetTopValues(ctx context.Context, q TopValuesQuery) (Top
 	}
 	defer rows.Close()
 
-	var out TopValuesResult
+	out := TopValuesResult{Values: []TopValue{}}
 	for rows.Next() {
 		var v sql.NullString
 		var n int64
